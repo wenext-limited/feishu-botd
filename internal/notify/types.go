@@ -118,4 +118,8 @@ func BadRequest(code, message string) *APIError {
 	return NewAPIError(400, code, message, false)
 }
 
+func NotImplemented(code, message string) *APIError {
+	return NewAPIError(501, code, message, false)
+}
+
 func (e *APIError) Error() string { return e.Code + ": " + e.Message }

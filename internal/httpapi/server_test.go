@@ -19,6 +19,7 @@ import (
 	"feishu-botd/internal/config"
 	"feishu-botd/internal/dedupe"
 	"feishu-botd/internal/notify"
+	"feishu-botd/internal/service"
 )
 
 type fakeSender struct {
@@ -44,7 +45,8 @@ func (f *fakeSender) Send(_ context.Context, chatID string, req notify.Request) 
 
 func testServer(sender *fakeSender) *Server {
 	cfg := config.Config{AppID: "cli_test", AppSecret: "secret", BindAddr: "127.0.0.1:0", AuthToken: "token", Channels: map[string]string{"ops": "oc_test"}, DedupeTTL: time.Hour, SendTimeout: time.Second}
-	return NewServer(cfg, sender, dedupe.NewMemoryStore(time.Hour), slog.Default())
+	svc := service.NewService(cfg, sender, dedupe.NewMemoryStore(time.Hour), slog.Default())
+	return NewServer(cfg, svc, slog.Default())
 }
 
 func validBody() []byte {
@@ -139,25 +141,57 @@ func TestNotifyProviderFailure(t *testing.T) {
 	}
 }
 
-func TestRedactedErrorRemovesConfiguredSecrets(t *testing.T) {
-	server := testServer(&fakeSender{messageID: "om_1"})
-	server.cfg.AppSecret = "secret-value"
-	server.cfg.AuthToken = "token-value"
-	server.cfg.Channels["ops"] = "oc_secret"
-	msg := server.redactedError(errors.New("secret-value token-value oc_secret visible"))
-	for _, leaked := range []string{"secret-value", "token-value", "oc_secret"} {
-		if bytes.Contains([]byte(msg), []byte(leaked)) {
-			t.Fatalf("redacted message leaked %q: %s", leaked, msg)
-		}
-	}
-}
-
 func TestReadyReportsAuthFailure(t *testing.T) {
 	server := testServer(&fakeSender{readyErr: errors.New("token failed")})
 	rec := httptest.NewRecorder()
 	server.handler(false).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("ready status = %d", rec.Code)
+	}
+}
+
+func TestRequestIDPropagatedToErrorBodyAndHeader(t *testing.T) {
+	server := testServer(&fakeSender{messageID: "om_1"})
+
+	var body notify.Request
+	_ = json.Unmarshal(validBody(), &body)
+	body.Target.Channel = "nope" // unknown channel -> 404 error path
+	data, _ := json.Marshal(body)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/notify", bytes.NewReader(data))
+	req.Header.Set("Authorization", "Bearer token")
+	req.Header.Set("X-Request-Id", "req_http_1")
+	server.handler(true).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	if got := rec.Header().Get("X-Request-Id"); got != "req_http_1" {
+		t.Fatalf("echoed header = %q, want req_http_1", got)
+	}
+	var resp notify.ErrorResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Error.RequestID != "req_http_1" {
+		t.Fatalf("error body request id = %q, want req_http_1", resp.Error.RequestID)
+	}
+}
+
+func TestRequestIDMintedWhenAbsent(t *testing.T) {
+	server := testServer(&fakeSender{messageID: "om_1"})
+	rec := httptest.NewRecorder()
+	server.handler(false).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/nope", nil))
+	if got := rec.Header().Get("X-Request-Id"); got == "" {
+		t.Fatal("expected a minted X-Request-Id header")
+	}
+	var resp notify.ErrorResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Error.RequestID == "" {
+		t.Fatal("expected a minted request id in the error body")
 	}
 }
 

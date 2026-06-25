@@ -15,24 +15,26 @@ import (
 	"time"
 
 	"feishu-botd/internal/config"
-	"feishu-botd/internal/dedupe"
-	"feishu-botd/internal/feishu"
 	"feishu-botd/internal/notify"
+	"feishu-botd/internal/service"
 )
 
-const Version = "0.1.0"
-
+// Server is the HTTP compatibility shim. It owns no business logic; every
+// request delegates to the shared *service.Service so the HTTP and gRPC
+// transports stay in lockstep.
 type Server struct {
 	cfg     config.Config
-	sender  feishu.Sender
-	store   *dedupe.MemoryStore
+	svc     *service.Service
 	logger  *slog.Logger
 	servers []*http.Server
 	mu      sync.Mutex
 }
 
-func NewServer(cfg config.Config, sender feishu.Sender, store *dedupe.MemoryStore, logger *slog.Logger) *Server {
-	return &Server{cfg: cfg, sender: sender, store: store, logger: logger}
+func NewServer(cfg config.Config, svc *service.Service, logger *slog.Logger) *Server {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &Server{cfg: cfg, svc: svc, logger: logger}
 }
 
 func (s *Server) ListenAndServeUnix(ctx context.Context, socketPath string) error {
@@ -124,35 +126,16 @@ func (s *Server) authorized(r *http.Request) bool {
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "service": "feishu-botd", "version": Version})
+	info := s.svc.Health()
+	writeJSON(w, http.StatusOK, map[string]string{"status": info.Status, "service": info.Service, "version": info.Version})
 }
 
 func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
-	checks := map[string]string{"config": "ok", "feishu_auth": "ok", "channels": "ok", "dedupe_store": "ok"}
+	ready, checks := s.svc.Ready(r.Context())
 	status := http.StatusOK
-	if s.cfg.AppID == "" || s.cfg.AppSecret == "" {
-		checks["feishu_auth"] = "missing_credentials"
-		status = http.StatusServiceUnavailable
-	}
-	if len(s.cfg.Channels) == 0 {
-		checks["channels"] = "missing_channels"
-		status = http.StatusServiceUnavailable
-	}
-	if !s.store.Ready() {
-		checks["dedupe_store"] = "unavailable"
-		status = http.StatusServiceUnavailable
-	}
-	if status == http.StatusOK {
-		ctx, cancel := context.WithTimeout(r.Context(), s.cfg.SendTimeout)
-		defer cancel()
-		if err := s.sender.Ready(ctx); err != nil {
-			checks["feishu_auth"] = "unavailable"
-			status = http.StatusServiceUnavailable
-			s.logger.Warn("readiness auth check failed", "error", s.redactedError(err))
-		}
-	}
 	state := "ready"
-	if status != http.StatusOK {
+	if !ready {
+		status = http.StatusServiceUnavailable
 		state = "unready"
 	}
 	writeJSON(w, status, map[string]any{"status": state, "checks": checks})
@@ -166,40 +149,12 @@ func (s *Server) handleNotify(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, notify.BadRequest("invalid_json", "invalid JSON request"))
 		return
 	}
-	if err := req.Validate(s.cfg.Channels); err != nil {
-		s.writeError(w, r, err)
+	resp, apiErr := s.svc.SendNotification(r.Context(), req)
+	if apiErr != nil {
+		s.writeError(w, r, apiErr)
 		return
 	}
-	fingerprint := req.Fingerprint()
-	reserved := s.store.Reserve(req.Source, req.DedupeKey, fingerprint)
-	if reserved.Conflict {
-		s.writeError(w, r, notify.NewAPIError(409, "dedupe_conflict", "dedupe key reused with different content", false))
-		return
-	}
-	if reserved.InFlight {
-		s.writeError(w, r, notify.NewAPIError(409, "dedupe_in_flight", "dedupe key is already being sent", true))
-		return
-	}
-	if reserved.Duplicate {
-		writeJSON(w, http.StatusOK, notify.Response{Status: "sent", Provider: reserved.Result.Provider, DedupeKey: req.DedupeKey, MessageID: reserved.Result.MessageID, Duplicate: true})
-		return
-	}
-
-	chatID := s.cfg.Channels[req.Target.Channel]
-	ctx, cancel := context.WithTimeout(r.Context(), s.cfg.SendTimeout)
-	defer cancel()
-	messageID, err := s.sender.Send(ctx, chatID, req)
-	if err != nil {
-		s.store.Abort(req.Source, req.DedupeKey)
-		s.logger.Warn("notify send failed", "source", req.Source, "event", req.SourceEventID, "channel", req.Target.Channel, "error", s.redactedError(err))
-		s.writeError(w, r, notify.NewAPIError(502, "feishu_unavailable", "Feishu send failed", true))
-		return
-	}
-
-	result := dedupe.Result{Provider: "feishu", MessageID: messageID}
-	s.store.Commit(req.Source, req.DedupeKey, result)
-	s.logger.Info("notify sent", "source", req.Source, "event", req.SourceEventID, "channel", req.Target.Channel, "severity", req.Severity)
-	writeJSON(w, http.StatusOK, notify.Response{Status: "sent", Provider: result.Provider, DedupeKey: req.DedupeKey, MessageID: result.MessageID, Duplicate: false})
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err *notify.APIError) {
@@ -218,6 +173,8 @@ func requestIDMiddleware(next http.Handler) http.Handler {
 		if id == "" {
 			id = fmt.Sprintf("req_%d", time.Now().UnixNano())
 		}
+		// Echo it back, mirroring the gRPC interceptor's x-request-id header.
+		w.Header().Set("X-Request-Id", id)
 		ctx := context.WithValue(r.Context(), requestIDKey{}, id)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
@@ -230,30 +187,4 @@ func requestID(r *http.Request) string {
 		return value
 	}
 	return ""
-}
-
-func (s *Server) redactedError(err error) string {
-	msg := err.Error()
-	for _, secret := range s.redactionValues() {
-		msg = strings.ReplaceAll(msg, secret, "<redacted>")
-	}
-	if len(msg) > 180 {
-		return msg[:180] + "..."
-	}
-	return msg
-}
-
-func (s *Server) redactionValues() []string {
-	values := []string{s.cfg.AppSecret, s.cfg.AuthToken}
-	for _, chatID := range s.cfg.Channels {
-		values = append(values, chatID)
-	}
-	kept := values[:0]
-	for _, value := range values {
-		value = strings.TrimSpace(value)
-		if len(value) >= 4 {
-			kept = append(kept, value)
-		}
-	}
-	return kept
 }
