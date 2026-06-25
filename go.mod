@@ -1,4 +1,4 @@
-module github.com/oops-rs/feishu-botd
+module feishu-botd
 
 go 1.22
 

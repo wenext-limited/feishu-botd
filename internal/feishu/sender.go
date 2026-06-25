@@ -12,7 +12,7 @@ import (
 	channeltypes "github.com/larksuite/oapi-sdk-go/v3/channel/types"
 	larkcore "github.com/larksuite/oapi-sdk-go/v3/core"
 
-	"github.com/oops-rs/feishu-botd/internal/notify"
+	"feishu-botd/internal/notify"
 )
 
 type Sender interface {

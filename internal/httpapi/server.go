@@ -14,10 +14,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/oops-rs/feishu-botd/internal/config"
-	"github.com/oops-rs/feishu-botd/internal/dedupe"
-	"github.com/oops-rs/feishu-botd/internal/feishu"
-	"github.com/oops-rs/feishu-botd/internal/notify"
+	"feishu-botd/internal/config"
+	"feishu-botd/internal/dedupe"
+	"feishu-botd/internal/feishu"
+	"feishu-botd/internal/notify"
 )
 
 const Version = "0.1.0"

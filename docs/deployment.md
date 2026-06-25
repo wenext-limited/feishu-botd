@@ -69,14 +69,14 @@ unready sidecar is visible only as hook delivery failure.
 
 ## macOS launchd
 
-`deploy/launchd/com.oops-rs.feishu-botd.plist` is a template for local macOS
+`deploy/launchd/feishu-botd.plist` is a template for local macOS
 development. Install a built binary at `/usr/local/bin/feishu-botd`, replace the
 placeholder Feishu app values and channel ids, then load it:
 
 ```sh
 mkdir -p /tmp/feishu-botd
-cp deploy/launchd/com.oops-rs.feishu-botd.plist ~/Library/LaunchAgents/
-launchctl load ~/Library/LaunchAgents/com.oops-rs.feishu-botd.plist
+cp deploy/launchd/feishu-botd.plist ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/feishu-botd.plist
 ```
 
 Use a secrets manager or a local deployment-specific plist outside version
@@ -97,5 +97,5 @@ docker compose \
 For launchd:
 
 ```sh
-launchctl unload ~/Library/LaunchAgents/com.oops-rs.feishu-botd.plist
+launchctl unload ~/Library/LaunchAgents/feishu-botd.plist
 ```

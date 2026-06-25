@@ -10,10 +10,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/oops-rs/feishu-botd/internal/config"
-	"github.com/oops-rs/feishu-botd/internal/dedupe"
-	"github.com/oops-rs/feishu-botd/internal/feishu"
-	"github.com/oops-rs/feishu-botd/internal/httpapi"
+	"feishu-botd/internal/config"
+	"feishu-botd/internal/dedupe"
+	"feishu-botd/internal/feishu"
+	"feishu-botd/internal/httpapi"
 )
 
 func main() {

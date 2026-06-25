@@ -16,9 +16,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/oops-rs/feishu-botd/internal/config"
-	"github.com/oops-rs/feishu-botd/internal/dedupe"
-	"github.com/oops-rs/feishu-botd/internal/notify"
+	"feishu-botd/internal/config"
+	"feishu-botd/internal/dedupe"
+	"feishu-botd/internal/notify"
 )
 
 type fakeSender struct {

@@ -62,7 +62,7 @@ make image
 Run beside Xipe's Docker Compose stack with the optional overlay:
 
 ```sh
-cd /Users/wendell/Developer/oops-rs/xipe
+cd /path/to/xipe
 docker compose \
   -f docker-compose.yml \
   -f ../feishu-botd/deploy/docker-compose.xipe.yml \
