@@ -1,14 +1,20 @@
 # Deployment
 
-Prefer a Unix domain socket when `feishu-botd` runs on the same host as Xipe.
-The socket directory should be owned by the deployment user and not world
-writable.
+Prefer a Unix domain socket when `feishu-botd` runs on the same host as its
+clients. The socket directory should be owned by the deployment user and not
+world writable. gRPC (`FEISHU_BOTD_GRPC_SOCKET`) is the preferred transport; the
+HTTP socket (`FEISHU_BOTD_SOCKET`) remains for the compatibility shim. The two
+transports use distinct socket paths and can run simultaneously during
+migration. See [ipc.md](./ipc.md) for the gRPC contract.
 
 Loopback TCP is intended for Docker or process-manager deployments. In TCP mode,
-`POST /v1/notify` requires `Authorization: Bearer <token>` and the token must be
-loaded from `FEISHU_BOTD_AUTH_TOKEN_FILE`.
+both transports require a bearer token loaded from
+`FEISHU_BOTD_AUTH_TOKEN_FILE`: HTTP `POST /v1/notify` expects an
+`Authorization: Bearer <token>` header, and gRPC expects the same token as
+`authorization` request metadata. The single token is shared by
+`FEISHU_BOTD_BIND` and `FEISHU_BOTD_GRPC_BIND`; health RPCs are exempt.
 
-Feishu app credentials and raw chat ids stay in sidecar configuration. Xipe hook
+Feishu app credentials and raw chat ids stay in sidecar configuration. Hook
 definitions should use stable channel names such as `ops`.
 
 Rollback is stopping the sidecar or disabling the Xipe hook that calls it.
@@ -19,18 +25,22 @@ Rollback is stopping the sidecar or disabling the Xipe hook that calls it.
 export FEISHU_APP_ID=cli_xxx
 export FEISHU_APP_SECRET=...
 export FEISHU_BOTD_SOCKET=/tmp/feishu-botd/feishu-botd.sock
+export FEISHU_BOTD_GRPC_SOCKET=/tmp/feishu-botd/feishu-botd.grpc.sock
 export FEISHU_BOTD_CHANNELS_OPS=oc_xxx
 
 mkdir -p /tmp/feishu-botd
 go run ./cmd/feishu-botd
 ```
 
-Verify liveness and readiness:
+Verify liveness and readiness over the HTTP shim:
 
 ```sh
 curl --unix-socket /tmp/feishu-botd/feishu-botd.sock http://localhost/healthz
 curl --unix-socket /tmp/feishu-botd/feishu-botd.sock http://localhost/readyz
 ```
+
+The gRPC listener is on `feishu-botd.grpc.sock`. See [ipc.md](./ipc.md) to dial
+it (e.g. `grpc_health_probe -addr unix:///tmp/feishu-botd/feishu-botd.grpc.sock`).
 
 ## Docker Beside Xipe
 

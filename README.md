@@ -1,18 +1,37 @@
 # feishu-botd
 
-`feishu-botd` is a small local sidecar for sending Feishu/Lark bot
-notifications on behalf of Xipe and other local services. It owns Feishu app
-credentials and exposes a narrow local API:
+`feishu-botd` is a small local gateway for Feishu/Lark bots. It owns the
+Feishu/Lark SDK, app credentials, and token lifecycle, and lets local services
+send notifications without ever handling raw chat ids. It is general-purpose: it
+is not tied to any single project or organization.
+
+## Contract
+
+The contract is **protobuf-first**. The `.proto` files under
+[`proto/feishubotd/v1/`](proto/feishubotd/v1) are the shared, language-neutral
+definition; clients (Go, Rust, …) generate their own bindings — there is no
+shared client crate. The daemon serves these over gRPC, preferring a Unix domain
+socket:
+
+| Service | RPCs |
+| --- | --- |
+| `BotdHealthService` | `Health`, `Ready` |
+| `NotificationService` | `SendNotification`, `SendMessage` |
+| `CommandService` / `ProviderService` | future inbound commands + data providers (skeletons) |
+
+The legacy HTTP API stays as a compatibility shim over the **same** internal
+service logic:
 
 ```text
 GET  /healthz
-GET  /readyz
-POST /v1/notify
+POST /v1/notify   (and GET /readyz)
 ```
 
-The v1 scope is notification sending only. Interactive chat, inbound Feishu
-events, card actions, streaming replies, durable outbox semantics, and native
-Xipe delivery backends are follow-up work.
+See [docs/ipc.md](docs/ipc.md) for the full gRPC contract and error model, and
+[docs/api.md](docs/api.md) for the HTTP shim.
+
+Interactive chat, inbound Feishu events, card actions, streaming replies, and
+durable outbox semantics are follow-up work.
 
 ## Configuration
 
@@ -24,16 +43,24 @@ FEISHU_APP_SECRET=...
 FEISHU_BOTD_CHANNELS_OPS=oc_xxx
 ```
 
-Choose at least one local listener:
+Choose at least one listener. Each transport has a Unix-socket form (local-first,
+preferred) and a loopback-TCP form (for Docker / process managers, bearer-token
+auth required):
 
 ```text
+# gRPC (preferred)
+FEISHU_BOTD_GRPC_SOCKET=/run/feishu-botd/feishu-botd.grpc.sock
+# FEISHU_BOTD_GRPC_BIND=127.0.0.1:7346
+
+# HTTP compatibility shim
 FEISHU_BOTD_SOCKET=/run/feishu-botd/feishu-botd.sock
+# FEISHU_BOTD_BIND=127.0.0.1:7345
 ```
 
-or:
+Any TCP listener (`FEISHU_BOTD_BIND` or `FEISHU_BOTD_GRPC_BIND`) requires a
+shared bearer token:
 
 ```text
-FEISHU_BOTD_BIND=127.0.0.1:7345
 FEISHU_BOTD_AUTH_TOKEN_FILE=/run/secrets/feishu-botd-token
 ```
 
@@ -50,6 +77,14 @@ FEISHU_BOTD_SEND_TIMEOUT_SECONDS=15
 go test ./...
 go test -race ./...
 go vet ./...
+```
+
+Generated gRPC bindings under `gen/` are committed, so a normal build never runs
+codegen. Regenerate only after editing `proto/`:
+
+```sh
+make proto        # buf generate + gofmt
+make proto-lint   # buf lint
 ```
 
 Build a local binary or container image:

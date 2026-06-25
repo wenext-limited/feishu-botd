@@ -1,4 +1,9 @@
-# API
+# HTTP API (compatibility shim)
+
+This HTTP API is a compatibility shim retained for existing webhook-style
+callers. It delegates to the same internal service logic as the gRPC contract;
+new integrations should prefer gRPC. See [ipc.md](./ipc.md) for the
+protobuf-first contract, the equivalent gRPC RPCs, and the shared error model.
 
 ## `GET /healthz`
 

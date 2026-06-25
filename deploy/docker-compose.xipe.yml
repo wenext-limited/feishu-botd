@@ -17,6 +17,7 @@ services:
       - feishu-botd-run:/run/feishu-botd
     environment:
       FEISHU_BOTD_SOCKET: /run/feishu-botd/feishu-botd.sock
+      FEISHU_BOTD_GRPC_SOCKET: /run/feishu-botd/feishu-botd.grpc.sock
       FEISHU_BOTD_CHANNEL: ${FEISHU_BOTD_CHANNEL:-ops}
       FEISHU_BOTD_TIMEOUT_SECONDS: ${FEISHU_BOTD_TIMEOUT_SECONDS:-10}
 
@@ -34,6 +35,7 @@ services:
       FEISHU_APP_ID: ${FEISHU_APP_ID:-}
       FEISHU_APP_SECRET: ${FEISHU_APP_SECRET:-}
       FEISHU_BOTD_SOCKET: /run/feishu-botd/feishu-botd.sock
+      FEISHU_BOTD_GRPC_SOCKET: /run/feishu-botd/feishu-botd.grpc.sock
       FEISHU_BOTD_CHANNELS: ${FEISHU_BOTD_CHANNELS:-}
       FEISHU_BOTD_DEDUPE_TTL_SECONDS: ${FEISHU_BOTD_DEDUPE_TTL_SECONDS:-21600}
       FEISHU_BOTD_SEND_TIMEOUT_SECONDS: ${FEISHU_BOTD_SEND_TIMEOUT_SECONDS:-15}
