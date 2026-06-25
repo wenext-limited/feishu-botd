@@ -16,25 +16,29 @@ const (
 )
 
 type Config struct {
-	AppID       string
-	AppSecret   string
-	SocketPath  string
-	BindAddr    string
-	AuthToken   string
-	Channels    map[string]string
-	DedupeTTL   time.Duration
-	SendTimeout time.Duration
+	AppID          string
+	AppSecret      string
+	SocketPath     string
+	BindAddr       string
+	GRPCSocketPath string
+	GRPCBindAddr   string
+	AuthToken      string
+	Channels       map[string]string
+	DedupeTTL      time.Duration
+	SendTimeout    time.Duration
 }
 
 func LoadFromEnv() (Config, error) {
 	cfg := Config{
-		AppID:       strings.TrimSpace(os.Getenv("FEISHU_APP_ID")),
-		AppSecret:   strings.TrimSpace(os.Getenv("FEISHU_APP_SECRET")),
-		SocketPath:  strings.TrimSpace(os.Getenv("FEISHU_BOTD_SOCKET")),
-		BindAddr:    strings.TrimSpace(os.Getenv("FEISHU_BOTD_BIND")),
-		Channels:    loadChannels(os.Environ()),
-		DedupeTTL:   durationFromEnv("FEISHU_BOTD_DEDUPE_TTL_SECONDS", defaultDedupeTTL),
-		SendTimeout: durationFromEnv("FEISHU_BOTD_SEND_TIMEOUT_SECONDS", defaultSendTimeout),
+		AppID:          strings.TrimSpace(os.Getenv("FEISHU_APP_ID")),
+		AppSecret:      strings.TrimSpace(os.Getenv("FEISHU_APP_SECRET")),
+		SocketPath:     strings.TrimSpace(os.Getenv("FEISHU_BOTD_SOCKET")),
+		BindAddr:       strings.TrimSpace(os.Getenv("FEISHU_BOTD_BIND")),
+		GRPCSocketPath: strings.TrimSpace(os.Getenv("FEISHU_BOTD_GRPC_SOCKET")),
+		GRPCBindAddr:   strings.TrimSpace(os.Getenv("FEISHU_BOTD_GRPC_BIND")),
+		Channels:       loadChannels(os.Environ()),
+		DedupeTTL:      durationFromEnv("FEISHU_BOTD_DEDUPE_TTL_SECONDS", defaultDedupeTTL),
+		SendTimeout:    durationFromEnv("FEISHU_BOTD_SEND_TIMEOUT_SECONDS", defaultSendTimeout),
 	}
 
 	if cfg.AppID == "" {
@@ -43,19 +47,30 @@ func LoadFromEnv() (Config, error) {
 	if cfg.AppSecret == "" {
 		return Config{}, errors.New("FEISHU_APP_SECRET is required")
 	}
-	if cfg.SocketPath == "" && cfg.BindAddr == "" {
-		return Config{}, errors.New("FEISHU_BOTD_SOCKET or FEISHU_BOTD_BIND is required")
+	if cfg.SocketPath == "" && cfg.BindAddr == "" && cfg.GRPCSocketPath == "" && cfg.GRPCBindAddr == "" {
+		return Config{}, errors.New("at least one listener is required: set FEISHU_BOTD_SOCKET, FEISHU_BOTD_BIND, FEISHU_BOTD_GRPC_SOCKET, or FEISHU_BOTD_GRPC_BIND")
 	}
 	if len(cfg.Channels) == 0 {
 		return Config{}, errors.New("at least one FEISHU_BOTD_CHANNELS_* mapping is required")
 	}
-	if cfg.BindAddr != "" {
-		if err := validateLoopbackBind(cfg.BindAddr); err != nil {
-			return Config{}, err
+	// The HTTP and gRPC loopback TCP listeners share a single bearer token. Load
+	// it once when either TCP listener is enabled, and require each TCP bind to
+	// stay on loopback.
+	if cfg.BindAddr != "" || cfg.GRPCBindAddr != "" {
+		for _, bind := range []struct{ name, addr string }{
+			{"FEISHU_BOTD_BIND", cfg.BindAddr},
+			{"FEISHU_BOTD_GRPC_BIND", cfg.GRPCBindAddr},
+		} {
+			if bind.addr == "" {
+				continue
+			}
+			if err := validateLoopbackBind(bind.name, bind.addr); err != nil {
+				return Config{}, err
+			}
 		}
 		tokenFile := strings.TrimSpace(os.Getenv("FEISHU_BOTD_AUTH_TOKEN_FILE"))
 		if tokenFile == "" {
-			return Config{}, errors.New("FEISHU_BOTD_AUTH_TOKEN_FILE is required when FEISHU_BOTD_BIND is set")
+			return Config{}, errors.New("FEISHU_BOTD_AUTH_TOKEN_FILE is required when a TCP listener (FEISHU_BOTD_BIND or FEISHU_BOTD_GRPC_BIND) is set")
 		}
 		token, err := readTokenFile(tokenFile)
 		if err != nil {
@@ -108,17 +123,17 @@ func durationFromEnv(name string, fallback time.Duration) time.Duration {
 	return time.Duration(seconds) * time.Second
 }
 
-func validateLoopbackBind(addr string) error {
+func validateLoopbackBind(name, addr string) error {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
-		return fmt.Errorf("FEISHU_BOTD_BIND must be host:port: %w", err)
+		return fmt.Errorf("%s must be host:port: %w", name, err)
 	}
 	if host == "localhost" {
 		return nil
 	}
 	ip := net.ParseIP(host)
 	if ip == nil || !ip.IsLoopback() {
-		return errors.New("FEISHU_BOTD_BIND must bind to loopback")
+		return fmt.Errorf("%s must bind to loopback", name)
 	}
 	return nil
 }

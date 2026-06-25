@@ -7,12 +7,14 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
 	"feishu-botd/internal/config"
 	"feishu-botd/internal/dedupe"
 	"feishu-botd/internal/feishu"
+	"feishu-botd/internal/grpcapi"
 	"feishu-botd/internal/httpapi"
 	"feishu-botd/internal/service"
 )
@@ -30,16 +32,23 @@ func main() {
 	svc := service.NewService(cfg, sender, store, logger)
 
 	httpServer := httpapi.NewServer(cfg, svc, logger)
+	grpcServer := grpcapi.NewServer(cfg, svc, logger)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	errCh := make(chan error, 2)
+	errCh := make(chan error, 4)
 	if cfg.SocketPath != "" {
 		go func() { errCh <- httpServer.ListenAndServeUnix(ctx, cfg.SocketPath) }()
 	}
 	if cfg.BindAddr != "" {
 		go func() { errCh <- httpServer.ListenAndServeTCP(ctx, cfg.BindAddr) }()
+	}
+	if cfg.GRPCSocketPath != "" {
+		go func() { errCh <- grpcServer.ListenAndServeUnix(ctx, cfg.GRPCSocketPath) }()
+	}
+	if cfg.GRPCBindAddr != "" {
+		go func() { errCh <- grpcServer.ListenAndServeTCP(ctx, cfg.GRPCBindAddr) }()
 	}
 
 	select {
@@ -52,9 +61,17 @@ func main() {
 		}
 	}
 
+	// Drain both transports concurrently so a slow HTTP shutdown cannot consume
+	// the gRPC server's graceful-stop budget and force a hard stop.
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := httpServer.Shutdown(shutdownCtx); err != nil {
+	var wg sync.WaitGroup
+	shutdownErrs := make([]error, 2)
+	wg.Add(2)
+	go func() { defer wg.Done(); shutdownErrs[0] = httpServer.Shutdown(shutdownCtx) }()
+	go func() { defer wg.Done(); shutdownErrs[1] = grpcServer.Shutdown(shutdownCtx) }()
+	wg.Wait()
+	if err := errors.Join(shutdownErrs...); err != nil {
 		logger.Error("graceful shutdown failed", "error", err)
 		os.Exit(1)
 	}
