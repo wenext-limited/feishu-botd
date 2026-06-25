@@ -1,6 +1,9 @@
 package dedupe
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestMemoryStoreDuplicateAndConflict(t *testing.T) {
 	store := NewMemoryStore(1 << 62)
@@ -16,5 +19,19 @@ func TestMemoryStoreDuplicateAndConflict(t *testing.T) {
 	}
 	if got := store.Reserve("xipe", "key", "fp2"); !got.Conflict {
 		t.Fatalf("conflict reserve = %#v", got)
+	}
+}
+
+func TestMemoryStoreExpiresEntries(t *testing.T) {
+	now := time.Unix(100, 0)
+	store := NewMemoryStore(time.Second)
+	store.now = func() time.Time { return now }
+
+	store.Reserve("xipe", "key", "fp1")
+	store.Commit("xipe", "key", Result{Provider: "feishu", MessageID: "om"})
+	now = now.Add(2 * time.Second)
+
+	if got := store.Reserve("xipe", "key", "fp2"); got.Duplicate || got.Conflict || got.InFlight {
+		t.Fatalf("expired reserve = %#v", got)
 	}
 }

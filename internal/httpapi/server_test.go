@@ -5,9 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -21,12 +26,16 @@ type fakeSender struct {
 	err       error
 	readyErr  error
 	calls     int
+	chatID    string
+	request   notify.Request
 }
 
 func (f *fakeSender) Ready(_ context.Context) error { return f.readyErr }
 
-func (f *fakeSender) Send(_ context.Context, _ string, _ notify.Request) (string, error) {
+func (f *fakeSender) Send(_ context.Context, chatID string, req notify.Request) (string, error) {
 	f.calls++
+	f.chatID = chatID
+	f.request = req
 	if f.err != nil {
 		return "", f.err
 	}
@@ -81,6 +90,12 @@ func TestNotifySuccessAndDuplicate(t *testing.T) {
 	if sender.calls != 1 {
 		t.Fatalf("sender calls = %d", sender.calls)
 	}
+	if sender.chatID != "oc_test" {
+		t.Fatalf("sender chat id = %q", sender.chatID)
+	}
+	if sender.request.Title != "Title" || sender.request.Markdown != "**Body**" {
+		t.Fatalf("sender request = %#v", sender.request)
+	}
 }
 
 func TestNotifyDedupeConflict(t *testing.T) {
@@ -124,6 +139,19 @@ func TestNotifyProviderFailure(t *testing.T) {
 	}
 }
 
+func TestRedactedErrorRemovesConfiguredSecrets(t *testing.T) {
+	server := testServer(&fakeSender{messageID: "om_1"})
+	server.cfg.AppSecret = "secret-value"
+	server.cfg.AuthToken = "token-value"
+	server.cfg.Channels["ops"] = "oc_secret"
+	msg := server.redactedError(errors.New("secret-value token-value oc_secret visible"))
+	for _, leaked := range []string{"secret-value", "token-value", "oc_secret"} {
+		if bytes.Contains([]byte(msg), []byte(leaked)) {
+			t.Fatalf("redacted message leaked %q: %s", leaked, msg)
+		}
+	}
+}
+
 func TestReadyReportsAuthFailure(t *testing.T) {
 	server := testServer(&fakeSender{readyErr: errors.New("token failed")})
 	rec := httptest.NewRecorder()
@@ -131,4 +159,52 @@ func TestReadyReportsAuthFailure(t *testing.T) {
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("ready status = %d", rec.Code)
 	}
+}
+
+func TestUnixSocketServerServesHealth(t *testing.T) {
+	server := testServer(&fakeSender{messageID: "om_1"})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	socketPath := filepath.Join("/tmp", fmt.Sprintf("feishu-botd-test-%d.sock", time.Now().UnixNano()))
+	defer os.Remove(socketPath)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- server.ListenAndServeUnix(ctx, socketPath)
+	}()
+	defer func() {
+		cancel()
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), time.Second)
+		defer shutdownCancel()
+		_ = server.Shutdown(shutdownCtx)
+	}()
+
+	client := http.Client{
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				return (&net.Dialer{}).DialContext(ctx, "unix", socketPath)
+			},
+		},
+		Timeout: time.Second,
+	}
+
+	var lastErr error
+	for i := 0; i < 50; i++ {
+		resp, err := client.Get("http://unix/healthz")
+		if err == nil {
+			defer resp.Body.Close()
+			body, _ := io.ReadAll(resp.Body)
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("health status = %d body=%s", resp.StatusCode, string(body))
+			}
+			return
+		}
+		lastErr = err
+		select {
+		case err := <-errCh:
+			t.Fatalf("unix server exited early: %v", err)
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+	t.Fatalf("unix server did not become ready: %v", lastErr)
 }

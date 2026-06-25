@@ -51,3 +51,25 @@ go test ./...
 go test -race ./...
 go vet ./...
 ```
+
+Build a local binary or container image:
+
+```sh
+make build
+make image
+```
+
+Run beside Xipe's Docker Compose stack with the optional overlay:
+
+```sh
+cd /Users/wendell/Developer/oops-rs/xipe
+docker compose \
+  -f docker-compose.yml \
+  -f ../feishu-botd/deploy/docker-compose.xipe.yml \
+  --profile feishu \
+  up -d --build
+```
+
+The overlay shares a Unix socket volume with the `xipe` container and leaves the
+sidecar optional. Xipe proxy traffic and startup do not depend on
+`feishu-botd`.

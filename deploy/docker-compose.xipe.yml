@@ -1,0 +1,53 @@
+# Optional overlay for running feishu-botd beside Xipe's checked-in Compose
+# stack. From the Xipe repository root:
+#
+#   docker compose \
+#     -f docker-compose.yml \
+#     -f ../feishu-botd/deploy/docker-compose.xipe.yml \
+#     --profile feishu \
+#     up -d --build
+#
+# The bridge remains optional: Xipe does not depend_on this service, and proxy
+# traffic continues if the sidecar is stopped. The Xipe hook wrapper talks to
+# the sidecar through the shared Unix socket volume.
+
+services:
+  xipe:
+    volumes:
+      - feishu-botd-run:/run/feishu-botd
+    environment:
+      FEISHU_BOTD_SOCKET: /run/feishu-botd/feishu-botd.sock
+      FEISHU_BOTD_CHANNEL: ${FEISHU_BOTD_CHANNEL:-ops}
+      FEISHU_BOTD_TIMEOUT_SECONDS: ${FEISHU_BOTD_TIMEOUT_SECONDS:-10}
+
+  feishu-botd:
+    profiles: ["feishu"]
+    build:
+      context: ../feishu-botd
+      dockerfile: Dockerfile
+    image: feishu-botd:latest
+    container_name: feishu-botd
+    restart: unless-stopped
+    volumes:
+      - feishu-botd-run:/run/feishu-botd
+    environment:
+      FEISHU_APP_ID: ${FEISHU_APP_ID:-}
+      FEISHU_APP_SECRET: ${FEISHU_APP_SECRET:-}
+      FEISHU_BOTD_SOCKET: /run/feishu-botd/feishu-botd.sock
+      FEISHU_BOTD_CHANNELS: ${FEISHU_BOTD_CHANNELS:-}
+      FEISHU_BOTD_DEDUPE_TTL_SECONDS: ${FEISHU_BOTD_DEDUPE_TTL_SECONDS:-21600}
+      FEISHU_BOTD_SEND_TIMEOUT_SECONDS: ${FEISHU_BOTD_SEND_TIMEOUT_SECONDS:-15}
+    env_file:
+      - .env
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -fsS --unix-socket /run/feishu-botd/feishu-botd.sock http://localhost/healthz >/dev/null",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  feishu-botd-run:

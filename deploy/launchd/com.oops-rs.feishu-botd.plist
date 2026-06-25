@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.oops-rs.feishu-botd</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/feishu-botd</string>
+  </array>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>FEISHU_APP_ID</key>
+    <string>cli_xxx</string>
+    <key>FEISHU_APP_SECRET</key>
+    <string>replace-with-secret</string>
+    <key>FEISHU_BOTD_SOCKET</key>
+    <string>/tmp/feishu-botd/feishu-botd.sock</string>
+    <key>FEISHU_BOTD_CHANNELS_OPS</key>
+    <string>oc_xxx</string>
+    <key>FEISHU_BOTD_DEDUPE_TTL_SECONDS</key>
+    <string>21600</string>
+    <key>FEISHU_BOTD_SEND_TIMEOUT_SECONDS</key>
+    <string>15</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>/tmp/feishu-botd/stdout.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/feishu-botd/stderr.log</string>
+</dict>
+</plist>

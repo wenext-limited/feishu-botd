@@ -148,7 +148,7 @@ func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
 		if err := s.sender.Ready(ctx); err != nil {
 			checks["feishu_auth"] = "unavailable"
 			status = http.StatusServiceUnavailable
-			s.logger.Warn("readiness auth check failed", "error", redactedError(err))
+			s.logger.Warn("readiness auth check failed", "error", s.redactedError(err))
 		}
 	}
 	state := "ready"
@@ -191,7 +191,7 @@ func (s *Server) handleNotify(w http.ResponseWriter, r *http.Request) {
 	messageID, err := s.sender.Send(ctx, chatID, req)
 	if err != nil {
 		s.store.Abort(req.Source, req.DedupeKey)
-		s.logger.Warn("notify send failed", "source", req.Source, "event", req.SourceEventID, "channel", req.Target.Channel, "error", redactedError(err))
+		s.logger.Warn("notify send failed", "source", req.Source, "event", req.SourceEventID, "channel", req.Target.Channel, "error", s.redactedError(err))
 		s.writeError(w, r, notify.NewAPIError(502, "feishu_unavailable", "Feishu send failed", true))
 		return
 	}
@@ -232,10 +232,28 @@ func requestID(r *http.Request) string {
 	return ""
 }
 
-func redactedError(err error) string {
+func (s *Server) redactedError(err error) string {
 	msg := err.Error()
+	for _, secret := range s.redactionValues() {
+		msg = strings.ReplaceAll(msg, secret, "<redacted>")
+	}
 	if len(msg) > 180 {
 		return msg[:180] + "..."
 	}
 	return msg
+}
+
+func (s *Server) redactionValues() []string {
+	values := []string{s.cfg.AppSecret, s.cfg.AuthToken}
+	for _, chatID := range s.cfg.Channels {
+		values = append(values, chatID)
+	}
+	kept := values[:0]
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if len(value) >= 4 {
+			kept = append(kept, value)
+		}
+	}
+	return kept
 }
