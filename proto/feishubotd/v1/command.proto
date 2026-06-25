@@ -1,0 +1,71 @@
+syntax = "proto3";
+
+package feishubotd.v1;
+
+import "feishubotd/v1/common.proto";
+
+option go_package = "feishu-botd/gen/feishubotd/v1;feishubotdv1";
+
+// CommandService is the FUTURE inbound path. botd owns the Feishu long
+// connection and command dispatcher; providers Subscribe (server stream) and
+// botd pushes matched commands, then the provider Responds. Server-streaming is
+// deliberate: inbound is push-shaped, and a stream avoids polling and keeps
+// Feishu credentials inside botd. Defined now to pin the package shape; the
+// implementation returns codes.Unimplemented in this slice and the service is
+// NOT registered on the server yet.
+service CommandService {
+  rpc Subscribe(SubscribeRequest) returns (stream SubscribeResponse);
+  rpc Respond(RespondRequest) returns (RespondResponse);
+}
+
+// ProviderService is the FUTURE pull path (botd asks a registered client to
+// supply data for a card or menu). Kept SEPARATE from CommandService because
+// providers are pull (botd -> client on demand) while commands are push
+// (user -> botd -> client). Unary; the implementation returns
+// codes.Unimplemented in this slice and the service is NOT registered yet.
+service ProviderService {
+  rpc RegisterProvider(RegisterProviderRequest) returns (RegisterProviderResponse);
+}
+
+message SubscribeRequest {
+  string provider = 1; // logical provider id, e.g. "xipe"
+  repeated string commands = 2; // command names this provider handles
+  reserved 3 to 15;
+}
+
+// SubscribeResponse wraps each streamed inbound command.
+message SubscribeResponse {
+  InboundCommand command = 1;
+}
+
+message InboundCommand {
+  string delivery_id = 1; // echo in RespondRequest
+  string command = 2; // e.g. "status"
+  string text = 3; // remaining args
+  string chat_alias = 4; // resolved alias, never a raw chat id
+  string sender_id = 5; // opaque Feishu sender id
+  map<string, string> metadata = 6;
+  reserved 7 to 31;
+}
+
+message RespondRequest {
+  string delivery_id = 1;
+  oneof reply {
+    MarkdownContent markdown = 10;
+    CardContent card = 11;
+  }
+  reserved 2 to 9, 12 to 31;
+}
+
+message RespondResponse {
+  bool accepted = 1;
+}
+
+message RegisterProviderRequest {
+  string provider = 1;
+  repeated string capabilities = 2;
+}
+
+message RegisterProviderResponse {
+  bool registered = 1;
+}

@@ -1,0 +1,12 @@
+version: v2
+# Generated Go lands under gen/feishubotd/v1/ because each .proto sets an
+# explicit, domain-neutral `option go_package = "feishu-botd/gen/..."` and we
+# use paths=source_relative. The generated code is committed, so `go build`,
+# `go test`, and the Docker build never depend on running codegen.
+plugins:
+  - local: protoc-gen-go
+    out: gen
+    opt: paths=source_relative
+  - local: protoc-gen-go-grpc
+    out: gen
+    opt: paths=source_relative

@@ -1,0 +1,32 @@
+syntax = "proto3";
+
+package feishubotd.v1;
+
+option go_package = "feishu-botd/gen/feishubotd/v1;feishubotdv1";
+
+// BotdHealthService exposes liveness and readiness. It is a separate service
+// because it rarely changes and stays unauthenticated even on the loopback TCP
+// path. It mirrors GET /healthz and GET /readyz so one internal implementation
+// backs both transports.
+service BotdHealthService {
+  rpc Health(HealthRequest) returns (HealthResponse);
+  rpc Ready(ReadyRequest) returns (ReadyResponse);
+}
+
+message HealthRequest {}
+
+message HealthResponse {
+  string status = 1; // "ok"
+  string service = 2; // "feishu-botd"
+  string version = 3; // e.g. "0.1.0"
+}
+
+message ReadyRequest {}
+
+message ReadyResponse {
+  bool ready = 1;
+  // Check name -> state string ("ok" | "missing_credentials" | ...). A map so
+  // new checks are non-breaking. Redacted; never contains secrets or raw chat
+  // ids.
+  map<string, string> checks = 2;
+}

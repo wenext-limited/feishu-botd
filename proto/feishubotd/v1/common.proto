@@ -1,0 +1,68 @@
+syntax = "proto3";
+
+package feishubotd.v1;
+
+option go_package = "feishu-botd/gen/feishubotd/v1;feishubotdv1";
+
+// Severity mirrors the HTTP contract {info, warning, critical}.
+// SEVERITY_UNSPECIFIED (0) is rejected at the service boundary (fail-closed),
+// matching the strict HTTP validation rather than silently defaulting to info.
+enum Severity {
+  SEVERITY_UNSPECIFIED = 0;
+  SEVERITY_INFO = 1;
+  SEVERITY_WARNING = 2;
+  SEVERITY_CRITICAL = 3;
+}
+
+// MessageTarget is the stable, caller-facing routing handle. Callers ALWAYS
+// use an alias such as "ops"; raw Feishu chat ids resolve only inside botd
+// config. Modeled as a oneof so user, thread, and raw-chat targets are
+// additive later without breaking v1.
+message MessageTarget {
+  oneof to {
+    // Channel alias, e.g. "ops". The only variant implemented in v1.
+    string channel = 1;
+  }
+  reserved 2 to 15; // user_alias, thread_id, raw chat_id escape hatch, ...
+}
+
+// Link is an optional labeled URL attached to a notification.
+message Link {
+  string label = 1;
+  string url = 2;
+}
+
+// Content message types are shared between the notification surface
+// (SendMessage) and the future inbound command surface (CommandService), so
+// they live in common.proto.
+
+// MarkdownContent is the only content kind implemented in v1.
+message MarkdownContent {
+  string title = 1;
+  string markdown = 2;
+}
+
+// TextContent is a skeleton for plain-text messages (not yet implemented).
+message TextContent {
+  string text = 1;
+}
+
+// CardContent is a skeleton for interactive cards (not yet implemented).
+message CardContent {
+  string card_json = 1;
+}
+
+// BotdError is a self-contained, dependency-free error detail. It mirrors the
+// HTTP error body field-for-field so the compatibility shim is a field copy,
+// not a translation, and so non-Go clients (e.g. Rust) need no google.rpc
+// vendoring. On the gRPC side it is attached to the status via WithDetails.
+message BotdError {
+  // Stable machine code, e.g. "unknown_channel". Branch on this, not the gRPC
+  // status enum.
+  string code = 1;
+  // Redacted, human-facing message. Never contains secrets or raw chat ids.
+  string message = 2;
+  bool retryable = 3;
+  string request_id = 4;
+  reserved 5 to 15;
+}

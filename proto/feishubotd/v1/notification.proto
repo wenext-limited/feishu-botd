@@ -1,0 +1,64 @@
+syntax = "proto3";
+
+package feishubotd.v1;
+
+import "feishubotd/v1/common.proto";
+
+option go_package = "feishu-botd/gen/feishubotd/v1;feishubotdv1";
+
+// NotificationService is the message-sending surface.
+//
+// SendNotification is the ergonomic, deduped, webhook-replacement path and is
+// the exact shape that POST /v1/notify maps onto. SendMessage is the
+// lower-level escape hatch with a forward-compatible content oneof.
+service NotificationService {
+  rpc SendNotification(SendNotificationRequest) returns (SendNotificationResponse);
+  rpc SendMessage(SendMessageRequest) returns (SendMessageResponse);
+}
+
+// Field numbers and names mirror the existing notify.Request JSON so the HTTP
+// shim mapping is mechanical. All of source, source_event_id, dedupe_key,
+// severity, title, markdown, and target stay REQUIRED (validated in core),
+// preserving today's HTTP contract and idempotency semantics.
+message SendNotificationRequest {
+  string source = 1; // required, <= 64
+  string source_event_id = 2; // required, <= 160
+  string dedupe_key = 3; // required, <= 240
+  Severity severity = 4; // required, != SEVERITY_UNSPECIFIED
+  string title = 5; // required, <= 200
+  string markdown = 6; // required, <= 8000
+  MessageTarget target = 7; // required, alias only
+  repeated Link links = 8; // <= 8
+  map<string, string> metadata = 9; // <= 32 entries
+  reserved 10 to 19;
+}
+
+message SendNotificationResponse {
+  string status = 1; // "sent"
+  string provider = 2; // "feishu"
+  string dedupe_key = 3;
+  string message_id = 4; // Feishu om_xxx
+  bool duplicate = 5;
+}
+
+// SendMessageRequest freezes the content oneof now so text and card kinds are
+// additive later, but v1 implements ONLY markdown; other arms return
+// codes.Unimplemented. dedupe_key is optional; when set, idempotency applies.
+message SendMessageRequest {
+  MessageTarget target = 1; // required
+  string dedupe_key = 2; // optional
+  string source = 3; // optional, dedupe namespacing
+  oneof content { // exactly one required
+    MarkdownContent markdown = 10; // implemented in v1
+    TextContent text = 11; // skeleton -> Unimplemented
+    CardContent card = 12; // skeleton -> Unimplemented
+  }
+  string reply_to_message_id = 20; // additive threading later
+  reserved 4 to 9, 13 to 19, 21 to 31;
+}
+
+message SendMessageResponse {
+  string provider = 1;
+  string message_id = 2;
+  bool duplicate = 3;
+}
