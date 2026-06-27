@@ -13,9 +13,24 @@
 
 services:
   xipe:
+    # Join the sidecar's gid so the Xipe process can connect to the gRPC/HTTP
+    # sockets, which feishu-botd creates mode 0660 owned by uid/gid 10001.
+    group_add:
+      - "10001"
     volumes:
       - feishu-botd-run:/run/feishu-botd
     environment:
+      # Native gRPC delivery (proposal 0011). Requires a Xipe image built with
+      # the `feishu-botd` cargo feature — the Xipe Dockerfile enables it by
+      # default, so `up -d --build` is enough. Runtime-gated; if the sidecar is
+      # down, only matching deliveries fail/retry. Channel + timeout reuse the
+      # same .env keys as the shell-wrapper path below (no new keys to set).
+      XIPE_FEISHU_BOTD_ENABLED: "true"
+      XIPE_FEISHU_BOTD_GRPC_SOCKET: /run/feishu-botd/feishu-botd.grpc.sock
+      XIPE_FEISHU_BOTD_DEFAULT_CHANNEL: ${FEISHU_BOTD_CHANNEL:-ops}
+      XIPE_FEISHU_BOTD_TIMEOUT_SECONDS: ${FEISHU_BOTD_TIMEOUT_SECONDS:-15}
+      # Legacy shell-wrapper hook variables (curl over the HTTP shim). Harmless
+      # alongside native delivery; use one delivery path per channel.
       FEISHU_BOTD_SOCKET: /run/feishu-botd/feishu-botd.sock
       FEISHU_BOTD_GRPC_SOCKET: /run/feishu-botd/feishu-botd.grpc.sock
       FEISHU_BOTD_CHANNEL: ${FEISHU_BOTD_CHANNEL:-ops}
