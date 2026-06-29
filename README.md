@@ -46,8 +46,7 @@ FEISHU_BOTD_CHANNELS_OPS=oc_xxx
 ```
 
 Choose at least one listener. Each transport has a Unix-socket form (local-first,
-preferred) and a loopback-TCP form (for Docker / process managers, bearer-token
-auth required):
+preferred) and a TCP form (bearer-token auth required):
 
 ```text
 # gRPC (preferred)
@@ -60,10 +59,12 @@ FEISHU_BOTD_SOCKET=/run/feishu-botd/feishu-botd.sock
 ```
 
 Any TCP listener (`FEISHU_BOTD_BIND` or `FEISHU_BOTD_GRPC_BIND`) requires a
-shared bearer token:
+shared bearer token. TCP binds are loopback-only by default; expose them on a
+LAN only with an explicit opt-in:
 
 ```text
 FEISHU_BOTD_AUTH_TOKEN_FILE=/run/secrets/feishu-botd-token
+FEISHU_BOTD_ALLOW_NON_LOOPBACK_BIND=true
 ```
 
 Optional:

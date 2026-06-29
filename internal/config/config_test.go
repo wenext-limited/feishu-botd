@@ -52,6 +52,14 @@ func TestValidateLoopbackBind(t *testing.T) {
 	}
 }
 
+func TestValidateTCPBindAllowsNonLoopbackWithOptIn(t *testing.T) {
+	for _, addr := range []string{"0.0.0.0:7345", ":7345", "192.0.2.10:7345"} {
+		if err := validateTCPBind("FEISHU_BOTD_BIND", addr, true); err != nil {
+			t.Fatalf("%s rejected with opt-in: %v", addr, err)
+		}
+	}
+}
+
 func TestReadTokenFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "token")
 	if err := os.WriteFile(path, []byte("abc.DEF_123\nignored"), 0o600); err != nil {
@@ -88,6 +96,7 @@ func setBaseEnv(t *testing.T) {
 	t.Setenv("FEISHU_BOTD_GRPC_SOCKET", "")
 	t.Setenv("FEISHU_BOTD_GRPC_BIND", "")
 	t.Setenv("FEISHU_BOTD_AUTH_TOKEN_FILE", "")
+	t.Setenv("FEISHU_BOTD_ALLOW_NON_LOOPBACK_BIND", "")
 }
 
 func TestLoadFromEnvGRPCSocketSatisfiesListenerRequirement(t *testing.T) {
@@ -127,5 +136,31 @@ func TestLoadFromEnvGRPCBindRequiresTokenFile(t *testing.T) {
 	}
 	if cfg.AuthToken != "abc123" {
 		t.Fatalf("auth token = %q", cfg.AuthToken)
+	}
+}
+
+func TestLoadFromEnvLANBindRequiresOptInAndToken(t *testing.T) {
+	setBaseEnv(t)
+	t.Setenv("FEISHU_BOTD_BIND", "0.0.0.0:7345")
+	if _, err := LoadFromEnv(); err == nil || !strings.Contains(err.Error(), "FEISHU_BOTD_ALLOW_NON_LOOPBACK_BIND") {
+		t.Fatalf("expected non-loopback opt-in error, got %v", err)
+	}
+
+	t.Setenv("FEISHU_BOTD_ALLOW_NON_LOOPBACK_BIND", "true")
+	if _, err := LoadFromEnv(); err == nil || !strings.Contains(err.Error(), "FEISHU_BOTD_AUTH_TOKEN_FILE") {
+		t.Fatalf("expected token-file error after opt-in, got %v", err)
+	}
+
+	tokenPath := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(tokenPath, []byte("lan-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FEISHU_BOTD_AUTH_TOKEN_FILE", tokenPath)
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("load with LAN bind: %v", err)
+	}
+	if !cfg.AllowLANBind || cfg.BindAddr != "0.0.0.0:7345" || cfg.AuthToken != "lan-token" {
+		t.Fatalf("unexpected config: %#v", cfg)
 	}
 }

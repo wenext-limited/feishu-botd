@@ -7,12 +7,17 @@ HTTP socket (`FEISHU_BOTD_SOCKET`) remains for the compatibility shim. The two
 transports use distinct socket paths and can run simultaneously during
 migration. See [ipc.md](./ipc.md) for the gRPC contract.
 
-Loopback TCP is intended for Docker or process-manager deployments. In TCP mode,
-both transports require a bearer token loaded from
+TCP is intended for Docker or process-manager deployments. TCP binds are
+loopback-only by default. To expose `feishu-botd` to other machines on a LAN,
+bind to a non-loopback address such as `0.0.0.0:7345` and set
+`FEISHU_BOTD_ALLOW_NON_LOOPBACK_BIND=true`. In TCP mode, both transports require
+a bearer token loaded from
 `FEISHU_BOTD_AUTH_TOKEN_FILE`: HTTP `POST /v1/notify` expects an
 `Authorization: Bearer <token>` header, and gRPC expects the same token as
 `authorization` request metadata. The single token is shared by
-`FEISHU_BOTD_BIND` and `FEISHU_BOTD_GRPC_BIND`; health RPCs are exempt.
+`FEISHU_BOTD_BIND` and `FEISHU_BOTD_GRPC_BIND`; health RPCs are exempt. Use a
+host firewall or Docker's host-IP port publishing to keep the listener on the
+trusted LAN.
 
 Feishu app credentials and raw chat ids stay in sidecar configuration. Hook
 definitions should use stable channel names such as `ops`.
@@ -41,6 +46,74 @@ curl --unix-socket /tmp/feishu-botd/feishu-botd.sock http://localhost/readyz
 
 The gRPC listener is on `feishu-botd.grpc.sock`. See [ipc.md](./ipc.md) to dial
 it (e.g. `grpc_health_probe -addr unix:///tmp/feishu-botd/feishu-botd.grpc.sock`).
+
+## Standalone Docker on a LAN
+
+Create a token file that all LAN callers will use:
+
+```sh
+mkdir -p secrets
+openssl rand -base64 32 > secrets/feishu-botd-token
+chmod 600 secrets/feishu-botd-token
+```
+
+Create `.env`:
+
+```text
+FEISHU_APP_ID=cli_xxx
+FEISHU_APP_SECRET=...
+FEISHU_BOTD_CHANNELS=ci=oc_xxx
+```
+
+Minimal `docker-compose.yml`:
+
+```yaml
+services:
+  feishu-botd:
+    build: .
+    image: feishu-botd:latest
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      FEISHU_BOTD_SOCKET: /run/feishu-botd/feishu-botd.sock
+      FEISHU_BOTD_BIND: 0.0.0.0:7345
+      FEISHU_BOTD_AUTH_TOKEN_FILE: /run/secrets/feishu-botd-token
+      FEISHU_BOTD_ALLOW_NON_LOOPBACK_BIND: "true"
+    volumes:
+      - ./secrets/feishu-botd-token:/run/secrets/feishu-botd-token:ro
+    ports:
+      # Prefer binding to the host's LAN IP instead of every host interface.
+      - "192.168.1.10:7345:7345"
+```
+
+Start it:
+
+```sh
+docker compose up -d --build
+```
+
+From another LAN machine:
+
+```sh
+TOKEN="$(ssh botd-host cat /path/to/feishu-botd/secrets/feishu-botd-token)"
+curl http://192.168.1.10:7345/v1/message \
+  -H "Authorization: Bearer ${TOKEN}" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "source": "jenkins",
+    "dedupe_key": "jenkins:build:123",
+    "target": { "channel": "ci" },
+    "msg_type": "interactive",
+    "card": {
+      "type": "template",
+      "data": {
+        "template_id": "AAqBgzXLgNKzZ",
+        "template_version_name": "1.0.3",
+        "template_variable": { "title": "Build succeeded" }
+      }
+    }
+  }'
+```
 
 ## Docker Beside Xipe
 

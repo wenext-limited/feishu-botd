@@ -19,13 +19,14 @@ fits the deployment (both can run at once):
 | Env var | Listener | Auth |
 | --- | --- | --- |
 | `FEISHU_BOTD_GRPC_SOCKET` | Unix domain socket (preferred, local-first) | none (local trust) |
-| `FEISHU_BOTD_GRPC_BIND` | loopback TCP (Docker / process managers) | bearer token, required |
+| `FEISHU_BOTD_GRPC_BIND` | TCP (loopback by default; LAN with explicit opt-in) | bearer token, required |
 
 The Unix socket is created `0o660` and removed-then-rebound on start, mirroring
-the HTTP socket. The loopback TCP listener requires `FEISHU_BOTD_AUTH_TOKEN_FILE`
-(the **same** token shared with the HTTP TCP listener) and rejects non-loopback
-binds. Health RPCs are exempt from auth on the TCP listener so process managers
-can probe without a token.
+the HTTP socket. The TCP listener requires `FEISHU_BOTD_AUTH_TOKEN_FILE` (the
+**same** token shared with the HTTP TCP listener). TCP binds are loopback-only
+by default; non-loopback/LAN binds require
+`FEISHU_BOTD_ALLOW_NON_LOOPBACK_BIND=true`. Health RPCs are exempt from auth on
+the TCP listener so process managers can probe without a token.
 
 Dial examples (Go):
 

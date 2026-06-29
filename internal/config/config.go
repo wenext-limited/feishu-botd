@@ -23,6 +23,7 @@ type Config struct {
 	GRPCSocketPath string
 	GRPCBindAddr   string
 	AuthToken      string
+	AllowLANBind   bool
 	Channels       map[string]string
 	DedupeTTL      time.Duration
 	SendTimeout    time.Duration
@@ -36,6 +37,7 @@ func LoadFromEnv() (Config, error) {
 		BindAddr:       strings.TrimSpace(os.Getenv("FEISHU_BOTD_BIND")),
 		GRPCSocketPath: strings.TrimSpace(os.Getenv("FEISHU_BOTD_GRPC_SOCKET")),
 		GRPCBindAddr:   strings.TrimSpace(os.Getenv("FEISHU_BOTD_GRPC_BIND")),
+		AllowLANBind:   boolFromEnv("FEISHU_BOTD_ALLOW_NON_LOOPBACK_BIND"),
 		Channels:       loadChannels(os.Environ()),
 		DedupeTTL:      durationFromEnv("FEISHU_BOTD_DEDUPE_TTL_SECONDS", defaultDedupeTTL),
 		SendTimeout:    durationFromEnv("FEISHU_BOTD_SEND_TIMEOUT_SECONDS", defaultSendTimeout),
@@ -53,9 +55,9 @@ func LoadFromEnv() (Config, error) {
 	if len(cfg.Channels) == 0 {
 		return Config{}, errors.New("at least one FEISHU_BOTD_CHANNELS_* mapping is required")
 	}
-	// The HTTP and gRPC loopback TCP listeners share a single bearer token. Load
-	// it once when either TCP listener is enabled, and require each TCP bind to
-	// stay on loopback.
+	// The HTTP and gRPC TCP listeners share a single bearer token. Load it once
+	// when either TCP listener is enabled. TCP binds stay loopback-only unless
+	// the deployment explicitly opts into a non-loopback/LAN bind.
 	if cfg.BindAddr != "" || cfg.GRPCBindAddr != "" {
 		for _, bind := range []struct{ name, addr string }{
 			{"FEISHU_BOTD_BIND", cfg.BindAddr},
@@ -64,7 +66,7 @@ func LoadFromEnv() (Config, error) {
 			if bind.addr == "" {
 				continue
 			}
-			if err := validateLoopbackBind(bind.name, bind.addr); err != nil {
+			if err := validateTCPBind(bind.name, bind.addr, cfg.AllowLANBind); err != nil {
 				return Config{}, err
 			}
 		}
@@ -123,17 +125,29 @@ func durationFromEnv(name string, fallback time.Duration) time.Duration {
 	return time.Duration(seconds) * time.Second
 }
 
+func boolFromEnv(name string) bool {
+	raw := strings.ToLower(strings.TrimSpace(os.Getenv(name)))
+	return raw == "1" || raw == "true" || raw == "yes" || raw == "on"
+}
+
 func validateLoopbackBind(name, addr string) error {
+	return validateTCPBind(name, addr, false)
+}
+
+func validateTCPBind(name, addr string, allowNonLoopback bool) error {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
 		return fmt.Errorf("%s must be host:port: %w", name, err)
+	}
+	if allowNonLoopback {
+		return nil
 	}
 	if host == "localhost" {
 		return nil
 	}
 	ip := net.ParseIP(host)
 	if ip == nil || !ip.IsLoopback() {
-		return fmt.Errorf("%s must bind to loopback", name)
+		return fmt.Errorf("%s must bind to loopback unless FEISHU_BOTD_ALLOW_NON_LOOPBACK_BIND=true", name)
 	}
 	return nil
 }
