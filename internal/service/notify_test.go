@@ -99,6 +99,20 @@ func TestSendNotificationSuccessAndDuplicate(t *testing.T) {
 	}
 }
 
+func TestSendNotificationKeepsMarkdownContract(t *testing.T) {
+	sender := &fakeSender{messageID: "om_1"}
+	svc := newTestService(sender)
+	req := validRequest()
+	req.CardJSON = `{"type":"template"}`
+
+	if _, apiErr := svc.SendNotification(context.Background(), req); apiErr != nil {
+		t.Fatalf("send error: %v", apiErr)
+	}
+	if sender.request.CardJSON != "" || sender.request.Markdown != req.Markdown {
+		t.Fatalf("notification drifted from markdown contract: %#v", sender.request)
+	}
+}
+
 func TestSendNotificationDedupeConflict(t *testing.T) {
 	svc := newTestService(&fakeSender{messageID: "om_1"})
 	if _, apiErr := svc.SendNotification(context.Background(), validRequest()); apiErr != nil {
@@ -172,6 +186,50 @@ func TestSendMessageMarkdown(t *testing.T) {
 	}
 	if sender.chatID != "oc_test" || sender.request.Markdown != "**hello**" {
 		t.Fatalf("unexpected sender state: chat=%q req=%#v", sender.chatID, sender.request)
+	}
+}
+
+func TestSendMessageCard(t *testing.T) {
+	sender := &fakeSender{messageID: "om_card"}
+	svc := newTestService(sender)
+	cardJSON := `{"type":"template","data":{"template_id":"tpl","template_variable":{"title":"Build"}}}`
+
+	res, apiErr := svc.SendMessage(context.Background(), MessageInput{
+		Channel:  "ops",
+		Source:   "jenkins",
+		CardJSON: cardJSON,
+	})
+	if apiErr != nil {
+		t.Fatalf("send card error: %v", apiErr)
+	}
+	if res.MessageID != "om_card" || res.Duplicate {
+		t.Fatalf("unexpected result: %#v", res)
+	}
+	if sender.chatID != "oc_test" || sender.request.CardJSON != cardJSON || sender.request.Markdown != "" {
+		t.Fatalf("unexpected sender state: chat=%q req=%#v", sender.chatID, sender.request)
+	}
+}
+
+func TestSendMessageRejectsInvalidCardJSON(t *testing.T) {
+	svc := newTestService(&fakeSender{messageID: "om_msg"})
+	_, apiErr := svc.SendMessage(context.Background(), MessageInput{
+		Channel:  "ops",
+		CardJSON: "not-json",
+	})
+	if apiErr == nil || apiErr.Code != "invalid_card_json" {
+		t.Fatalf("expected invalid_card_json, got %v", apiErr)
+	}
+}
+
+func TestSendMessageRejectsMultipleContents(t *testing.T) {
+	svc := newTestService(&fakeSender{messageID: "om_msg"})
+	_, apiErr := svc.SendMessage(context.Background(), MessageInput{
+		Channel:  "ops",
+		Markdown: "hello",
+		CardJSON: `{"type":"template"}`,
+	})
+	if apiErr == nil || apiErr.Code != "invalid_content" {
+		t.Fatalf("expected invalid_content, got %v", apiErr)
 	}
 }
 

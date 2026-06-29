@@ -62,7 +62,7 @@ The daemon also registers the standard `grpc.health.v1.Health` service so
 | RPC | Purpose |
 | --- | --- |
 | `SendNotification` | The ergonomic, deduped, webhook-replacement path. Exact shape `POST /v1/notify` maps onto. |
-| `SendMessage` | Lower-level send with a forward-compatible content `oneof`. v1 implements markdown only. |
+| `SendMessage` | Lower-level send with a forward-compatible content `oneof`. v1 implements markdown and raw interactive card JSON. |
 
 `SendNotification` keeps the same required fields as the HTTP contract —
 `source`, `source_event_id`, `dedupe_key`, `severity`, `title`, `markdown`,
@@ -70,9 +70,11 @@ The daemon also registers the standard `grpc.health.v1.Health` service so
 with a stable **channel alias** (`target.channel = "ops"`); raw Feishu chat ids
 and app credentials live only in daemon config.
 
-`SendMessage` carries a `content` oneof (`markdown` | `text` | `card`). Only
-`markdown` is implemented in v1; `text` and `card` return `UNIMPLEMENTED`.
-Deduplication applies only when a `dedupe_key` is supplied.
+`SendMessage` carries a `content` oneof (`markdown` | `text` | `card`).
+`markdown` and `card.card_json` are implemented in v1; `text` returns
+`UNIMPLEMENTED`. `card_json` must be a Feishu interactive-card JSON object,
+such as a template card payload. Deduplication applies only when a `dedupe_key`
+is supplied.
 
 ### `CommandService` / `ProviderService` (skeletons)
 

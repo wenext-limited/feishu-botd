@@ -69,9 +69,13 @@ func (s *ChannelSender) Ready(ctx context.Context) error {
 
 func (s *ChannelSender) Send(ctx context.Context, chatID string, req notify.Request) (string, error) {
 	input := &channeltypes.SendInput{
-		ChatID:   chatID,
-		Title:    req.Title,
-		Markdown: req.Markdown,
+		ChatID: chatID,
+	}
+	if req.CardJSON != "" {
+		input.Card = req.CardJSON
+	} else {
+		input.Title = req.Title
+		input.Markdown = req.Markdown
 	}
 	result, err := s.channel.Send(ctx, input)
 	if err != nil {

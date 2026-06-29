@@ -55,6 +55,27 @@ func validBody() []byte {
 	return data
 }
 
+func validMessageCardBody() []byte {
+	body := map[string]any{
+		"source":     "jenkins",
+		"dedupe_key": "jenkins:build:1",
+		"target":     map[string]string{"channel": "ops"},
+		"msg_type":   "interactive",
+		"card": map[string]any{
+			"type": "template",
+			"data": map[string]any{
+				"template_id":           "tpl",
+				"template_version_name": "1.0.0",
+				"template_variable": map[string]string{
+					"title": "Build",
+				},
+			},
+		},
+	}
+	data, _ := json.Marshal(body)
+	return data
+}
+
 func TestHealthAndReady(t *testing.T) {
 	server := testServer(&fakeSender{messageID: "om_1"})
 	rec := httptest.NewRecorder()
@@ -97,6 +118,43 @@ func TestNotifySuccessAndDuplicate(t *testing.T) {
 	}
 	if sender.request.Title != "Title" || sender.request.Markdown != "**Body**" {
 		t.Fatalf("sender request = %#v", sender.request)
+	}
+}
+
+func TestMessageCardSuccess(t *testing.T) {
+	sender := &fakeSender{messageID: "om_card"}
+	server := testServer(sender)
+	h := server.handler(true)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/message", bytes.NewReader(validMessageCardBody()))
+	req.Header.Set("Authorization", "Bearer token")
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("message status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var resp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp["message_id"] != "om_card" || resp["provider"] != "feishu" {
+		t.Fatalf("resp = %#v", resp)
+	}
+	if sender.chatID != "oc_test" || sender.request.CardJSON == "" || sender.request.Markdown != "" {
+		t.Fatalf("unexpected sender state: chat=%q req=%#v", sender.chatID, sender.request)
+	}
+}
+
+func TestMessageRejectsInvalidCard(t *testing.T) {
+	server := testServer(&fakeSender{messageID: "om_card"})
+	body := []byte(`{"source":"jenkins","target":{"channel":"ops"},"card":"bad"}`)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/message", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer token")
+	server.handler(true).ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
 	}
 }
 

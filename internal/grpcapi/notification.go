@@ -23,24 +23,25 @@ func (n *notificationServer) SendNotification(ctx context.Context, in *pb.SendNo
 }
 
 func (n *notificationServer) SendMessage(ctx context.Context, in *pb.SendMessageRequest) (*pb.SendMessageResponse, error) {
-	markdown := in.GetMarkdown()
-	if markdown == nil {
-		// text and card are reserved skeletons; an empty oneof is a bad request.
-		// Both route through grpcError so the BotdError detail (stable code +
-		// request id) is present, like every other gRPC error.
-		if in.GetText() != nil || in.GetCard() != nil {
-			return nil, grpcError(notify.NotImplemented("unimplemented", "only markdown content is implemented in v1"), requestIDFromContext(ctx))
-		}
-		return nil, grpcError(notify.BadRequest("missing_content", "message content is required"), requestIDFromContext(ctx))
-	}
-
-	result, apiErr := n.svc.SendMessage(ctx, service.MessageInput{
+	input := service.MessageInput{
 		Channel:   targetChannel(in.GetTarget()),
 		Source:    in.GetSource(),
 		DedupeKey: in.GetDedupeKey(),
-		Title:     markdown.GetTitle(),
-		Markdown:  markdown.GetMarkdown(),
-	})
+	}
+
+	switch content := in.GetContent().(type) {
+	case *pb.SendMessageRequest_Markdown:
+		input.Title = content.Markdown.GetTitle()
+		input.Markdown = content.Markdown.GetMarkdown()
+	case *pb.SendMessageRequest_Card:
+		input.CardJSON = content.Card.GetCardJson()
+	case *pb.SendMessageRequest_Text:
+		return nil, grpcError(notify.NotImplemented("unimplemented", "text content is not implemented in v1"), requestIDFromContext(ctx))
+	default:
+		return nil, grpcError(notify.BadRequest("missing_content", "message content is required"), requestIDFromContext(ctx))
+	}
+
+	result, apiErr := n.svc.SendMessage(ctx, input)
 	if apiErr != nil {
 		return nil, grpcError(apiErr, requestIDFromContext(ctx))
 	}

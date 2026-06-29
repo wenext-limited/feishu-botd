@@ -261,7 +261,7 @@ func TestGRPCProviderFailureReturnsUnavailable(t *testing.T) {
 	}
 }
 
-func TestGRPCSendMessageMarkdownAndUnimplemented(t *testing.T) {
+func TestGRPCSendMessageMarkdownCardAndUnimplemented(t *testing.T) {
 	sender := &fakeSender{messageID: "om_msg"}
 	conn := startUnixServer(t, sender)
 	nc := pb.NewNotificationServiceClient(conn)
@@ -275,6 +275,25 @@ func TestGRPCSendMessageMarkdownAndUnimplemented(t *testing.T) {
 	}
 	if resp.GetMessageId() != "om_msg" {
 		t.Fatalf("resp = %#v", resp)
+	}
+	if sender.request.Markdown != "**hi**" || sender.request.CardJSON != "" {
+		t.Fatalf("sender markdown request = %#v", sender.request)
+	}
+
+	sender.messageID = "om_card"
+	cardJSON := `{"type":"template","data":{"template_id":"tpl"}}`
+	resp, err = nc.SendMessage(context.Background(), &pb.SendMessageRequest{
+		Target:  channelTarget("ops"),
+		Content: &pb.SendMessageRequest_Card{Card: &pb.CardContent{CardJson: cardJSON}},
+	})
+	if err != nil {
+		t.Fatalf("send card: %v", err)
+	}
+	if resp.GetMessageId() != "om_card" {
+		t.Fatalf("card resp = %#v", resp)
+	}
+	if sender.request.CardJSON != cardJSON || sender.request.Markdown != "" {
+		t.Fatalf("sender card request = %#v", sender.request)
 	}
 
 	_, err = nc.SendMessage(context.Background(), &pb.SendMessageRequest{

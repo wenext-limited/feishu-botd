@@ -209,9 +209,10 @@ func (x *SendNotificationResponse) GetDuplicate() bool {
 	return false
 }
 
-// SendMessageRequest freezes the content oneof now so text and card kinds are
-// additive later, but v1 implements ONLY markdown; other arms return
-// codes.Unimplemented. dedupe_key is optional; when set, idempotency applies.
+// SendMessageRequest freezes the content oneof now so future kinds remain
+// additive. v1 implements markdown and raw interactive card JSON; text remains
+// a skeleton and returns codes.Unimplemented. dedupe_key is optional; when set,
+// idempotency applies.
 type SendMessageRequest struct {
 	state     protoimpl.MessageState `protogen:"open.v1"`
 	Target    *MessageTarget         `protobuf:"bytes,1,opt,name=target,proto3" json:"target,omitempty"`                        // required
@@ -333,7 +334,7 @@ type SendMessageRequest_Text struct {
 }
 
 type SendMessageRequest_Card struct {
-	Card *CardContent `protobuf:"bytes,12,opt,name=card,proto3,oneof"` // skeleton -> Unimplemented
+	Card *CardContent `protobuf:"bytes,12,opt,name=card,proto3,oneof"` // implemented in v1
 }
 
 func (*SendMessageRequest_Markdown) isSendMessageRequest_Content() {}

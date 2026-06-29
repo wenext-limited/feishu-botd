@@ -298,7 +298,7 @@ func (x *TextContent) GetText() string {
 	return ""
 }
 
-// CardContent is a skeleton for interactive cards (not yet implemented).
+// CardContent carries raw Feishu interactive-card JSON.
 type CardContent struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	CardJson      string                 `protobuf:"bytes,1,opt,name=card_json,json=cardJson,proto3" json:"card_json,omitempty"`

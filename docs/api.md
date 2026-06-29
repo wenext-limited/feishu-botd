@@ -60,3 +60,54 @@ Errors are redacted:
   }
 }
 ```
+
+## `POST /v1/message`
+
+Lower-level send path for callers that need a specific message content type.
+It supports markdown and Feishu interactive cards. `dedupe_key` is optional;
+when present, duplicate sends return the original `message_id`.
+
+Markdown:
+
+```json
+{
+  "source": "jenkins",
+  "dedupe_key": "jenkins:build:123",
+  "target": { "channel": "ci" },
+  "markdown": {
+    "title": "Build succeeded",
+    "markdown": "**Project**: WeNext"
+  }
+}
+```
+
+Interactive card:
+
+```json
+{
+  "source": "jenkins",
+  "dedupe_key": "jenkins:build:123",
+  "target": { "channel": "ci" },
+  "msg_type": "interactive",
+  "card": {
+    "type": "template",
+    "data": {
+      "template_id": "AAqBgzXLgNKzZ",
+      "template_version_name": "1.0.3",
+      "template_variable": {
+        "title": "Build succeeded"
+      }
+    }
+  }
+}
+```
+
+Successful response:
+
+```json
+{
+  "provider": "feishu",
+  "message_id": "om_xxx",
+  "duplicate": false
+}
+```

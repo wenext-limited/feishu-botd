@@ -25,13 +25,15 @@ service logic:
 ```text
 GET  /healthz
 POST /v1/notify   (and GET /readyz)
+POST /v1/message  (lower-level markdown/card send)
 ```
 
 See [docs/ipc.md](docs/ipc.md) for the full gRPC contract and error model, and
 [docs/api.md](docs/api.md) for the HTTP shim.
 
 Interactive chat, inbound Feishu events, card actions, streaming replies, and
-durable outbox semantics are follow-up work.
+durable outbox semantics are follow-up work. Outbound interactive card sends
+are supported through the lower-level message surface.
 
 ## Configuration
 

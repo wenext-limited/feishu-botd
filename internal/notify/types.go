@@ -15,6 +15,7 @@ type Request struct {
 	Severity      string            `json:"severity"`
 	Title         string            `json:"title"`
 	Markdown      string            `json:"markdown"`
+	CardJSON      string            `json:"card_json,omitempty"`
 	Target        Target            `json:"target"`
 	Links         []Link            `json:"links"`
 	Metadata      map[string]string `json:"metadata"`

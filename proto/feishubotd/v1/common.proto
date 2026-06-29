@@ -47,7 +47,7 @@ message TextContent {
   string text = 1;
 }
 
-// CardContent is a skeleton for interactive cards (not yet implemented).
+// CardContent carries raw Feishu interactive-card JSON.
 message CardContent {
   string card_json = 1;
 }

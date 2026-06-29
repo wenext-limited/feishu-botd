@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 
 	"feishu-botd/internal/dedupe"
@@ -16,6 +17,10 @@ func (s *Service) SendNotification(ctx context.Context, req notify.Request) (not
 	if apiErr := req.Validate(s.cfg.Channels); apiErr != nil {
 		return notify.Response{}, apiErr
 	}
+	// SendNotification remains the stable markdown notification contract. The
+	// lower-level SendMessage path owns card delivery, even if an HTTP caller
+	// includes an additive card_json field.
+	req.CardJSON = ""
 	result, apiErr := s.deliver(ctx, req, true)
 	if apiErr != nil {
 		return notify.Response{}, apiErr
@@ -30,14 +35,15 @@ func (s *Service) SendNotification(ctx context.Context, req notify.Request) (not
 }
 
 // MessageInput is the lower-level, transport-agnostic input for SendMessage.
-// v1 supports only markdown content; other content kinds are rejected by the
-// transport adapter before reaching the service.
+// v1 supports markdown and raw Feishu interactive-card JSON. Other content
+// kinds are rejected by the transport adapter before reaching the service.
 type MessageInput struct {
 	Channel   string
 	Source    string
 	DedupeKey string
 	Title     string
 	Markdown  string
+	CardJSON  string
 }
 
 // SendMessage is the lower-level send path. Deduplication applies only when a
@@ -50,12 +56,23 @@ func (s *Service) SendMessage(ctx context.Context, in MessageInput) (SendResult,
 	if _, ok := s.cfg.Channels[channel]; !ok {
 		return SendResult{}, notify.NewAPIError(404, "unknown_channel", "unknown channel", false)
 	}
-	if strings.TrimSpace(in.Markdown) == "" {
-		return SendResult{}, notify.BadRequest("missing_markdown", "markdown is required")
+	markdown := strings.TrimSpace(in.Markdown)
+	cardJSON := strings.TrimSpace(in.CardJSON)
+	hasMarkdown := markdown != ""
+	hasCard := cardJSON != ""
+	switch {
+	case hasMarkdown && hasCard:
+		return SendResult{}, notify.BadRequest("invalid_content", "exactly one message content is required")
+	case !hasMarkdown && !hasCard:
+		return SendResult{}, notify.BadRequest("missing_content", "message content is required")
+	case hasCard:
+		if apiErr := validateCardJSON(cardJSON); apiErr != nil {
+			return SendResult{}, apiErr
+		}
 	}
 	// Bound the same fields SendNotification caps, since both paths write to the
 	// shared dedupe store keyed by source + dedupe_key.
-	if len(in.Markdown) > 8000 || len(in.Title) > 200 || len(in.Source) > 64 || len(in.DedupeKey) > 240 {
+	if len(in.Markdown) > 8000 || len(in.Title) > 200 || len(in.Source) > 64 || len(in.DedupeKey) > 240 || len(in.CardJSON) > 64*1024 {
 		return SendResult{}, notify.BadRequest("field_too_large", "one or more fields are too large")
 	}
 
@@ -64,9 +81,18 @@ func (s *Service) SendMessage(ctx context.Context, in MessageInput) (SendResult,
 		DedupeKey: in.DedupeKey,
 		Title:     in.Title,
 		Markdown:  in.Markdown,
+		CardJSON:  in.CardJSON,
 		Target:    notify.Target{Channel: channel},
 	}
 	return s.deliver(ctx, req, strings.TrimSpace(in.DedupeKey) != "")
+}
+
+func validateCardJSON(cardJSON string) *notify.APIError {
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(cardJSON), &obj); err != nil || len(obj) == 0 {
+		return notify.BadRequest("invalid_card_json", "card_json must be a JSON object")
+	}
+	return nil
 }
 
 // deliver runs the shared dedupe -> send -> commit/abort flow. When

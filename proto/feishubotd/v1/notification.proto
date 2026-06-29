@@ -41,9 +41,10 @@ message SendNotificationResponse {
   bool duplicate = 5;
 }
 
-// SendMessageRequest freezes the content oneof now so text and card kinds are
-// additive later, but v1 implements ONLY markdown; other arms return
-// codes.Unimplemented. dedupe_key is optional; when set, idempotency applies.
+// SendMessageRequest freezes the content oneof now so future kinds remain
+// additive. v1 implements markdown and raw interactive card JSON; text remains
+// a skeleton and returns codes.Unimplemented. dedupe_key is optional; when set,
+// idempotency applies.
 message SendMessageRequest {
   MessageTarget target = 1; // required
   string dedupe_key = 2; // optional
@@ -51,7 +52,7 @@ message SendMessageRequest {
   oneof content { // exactly one required
     MarkdownContent markdown = 10; // implemented in v1
     TextContent text = 11; // skeleton -> Unimplemented
-    CardContent card = 12; // skeleton -> Unimplemented
+    CardContent card = 12; // implemented in v1
   }
   string reply_to_message_id = 20; // additive threading later
   reserved 4 to 9, 13 to 19, 21 to 31;

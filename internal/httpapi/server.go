@@ -106,6 +106,13 @@ func (s *Server) handler(requireAuth bool) http.Handler {
 		}
 		s.handleNotify(w, r)
 	})
+	mux.HandleFunc("POST /v1/message", func(w http.ResponseWriter, r *http.Request) {
+		if requireAuth && !s.authorized(r) {
+			s.writeError(w, r, notify.NewAPIError(401, "unauthorized", "missing or invalid bearer token", false))
+			return
+		}
+		s.handleMessage(w, r)
+	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, notify.NewAPIError(404, "not_found", "not found", false))
 	})
@@ -155,6 +162,72 @@ func (s *Server) handleNotify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+type messageRequest struct {
+	Source    string           `json:"source"`
+	DedupeKey string           `json:"dedupe_key"`
+	Target    notify.Target    `json:"target"`
+	Markdown  *messageMarkdown `json:"markdown,omitempty"`
+	Card      json.RawMessage  `json:"card,omitempty"`
+	MsgType   string           `json:"msg_type,omitempty"`
+}
+
+type messageMarkdown struct {
+	Title    string `json:"title"`
+	Markdown string `json:"markdown"`
+}
+
+func (s *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
+	var req messageRequest
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 128*1024))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		s.writeError(w, r, notify.BadRequest("invalid_json", "invalid JSON request"))
+		return
+	}
+	if req.MsgType != "" && req.MsgType != "interactive" {
+		s.writeError(w, r, notify.BadRequest("unsupported_msg_type", "only interactive card msg_type is supported"))
+		return
+	}
+
+	input := service.MessageInput{
+		Channel:   req.Target.Channel,
+		Source:    req.Source,
+		DedupeKey: req.DedupeKey,
+		CardJSON:  cardJSONFromHTTP(req.Card),
+	}
+	if req.Markdown != nil {
+		input.Title = req.Markdown.Title
+		input.Markdown = req.Markdown.Markdown
+	}
+
+	result, apiErr := s.svc.SendMessage(r.Context(), input)
+	if apiErr != nil {
+		s.writeError(w, r, apiErr)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"provider":   result.Provider,
+		"message_id": result.MessageID,
+		"duplicate":  result.Duplicate,
+	})
+}
+
+func cardJSONFromHTTP(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var wrapper map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &wrapper); err == nil && len(wrapper) == 1 {
+		if value, ok := wrapper["card_json"]; ok {
+			var cardJSON string
+			if err := json.Unmarshal(value, &cardJSON); err == nil {
+				return strings.TrimSpace(cardJSON)
+			}
+		}
+	}
+	return strings.TrimSpace(string(raw))
 }
 
 func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err *notify.APIError) {
