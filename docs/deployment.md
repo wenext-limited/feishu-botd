@@ -57,34 +57,16 @@ openssl rand -base64 32 > secrets/feishu-botd-token
 chmod 600 secrets/feishu-botd-token
 ```
 
-Create `.env`:
+Copy the checked-in template and edit it:
 
-```text
-FEISHU_APP_ID=cli_xxx
-FEISHU_APP_SECRET=...
-FEISHU_BOTD_CHANNELS=ci=oc_xxx
+```sh
+cp .env.example .env
+$EDITOR .env
 ```
 
-Minimal `docker-compose.yml`:
-
-```yaml
-services:
-  feishu-botd:
-    build: .
-    image: feishu-botd:latest
-    restart: unless-stopped
-    env_file: .env
-    environment:
-      FEISHU_BOTD_SOCKET: /run/feishu-botd/feishu-botd.sock
-      FEISHU_BOTD_BIND: 0.0.0.0:7345
-      FEISHU_BOTD_AUTH_TOKEN_FILE: /run/secrets/feishu-botd-token
-      FEISHU_BOTD_ALLOW_NON_LOOPBACK_BIND: "true"
-    volumes:
-      - ./secrets/feishu-botd-token:/run/secrets/feishu-botd-token:ro
-    ports:
-      # Prefer binding to the host's LAN IP instead of every host interface.
-      - "192.168.1.10:7345:7345"
-```
+Set `FEISHU_BOTD_HOST_IP` to the Docker host's LAN IP when possible, such as
+`192.168.1.10`. Leaving it as `0.0.0.0` exposes the service on every host
+interface allowed by the host firewall.
 
 Start it:
 

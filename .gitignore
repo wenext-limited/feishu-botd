@@ -1,0 +1,8 @@
+.env
+/secrets/*
+!/secrets/.gitkeep
+
+bin/
+dist/
+tmp/
+*.log

@@ -1,5 +1,7 @@
 .git
 .gitignore
+.env
+secrets
 bin
 dist
 tmp
