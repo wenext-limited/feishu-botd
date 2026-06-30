@@ -37,39 +37,43 @@ are supported through the lower-level message surface.
 
 ## Configuration
 
-Required:
+For Docker/manual deployment, use a config file:
+
+```sh
+cp config/feishu-botd.example.json config/feishu-botd.json
+$EDITOR config/feishu-botd.json
+```
+
+The config file contains the Feishu app credentials, listeners, channel aliases,
+and per-caller defaults:
+
+```json
+{
+  "feishu": { "app_id": "cli_xxx", "app_secret": "..." },
+  "listeners": {
+    "http_bind": "0.0.0.0:7345",
+    "auth_token_file": "/run/secrets/feishu-botd-token",
+    "allow_non_loopback_bind": true
+  },
+  "channels": { "ci": "oc_xxx", "ops": "oc_yyy" },
+  "services": { "jenkins": { "default_channel": "ci" } }
+}
+```
+
+Start with:
+
+```text
+FEISHU_BOTD_CONFIG=/etc/feishu-botd/config.json
+```
+
+Environment variables are still supported and override the file when set:
 
 ```text
 FEISHU_APP_ID=cli_xxx
 FEISHU_APP_SECRET=...
-FEISHU_BOTD_CHANNELS_OPS=oc_xxx
-```
-
-Choose at least one listener. Each transport has a Unix-socket form (local-first,
-preferred) and a TCP form (bearer-token auth required):
-
-```text
-# gRPC (preferred)
-FEISHU_BOTD_GRPC_SOCKET=/run/feishu-botd/feishu-botd.grpc.sock
-# FEISHU_BOTD_GRPC_BIND=127.0.0.1:7346
-
-# HTTP compatibility shim
-FEISHU_BOTD_SOCKET=/run/feishu-botd/feishu-botd.sock
-# FEISHU_BOTD_BIND=127.0.0.1:7345
-```
-
-Any TCP listener (`FEISHU_BOTD_BIND` or `FEISHU_BOTD_GRPC_BIND`) requires a
-shared bearer token. TCP binds are loopback-only by default; expose them on a
-LAN only with an explicit opt-in:
-
-```text
+FEISHU_BOTD_CHANNELS=ci=oc_xxx,ops=oc_yyy
+FEISHU_BOTD_BIND=127.0.0.1:7345
 FEISHU_BOTD_AUTH_TOKEN_FILE=/run/secrets/feishu-botd-token
-FEISHU_BOTD_ALLOW_NON_LOOPBACK_BIND=true
-```
-
-Optional:
-
-```text
 FEISHU_BOTD_DEDUPE_TTL_SECONDS=21600
 FEISHU_BOTD_SEND_TIMEOUT_SECONDS=15
 ```

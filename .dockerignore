@@ -1,6 +1,7 @@
 .git
 .gitignore
 .env
+config/feishu-botd.json
 secrets
 bin
 dist

@@ -44,7 +44,16 @@ func (f *fakeSender) Send(_ context.Context, chatID string, req notify.Request) 
 }
 
 func testServer(sender *fakeSender) *Server {
-	cfg := config.Config{AppID: "cli_test", AppSecret: "secret", BindAddr: "127.0.0.1:0", AuthToken: "token", Channels: map[string]string{"ops": "oc_test"}, DedupeTTL: time.Hour, SendTimeout: time.Second}
+	cfg := config.Config{
+		AppID:       "cli_test",
+		AppSecret:   "secret",
+		BindAddr:    "127.0.0.1:0",
+		AuthToken:   "token",
+		Channels:    map[string]string{"ops": "oc_test", "ci": "oc_ci"},
+		Services:    map[string]config.ServiceConfig{"jenkins": {DefaultChannel: "ci"}},
+		DedupeTTL:   time.Hour,
+		SendTimeout: time.Second,
+	}
 	svc := service.NewService(cfg, sender, dedupe.NewMemoryStore(time.Hour), slog.Default())
 	return NewServer(cfg, svc, slog.Default())
 }
@@ -143,6 +152,22 @@ func TestMessageCardSuccess(t *testing.T) {
 	}
 	if sender.chatID != "oc_test" || sender.request.CardJSON == "" || sender.request.Markdown != "" {
 		t.Fatalf("unexpected sender state: chat=%q req=%#v", sender.chatID, sender.request)
+	}
+}
+
+func TestMessageUsesServiceDefaultChannel(t *testing.T) {
+	sender := &fakeSender{messageID: "om_card"}
+	server := testServer(sender)
+	body := []byte(`{"source":"jenkins","card":{"type":"template","data":{"template_id":"tpl"}}}`)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/message", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer token")
+	server.handler(true).ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("message status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if sender.chatID != "oc_ci" || sender.request.Target.Channel != "ci" {
+		t.Fatalf("expected jenkins default channel, chat=%q req=%#v", sender.chatID, sender.request)
 	}
 }
 

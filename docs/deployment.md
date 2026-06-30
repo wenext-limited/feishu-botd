@@ -60,9 +60,16 @@ chmod 600 secrets/feishu-botd-token
 Copy the checked-in template and edit it:
 
 ```sh
+cp config/feishu-botd.example.json config/feishu-botd.json
 cp .env.example .env
+$EDITOR config/feishu-botd.json
 $EDITOR .env
 ```
+
+Put Feishu app credentials, channel aliases, and service defaults in
+`config/feishu-botd.json`. For example, `services.jenkins.default_channel =
+"ci"` lets Jenkins send with `"source": "jenkins"` without repeating
+`"target": { "channel": "ci" }` in every request.
 
 Set `FEISHU_BOTD_HOST_IP` to the Docker host's LAN IP when possible, such as
 `192.168.1.10`. Leaving it as `0.0.0.0` exposes the service on every host
@@ -84,7 +91,6 @@ curl http://192.168.1.10:7345/v1/message \
   -d '{
     "source": "jenkins",
     "dedupe_key": "jenkins:build:123",
-    "target": { "channel": "ci" },
     "msg_type": "interactive",
     "card": {
       "type": "template",

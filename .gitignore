@@ -1,4 +1,5 @@
 .env
+/config/feishu-botd.json
 /secrets/*
 !/secrets/.gitkeep
 

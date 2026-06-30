@@ -46,7 +46,8 @@ func newTestService(sender *fakeSender) *Service {
 	cfg := config.Config{
 		AppID:       "cli_test",
 		AppSecret:   "secret",
-		Channels:    map[string]string{"ops": "oc_test"},
+		Channels:    map[string]string{"ops": "oc_test", "ci": "oc_ci"},
+		Services:    map[string]config.ServiceConfig{"jenkins": {DefaultChannel: "ci"}},
 		DedupeTTL:   time.Hour,
 		SendTimeout: time.Second,
 	}
@@ -160,6 +161,21 @@ func TestSendNotificationUnknownChannel(t *testing.T) {
 	}
 }
 
+func TestSendNotificationUsesServiceDefaultChannel(t *testing.T) {
+	sender := &fakeSender{messageID: "om_1"}
+	svc := newTestService(sender)
+	req := validRequest()
+	req.Source = "jenkins"
+	req.Target.Channel = ""
+
+	if _, apiErr := svc.SendNotification(context.Background(), req); apiErr != nil {
+		t.Fatalf("send error: %v", apiErr)
+	}
+	if sender.chatID != "oc_ci" || sender.request.Target.Channel != "ci" {
+		t.Fatalf("expected jenkins default channel, chat=%q req=%#v", sender.chatID, sender.request)
+	}
+}
+
 func TestSendNotificationValidationRejectsBadSeverity(t *testing.T) {
 	svc := newTestService(&fakeSender{messageID: "om_1"})
 	req := validRequest()
@@ -186,6 +202,37 @@ func TestSendMessageMarkdown(t *testing.T) {
 	}
 	if sender.chatID != "oc_test" || sender.request.Markdown != "**hello**" {
 		t.Fatalf("unexpected sender state: chat=%q req=%#v", sender.chatID, sender.request)
+	}
+}
+
+func TestSendMessageUsesServiceDefaultChannel(t *testing.T) {
+	sender := &fakeSender{messageID: "om_msg"}
+	svc := newTestService(sender)
+	res, apiErr := svc.SendMessage(context.Background(), MessageInput{
+		Source:   "jenkins",
+		Markdown: "**hello**",
+	})
+	if apiErr != nil {
+		t.Fatalf("send message error: %v", apiErr)
+	}
+	if res.MessageID != "om_msg" || sender.chatID != "oc_ci" || sender.request.Target.Channel != "ci" {
+		t.Fatalf("expected jenkins default channel, result=%#v chat=%q req=%#v", res, sender.chatID, sender.request)
+	}
+}
+
+func TestSendMessageExplicitChannelOverridesServiceDefault(t *testing.T) {
+	sender := &fakeSender{messageID: "om_msg"}
+	svc := newTestService(sender)
+	_, apiErr := svc.SendMessage(context.Background(), MessageInput{
+		Source:   "jenkins",
+		Channel:  "ops",
+		Markdown: "**hello**",
+	})
+	if apiErr != nil {
+		t.Fatalf("send message error: %v", apiErr)
+	}
+	if sender.chatID != "oc_test" || sender.request.Target.Channel != "ops" {
+		t.Fatalf("expected explicit channel, chat=%q req=%#v", sender.chatID, sender.request)
 	}
 }
 

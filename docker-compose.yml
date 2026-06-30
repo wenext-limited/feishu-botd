@@ -7,16 +7,9 @@ services:
     container_name: feishu-botd
     restart: unless-stopped
     environment:
-      FEISHU_APP_ID: ${FEISHU_APP_ID:?set FEISHU_APP_ID in .env}
-      FEISHU_APP_SECRET: ${FEISHU_APP_SECRET:?set FEISHU_APP_SECRET in .env}
-      FEISHU_BOTD_CHANNELS: ${FEISHU_BOTD_CHANNELS:?set FEISHU_BOTD_CHANNELS in .env}
-      FEISHU_BOTD_SOCKET: /run/feishu-botd/feishu-botd.sock
-      FEISHU_BOTD_BIND: 0.0.0.0:7345
-      FEISHU_BOTD_AUTH_TOKEN_FILE: /run/secrets/feishu-botd-token
-      FEISHU_BOTD_ALLOW_NON_LOOPBACK_BIND: "true"
-      FEISHU_BOTD_DEDUPE_TTL_SECONDS: ${FEISHU_BOTD_DEDUPE_TTL_SECONDS:-21600}
-      FEISHU_BOTD_SEND_TIMEOUT_SECONDS: ${FEISHU_BOTD_SEND_TIMEOUT_SECONDS:-15}
+      FEISHU_BOTD_CONFIG: /etc/feishu-botd/config.json
     volumes:
+      - ./config/feishu-botd.json:/etc/feishu-botd/config.json:ro
       - ./secrets/feishu-botd-token:/run/secrets/feishu-botd-token:ro
     ports:
       - "${FEISHU_BOTD_HOST_IP:-0.0.0.0}:7345:7345"

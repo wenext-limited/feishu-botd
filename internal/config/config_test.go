@@ -88,6 +88,7 @@ func TestReadTokenFileRejectsInvalidToken(t *testing.T) {
 // so each test starts from a known state regardless of the host environment.
 func setBaseEnv(t *testing.T) {
 	t.Helper()
+	t.Setenv("FEISHU_BOTD_CONFIG", "")
 	t.Setenv("FEISHU_APP_ID", "cli_test")
 	t.Setenv("FEISHU_APP_SECRET", "secret")
 	t.Setenv("FEISHU_BOTD_CHANNELS_OPS", "oc_test")
@@ -97,6 +98,28 @@ func setBaseEnv(t *testing.T) {
 	t.Setenv("FEISHU_BOTD_GRPC_BIND", "")
 	t.Setenv("FEISHU_BOTD_AUTH_TOKEN_FILE", "")
 	t.Setenv("FEISHU_BOTD_ALLOW_NON_LOOPBACK_BIND", "")
+}
+
+func clearConfigEnv(t *testing.T) {
+	t.Helper()
+	for _, name := range []string{
+		"FEISHU_BOTD_CONFIG",
+		"FEISHU_APP_ID",
+		"FEISHU_APP_SECRET",
+		"FEISHU_BOTD_SOCKET",
+		"FEISHU_BOTD_BIND",
+		"FEISHU_BOTD_GRPC_SOCKET",
+		"FEISHU_BOTD_GRPC_BIND",
+		"FEISHU_BOTD_AUTH_TOKEN_FILE",
+		"FEISHU_BOTD_ALLOW_NON_LOOPBACK_BIND",
+		"FEISHU_BOTD_CHANNELS",
+		"FEISHU_BOTD_CHANNELS_OPS",
+		"FEISHU_BOTD_DEFAULT_CHANNEL",
+		"FEISHU_BOTD_DEDUPE_TTL_SECONDS",
+		"FEISHU_BOTD_SEND_TIMEOUT_SECONDS",
+	} {
+		t.Setenv(name, "")
+	}
 }
 
 func TestLoadFromEnvGRPCSocketSatisfiesListenerRequirement(t *testing.T) {
@@ -162,5 +185,114 @@ func TestLoadFromEnvLANBindRequiresOptInAndToken(t *testing.T) {
 	}
 	if !cfg.AllowLANBind || cfg.BindAddr != "0.0.0.0:7345" || cfg.AuthToken != "lan-token" {
 		t.Fatalf("unexpected config: %#v", cfg)
+	}
+}
+
+func TestLoadFromConfigFile(t *testing.T) {
+	clearConfigEnv(t)
+	dir := t.TempDir()
+	tokenPath := filepath.Join(dir, "token")
+	if err := os.WriteFile(tokenPath, []byte("file-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(dir, "feishu-botd.json")
+	configJSON := `{
+  "feishu": {
+    "app_id": "cli_file",
+    "app_secret": "file-secret"
+  },
+  "listeners": {
+    "http_bind": "0.0.0.0:7345",
+    "auth_token_file": "` + tokenPath + `",
+    "allow_non_loopback_bind": true
+  },
+  "channels": {
+    "ci": "oc_ci",
+    "ops": "oc_ops"
+  },
+  "default_channel": "ops",
+  "services": {
+    "jenkins": { "default_channel": "ci" }
+  },
+  "dedupe_ttl_seconds": 60,
+  "send_timeout_seconds": 7
+}`
+	if err := os.WriteFile(configPath, []byte(configJSON), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FEISHU_BOTD_CONFIG", configPath)
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("load config file: %v", err)
+	}
+	if cfg.AppID != "cli_file" || cfg.AppSecret != "file-secret" {
+		t.Fatalf("feishu config = %#v", cfg)
+	}
+	if cfg.BindAddr != "0.0.0.0:7345" || !cfg.AllowLANBind || cfg.AuthToken != "file-token" {
+		t.Fatalf("listener config = %#v", cfg)
+	}
+	if cfg.Channels["ci"] != "oc_ci" || cfg.DefaultChannel != "ops" || cfg.Services["jenkins"].DefaultChannel != "ci" {
+		t.Fatalf("routing config = %#v", cfg)
+	}
+}
+
+func TestEnvOverridesConfigFile(t *testing.T) {
+	clearConfigEnv(t)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "feishu-botd.json")
+	configJSON := `{
+  "feishu": { "app_id": "cli_file", "app_secret": "file-secret" },
+  "listeners": { "http_socket": "/tmp/file.sock" },
+  "channels": { "ci": "oc_file" },
+  "default_channel": "ci"
+}`
+	if err := os.WriteFile(configPath, []byte(configJSON), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FEISHU_BOTD_CONFIG", configPath)
+	t.Setenv("FEISHU_APP_ID", "cli_env")
+	t.Setenv("FEISHU_BOTD_CHANNELS_CI", "oc_env")
+	t.Setenv("FEISHU_BOTD_DEFAULT_CHANNEL", "ci")
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.AppID != "cli_env" {
+		t.Fatalf("env app id did not override file: %#v", cfg)
+	}
+	if cfg.Channels["ci"] != "oc_env" {
+		t.Fatalf("env channel did not override file: %#v", cfg.Channels)
+	}
+}
+
+func TestLoadFromConfigFileRejectsUnknownServiceChannel(t *testing.T) {
+	clearConfigEnv(t)
+	configPath := filepath.Join(t.TempDir(), "feishu-botd.json")
+	configJSON := `{
+  "feishu": { "app_id": "cli_file", "app_secret": "file-secret" },
+  "listeners": { "http_socket": "/tmp/file.sock" },
+  "channels": { "ci": "oc_ci" },
+  "services": { "jenkins": { "default_channel": "missing" } }
+}`
+	if err := os.WriteFile(configPath, []byte(configJSON), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FEISHU_BOTD_CONFIG", configPath)
+	if _, err := LoadFromEnv(); err == nil || !strings.Contains(err.Error(), "jenkins") {
+		t.Fatalf("expected service channel validation error, got %v", err)
+	}
+}
+
+func TestLoadFromConfigFileRejectsUnknownFields(t *testing.T) {
+	clearConfigEnv(t)
+	configPath := filepath.Join(t.TempDir(), "feishu-botd.json")
+	if err := os.WriteFile(configPath, []byte(`{"feishu":{"app_id":"cli","app_secret":"secret"},"typo":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FEISHU_BOTD_CONFIG", configPath)
+	if _, err := LoadFromEnv(); err == nil || !strings.Contains(err.Error(), "unknown field") {
+		t.Fatalf("expected unknown field error, got %v", err)
 	}
 }

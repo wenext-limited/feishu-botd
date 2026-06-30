@@ -65,7 +65,8 @@ Errors are redacted:
 
 Lower-level send path for callers that need a specific message content type.
 It supports markdown and Feishu interactive cards. `dedupe_key` is optional;
-when present, duplicate sends return the original `message_id`.
+when present, duplicate sends return the original `message_id`. `target.channel`
+may be omitted when `source` has a configured service default.
 
 Markdown:
 
@@ -73,7 +74,6 @@ Markdown:
 {
   "source": "jenkins",
   "dedupe_key": "jenkins:build:123",
-  "target": { "channel": "ci" },
   "markdown": {
     "title": "Build succeeded",
     "markdown": "**Project**: WeNext"
@@ -87,7 +87,6 @@ Interactive card:
 {
   "source": "jenkins",
   "dedupe_key": "jenkins:build:123",
-  "target": { "channel": "ci" },
   "msg_type": "interactive",
   "card": {
     "type": "template",

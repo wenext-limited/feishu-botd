@@ -1,0 +1,27 @@
+{
+  "feishu": {
+    "app_id": "cli_xxx",
+    "app_secret": "replace-me"
+  },
+  "listeners": {
+    "http_socket": "/run/feishu-botd/feishu-botd.sock",
+    "http_bind": "0.0.0.0:7345",
+    "auth_token_file": "/run/secrets/feishu-botd-token",
+    "allow_non_loopback_bind": true
+  },
+  "channels": {
+    "ci": "oc_xxx",
+    "ops": "oc_yyy"
+  },
+  "default_channel": "ops",
+  "services": {
+    "jenkins": {
+      "default_channel": "ci"
+    },
+    "manual": {
+      "default_channel": "ops"
+    }
+  },
+  "dedupe_ttl_seconds": 21600,
+  "send_timeout_seconds": 15
+}

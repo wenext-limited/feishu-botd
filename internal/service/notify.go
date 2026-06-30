@@ -14,6 +14,7 @@ import (
 // NotificationService.SendNotification. Deduplication is always enabled, so the
 // caller-supplied source + dedupe_key make the call idempotent.
 func (s *Service) SendNotification(ctx context.Context, req notify.Request) (notify.Response, *notify.APIError) {
+	req.Target.Channel = s.resolveChannel(req.Target.Channel, req.Source)
 	if apiErr := req.Validate(s.cfg.Channels); apiErr != nil {
 		return notify.Response{}, apiErr
 	}
@@ -49,7 +50,7 @@ type MessageInput struct {
 // SendMessage is the lower-level send path. Deduplication applies only when a
 // dedupe key is supplied; otherwise every call sends.
 func (s *Service) SendMessage(ctx context.Context, in MessageInput) (SendResult, *notify.APIError) {
-	channel := strings.TrimSpace(in.Channel)
+	channel := s.resolveChannel(in.Channel, in.Source)
 	if channel == "" {
 		return SendResult{}, notify.BadRequest("missing_channel", "target.channel is required")
 	}
@@ -85,6 +86,17 @@ func (s *Service) SendMessage(ctx context.Context, in MessageInput) (SendResult,
 		Target:    notify.Target{Channel: channel},
 	}
 	return s.deliver(ctx, req, strings.TrimSpace(in.DedupeKey) != "")
+}
+
+func (s *Service) resolveChannel(channel, source string) string {
+	channel = strings.TrimSpace(channel)
+	if channel != "" {
+		return channel
+	}
+	if svc, ok := s.cfg.Services[strings.TrimSpace(source)]; ok {
+		return svc.DefaultChannel
+	}
+	return s.cfg.DefaultChannel
 }
 
 func validateCardJSON(cardJSON string) *notify.APIError {

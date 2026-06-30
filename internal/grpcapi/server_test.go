@@ -76,7 +76,8 @@ func testConfig() config.Config {
 	return config.Config{
 		AppID:       "cli_test",
 		AppSecret:   "secret",
-		Channels:    map[string]string{"ops": "oc_test"},
+		Channels:    map[string]string{"ops": "oc_test", "ci": "oc_ci"},
+		Services:    map[string]config.ServiceConfig{"jenkins": {DefaultChannel: "ci"}},
 		DedupeTTL:   time.Hour,
 		SendTimeout: time.Second,
 	}
@@ -294,6 +295,18 @@ func TestGRPCSendMessageMarkdownCardAndUnimplemented(t *testing.T) {
 	}
 	if sender.request.CardJSON != cardJSON || sender.request.Markdown != "" {
 		t.Fatalf("sender card request = %#v", sender.request)
+	}
+
+	sender.messageID = "om_default"
+	resp, err = nc.SendMessage(context.Background(), &pb.SendMessageRequest{
+		Source:  "jenkins",
+		Content: &pb.SendMessageRequest_Markdown{Markdown: &pb.MarkdownContent{Markdown: "**default**"}},
+	})
+	if err != nil {
+		t.Fatalf("send with service default: %v", err)
+	}
+	if resp.GetMessageId() != "om_default" || sender.chatID != "oc_ci" || sender.request.Target.Channel != "ci" {
+		t.Fatalf("service default resp=%#v chat=%q req=%#v", resp, sender.chatID, sender.request)
 	}
 
 	_, err = nc.SendMessage(context.Background(), &pb.SendMessageRequest{
