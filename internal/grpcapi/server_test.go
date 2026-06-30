@@ -102,7 +102,14 @@ func tempSocket(t *testing.T) string {
 // connected client.
 func startUnixServer(t *testing.T, sender *fakeSender) *grpc.ClientConn {
 	t.Helper()
-	srv := newTestServer(testConfig(), sender)
+	conn, _ := startUnixServerWithService(t, testConfig(), sender)
+	return conn
+}
+
+func startUnixServerWithService(t *testing.T, cfg config.Config, sender *fakeSender) (*grpc.ClientConn, *service.Service) {
+	t.Helper()
+	svc := service.NewService(cfg, sender, dedupe.NewMemoryStore(time.Hour), slog.Default())
+	srv := NewServer(cfg, svc, slog.Default())
 	ctx, cancel := context.WithCancel(context.Background())
 	socketPath := tempSocket(t)
 	errCh := make(chan error, 1)
@@ -118,7 +125,7 @@ func startUnixServer(t *testing.T, sender *fakeSender) *grpc.ClientConn {
 		return (&net.Dialer{}).DialContext(ctx, "unix", socketPath)
 	})
 	waitHealthy(t, conn, errCh)
-	return conn
+	return conn, svc
 }
 
 func dial(t *testing.T, dialer func(context.Context) (net.Conn, error)) *grpc.ClientConn {
@@ -319,6 +326,72 @@ func TestGRPCSendMessageMarkdownCardAndUnimplemented(t *testing.T) {
 	// The Unimplemented error must still carry the in-contract BotdError detail.
 	if d := botdDetail(t, err); d == nil || d.GetCode() != "unimplemented" {
 		t.Fatalf("unimplemented detail = %#v", d)
+	}
+}
+
+func TestGRPCCommandSubscribeAndRespond(t *testing.T) {
+	sender := &fakeSender{messageID: "om_reply"}
+	conn, svc := startUnixServerWithService(t, testConfig(), sender)
+	cc := pb.NewCommandServiceClient(conn)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	stream, err := cc.Subscribe(ctx, &pb.SubscribeRequest{Provider: "xipe", Commands: []string{"status"}})
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+
+	var delivered int
+	for i := 0; i < 100; i++ {
+		delivered, _ = svc.DispatchCommand(context.Background(), service.CommandInput{
+			DeliveryID: "evt_1",
+			Command:    "status",
+			Text:       "prod",
+			ChatAlias:  "ops",
+			SenderID:   "ou_sender",
+			Metadata:   map[string]string{"message_id": "om_1"},
+		})
+		if delivered == 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if delivered != 1 {
+		t.Fatalf("delivered = %d, want 1", delivered)
+	}
+
+	msg, err := stream.Recv()
+	if err != nil {
+		t.Fatalf("recv: %v", err)
+	}
+	cmd := msg.GetCommand()
+	if cmd.GetDeliveryId() != "evt_1" || cmd.GetCommand() != "status" || cmd.GetText() != "prod" || cmd.GetChatAlias() != "ops" {
+		t.Fatalf("command = %#v", cmd)
+	}
+
+	resp, err := cc.Respond(context.Background(), &pb.RespondRequest{
+		DeliveryId: "evt_1",
+		Reply:      &pb.RespondRequest_Markdown{Markdown: &pb.MarkdownContent{Title: "Status", Markdown: "all good"}},
+	})
+	if err != nil {
+		t.Fatalf("respond: %v", err)
+	}
+	if !resp.GetAccepted() {
+		t.Fatalf("response not accepted: %#v", resp)
+	}
+	if sender.chatID != "oc_test" || sender.request.Markdown != "all good" || sender.request.Target.Channel != "ops" {
+		t.Fatalf("reply chat=%q request=%#v", sender.chatID, sender.request)
+	}
+
+	_, err = cc.Respond(context.Background(), &pb.RespondRequest{
+		DeliveryId: "evt_1",
+		Reply:      &pb.RespondRequest_Markdown{Markdown: &pb.MarkdownContent{Markdown: "again"}},
+	})
+	if status.Code(err) != codes.AlreadyExists {
+		t.Fatalf("duplicate response code = %v, want AlreadyExists", status.Code(err))
+	}
+	if d := botdDetail(t, err); d == nil || d.GetCode() != "already_responded" {
+		t.Fatalf("duplicate response detail = %#v", d)
 	}
 }
 

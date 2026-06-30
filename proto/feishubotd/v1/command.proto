@@ -6,13 +6,11 @@ import "feishubotd/v1/common.proto";
 
 option go_package = "feishu-botd/gen/feishubotd/v1;feishubotdv1";
 
-// CommandService is the FUTURE inbound path. botd owns the Feishu long
-// connection and command dispatcher; providers Subscribe (server stream) and
-// botd pushes matched commands, then the provider Responds. Server-streaming is
-// deliberate: inbound is push-shaped, and a stream avoids polling and keeps
-// Feishu credentials inside botd. Defined now to pin the package shape; the
-// implementation returns codes.Unimplemented in this slice and the service is
-// NOT registered on the server yet.
+// CommandService is the inbound @<bot-name> command path. botd owns the Feishu
+// long connection and command dispatcher; providers Subscribe (server stream)
+// and botd pushes matched commands, then the provider Responds. Server-streaming
+// is deliberate: inbound is push-shaped, and a stream avoids polling and keeps
+// Feishu credentials inside botd.
 service CommandService {
   rpc Subscribe(SubscribeRequest) returns (stream SubscribeResponse);
   rpc Respond(RespondRequest) returns (RespondResponse);

@@ -27,13 +27,11 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// CommandService is the FUTURE inbound path. botd owns the Feishu long
-// connection and command dispatcher; providers Subscribe (server stream) and
-// botd pushes matched commands, then the provider Responds. Server-streaming is
-// deliberate: inbound is push-shaped, and a stream avoids polling and keeps
-// Feishu credentials inside botd. Defined now to pin the package shape; the
-// implementation returns codes.Unimplemented in this slice and the service is
-// NOT registered on the server yet.
+// CommandService is the inbound @<bot-name> command path. botd owns the Feishu
+// long connection and command dispatcher; providers Subscribe (server stream)
+// and botd pushes matched commands, then the provider Responds. Server-streaming
+// is deliberate: inbound is push-shaped, and a stream avoids polling and keeps
+// Feishu credentials inside botd.
 type CommandServiceClient interface {
 	Subscribe(ctx context.Context, in *SubscribeRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[SubscribeResponse], error)
 	Respond(ctx context.Context, in *RespondRequest, opts ...grpc.CallOption) (*RespondResponse, error)
@@ -80,13 +78,11 @@ func (c *commandServiceClient) Respond(ctx context.Context, in *RespondRequest, 
 // All implementations must embed UnimplementedCommandServiceServer
 // for forward compatibility.
 //
-// CommandService is the FUTURE inbound path. botd owns the Feishu long
-// connection and command dispatcher; providers Subscribe (server stream) and
-// botd pushes matched commands, then the provider Responds. Server-streaming is
-// deliberate: inbound is push-shaped, and a stream avoids polling and keeps
-// Feishu credentials inside botd. Defined now to pin the package shape; the
-// implementation returns codes.Unimplemented in this slice and the service is
-// NOT registered on the server yet.
+// CommandService is the inbound @<bot-name> command path. botd owns the Feishu
+// long connection and command dispatcher; providers Subscribe (server stream)
+// and botd pushes matched commands, then the provider Responds. Server-streaming
+// is deliberate: inbound is push-shaped, and a stream avoids polling and keeps
+// Feishu credentials inside botd.
 type CommandServiceServer interface {
 	Subscribe(*SubscribeRequest, grpc.ServerStreamingServer[SubscribeResponse]) error
 	Respond(context.Context, *RespondRequest) (*RespondResponse, error)

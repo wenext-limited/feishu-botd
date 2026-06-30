@@ -33,7 +33,7 @@ message Link {
 }
 
 // Content message types are shared between the notification surface
-// (SendMessage) and the future inbound command surface (CommandService), so
+// (SendMessage) and the inbound command surface (CommandService), so
 // they live in common.proto.
 
 // MarkdownContent is the only content kind implemented in v1.

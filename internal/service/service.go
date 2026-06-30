@@ -22,11 +22,12 @@ const Provider = "feishu"
 // because its dependencies (sender, store) are themselves concurrency-safe and
 // its configuration is an immutable snapshot taken at construction.
 type Service struct {
-	cfg      config.Config
-	sender   feishu.Sender
-	store    *dedupe.MemoryStore
-	logger   *slog.Logger
-	redactor *redactor
+	cfg           config.Config
+	sender        feishu.Sender
+	store         *dedupe.MemoryStore
+	logger        *slog.Logger
+	redactor      *redactor
+	commandBroker *commandBroker
 }
 
 // NewService builds a Service from an immutable config snapshot.
@@ -35,11 +36,12 @@ func NewService(cfg config.Config, sender feishu.Sender, store *dedupe.MemorySto
 		logger = slog.Default()
 	}
 	return &Service{
-		cfg:      cfg,
-		sender:   sender,
-		store:    store,
-		logger:   logger,
-		redactor: newRedactor(cfg),
+		cfg:           cfg,
+		sender:        sender,
+		store:         store,
+		logger:        logger,
+		redactor:      newRedactor(cfg),
+		commandBroker: newCommandBroker(cfg.DedupeTTL),
 	}
 }
 

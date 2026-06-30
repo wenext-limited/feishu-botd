@@ -3,8 +3,8 @@
 `feishu-botd` is moving to a **protobuf-first** local IPC contract. The
 `.proto` files under [`proto/feishubotd/v1/`](../proto/feishubotd/v1) are the
 shared, language-neutral contract. The Go daemon owns the Feishu/Lark SDK,
-credentials, token lifecycle, channel-alias resolution, and (in future)
-inbound events. Client apps — Go, Rust, or otherwise — talk to the daemon over
+credentials, token lifecycle, channel-alias resolution, and optional inbound
+command events. Client apps — Go, Rust, or otherwise — talk to the daemon over
 gRPC and generate their own bindings from `proto/`. There is no shared client
 crate.
 
@@ -78,12 +78,31 @@ app credentials live only in daemon config.
 such as a template card payload. Deduplication applies only when a `dedupe_key`
 is supplied.
 
-### `CommandService` / `ProviderService` (skeletons)
+### `CommandService`
 
-Defined to pin the package shape for future inbound bot commands and
-data-provider flows. They are **not registered** on the server in this slice;
-the field numbers and streaming shapes are reserved so they can be added without
-breaking `v1`.
+| RPC | Purpose |
+| --- | --- |
+| `Subscribe` | Provider opens a server stream for one or more command names. botd pushes matching `InboundCommand` values. |
+| `Respond` | Provider sends a markdown or card reply for a previously delivered `delivery_id`. |
+
+Inbound Feishu events are enabled only when `commands.enabled` or
+`FEISHU_BOTD_COMMANDS_ENABLED=true` is set. Users invoke commands as
+`@<bot-name> <COMMAND> [args...]`. The daemon opens the Feishu long connection,
+handles `im.message.receive_v1`, accepts text messages from configured channel
+aliases, verifies the configured bot-name or bot-id mention, strips Feishu's
+mention token, and dispatches the first word as `command` with the rest as
+`text`.
+
+`InboundCommand.chat_alias` is always a configured alias; raw Feishu chat ids are
+never exposed. Unknown or ambiguous chat ids are ignored. `Respond` sends the
+reply back to the original channel alias using the existing `SendMessage` path
+and rejects unknown, expired, in-flight, or already-answered `delivery_id`
+values.
+
+### `ProviderService` (skeleton)
+
+Defined to pin the package shape for future data-provider pull flows. It is not
+registered on the server in this slice.
 
 ## Error model
 
@@ -101,9 +120,9 @@ stable machine `code`, a redacted `message`, a `retryable` flag, and a
 | --- | --- |
 | 400 (`missing_*`, `invalid_severity`, `invalid_json`, `field_too_large`, ...) | `INVALID_ARGUMENT` |
 | 401 `unauthorized` | `UNAUTHENTICATED` |
-| 404 `unknown_channel`, `not_found` | `NOT_FOUND` |
-| 409 `dedupe_conflict` | `ALREADY_EXISTS` |
-| 409 `dedupe_in_flight` | `ABORTED` |
+| 404 `unknown_channel`, `unknown_delivery`, `not_found` | `NOT_FOUND` |
+| 409 `dedupe_conflict`, `already_responded` | `ALREADY_EXISTS` |
+| 409 `dedupe_in_flight`, `response_in_flight` | `ABORTED` |
 | 501 unimplemented content/services | `UNIMPLEMENTED` |
 | 502 `feishu_unavailable` | `UNAVAILABLE` |
 | other / internal | `INTERNAL` |

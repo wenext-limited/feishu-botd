@@ -9,6 +9,13 @@
     "auth_token_file": "/run/secrets/feishu-botd-token",
     "allow_non_loopback_bind": true
   },
+  "commands": {
+    "enabled": false,
+    "bot_open_id": "ou_xxx",
+    "bot_user_id": "",
+    "bot_union_id": "",
+    "bot_names": ["Feishu Bot"]
+  },
   "channels": {
     "ci": "oc_xxx",
     "ops": "oc_yyy"

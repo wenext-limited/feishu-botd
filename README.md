@@ -17,7 +17,8 @@ socket:
 | --- | --- |
 | `BotdHealthService` | `Health`, `Ready` |
 | `NotificationService` | `SendNotification`, `SendMessage` |
-| `CommandService` / `ProviderService` | future inbound commands + data providers (skeletons) |
+| `CommandService` | `Subscribe`, `Respond` for inbound `@<bot-name> <COMMAND>` flows |
+| `ProviderService` | future data providers (skeleton) |
 
 The legacy HTTP API stays as a compatibility shim over the **same** internal
 service logic:
@@ -31,9 +32,11 @@ POST /v1/message  (lower-level markdown/card send)
 See [docs/ipc.md](docs/ipc.md) for the full gRPC contract and error model, and
 [docs/api.md](docs/api.md) for the HTTP shim.
 
-Interactive chat, inbound Feishu events, card actions, streaming replies, and
-durable outbox semantics are follow-up work. Outbound interactive card sends
-are supported through the lower-level message surface.
+Inbound text commands are supported when `commands.enabled` is true and the
+Feishu app has bot capability, a long-connection event subscription for
+`im.message.receive_v1`, and the needed message permissions. Card actions,
+streaming replies, and durable outbox semantics are follow-up work. Outbound
+interactive card sends are supported through the lower-level message surface.
 
 ## Configuration
 
@@ -55,6 +58,11 @@ and per-caller defaults:
     "auth_token_file": "/run/secrets/feishu-botd-token",
     "allow_non_loopback_bind": true
   },
+  "commands": {
+    "enabled": false,
+    "bot_open_id": "ou_xxx",
+    "bot_names": ["Feishu Bot"]
+  },
   "channels": { "ci": "oc_xxx", "ops": "oc_yyy" },
   "services": { "jenkins": { "default_channel": "ci" } }
 }
@@ -74,6 +82,9 @@ FEISHU_APP_SECRET=...
 FEISHU_BOTD_CHANNELS=ci=oc_xxx,ops=oc_yyy
 FEISHU_BOTD_BIND=127.0.0.1:7345
 FEISHU_BOTD_AUTH_TOKEN_FILE=/run/secrets/feishu-botd-token
+FEISHU_BOTD_COMMANDS_ENABLED=false
+FEISHU_BOTD_BOT_OPEN_ID=ou_xxx
+FEISHU_BOTD_BOT_NAMES=Feishu Bot
 FEISHU_BOTD_DEDUPE_TTL_SECONDS=21600
 FEISHU_BOTD_SEND_TIMEOUT_SECONDS=15
 ```

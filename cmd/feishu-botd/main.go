@@ -33,11 +33,36 @@ func main() {
 
 	httpServer := httpapi.NewServer(cfg, svc, logger)
 	grpcServer := grpcapi.NewServer(cfg, svc, logger)
+	var commandReceiver *feishu.CommandReceiver
+	if cfg.Commands.Enabled {
+		commandReceiver = feishu.NewCommandReceiver(feishu.CommandReceiverConfig{
+			AppID:      cfg.AppID,
+			AppSecret:  cfg.AppSecret,
+			Channels:   cfg.Channels,
+			BotOpenID:  cfg.Commands.BotOpenID,
+			BotUserID:  cfg.Commands.BotUserID,
+			BotUnionID: cfg.Commands.BotUnionID,
+			BotNames:   cfg.Commands.BotNames,
+		}, func(ctx context.Context, cmd feishu.InboundCommand) error {
+			_, apiErr := svc.DispatchCommand(ctx, service.CommandInput{
+				DeliveryID: cmd.DeliveryID,
+				Command:    cmd.Command,
+				Text:       cmd.Text,
+				ChatAlias:  cmd.ChatAlias,
+				SenderID:   cmd.SenderID,
+				Metadata:   cmd.Metadata,
+			})
+			if apiErr != nil {
+				return apiErr
+			}
+			return nil
+		}, logger)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	errCh := make(chan error, 4)
+	errCh := make(chan error, 5)
 	if cfg.SocketPath != "" {
 		go func() { errCh <- httpServer.ListenAndServeUnix(ctx, cfg.SocketPath) }()
 	}
@@ -50,6 +75,9 @@ func main() {
 	if cfg.GRPCBindAddr != "" {
 		go func() { errCh <- grpcServer.ListenAndServeTCP(ctx, cfg.GRPCBindAddr) }()
 	}
+	if commandReceiver != nil {
+		go func() { errCh <- commandReceiver.Start(ctx) }()
+	}
 
 	select {
 	case <-ctx.Done():
@@ -59,6 +87,9 @@ func main() {
 			logger.Error("server stopped", "error", err)
 			os.Exit(1)
 		}
+	}
+	if commandReceiver != nil {
+		commandReceiver.Close()
 	}
 
 	// Drain both transports concurrently so a slow HTTP shutdown cannot consume

@@ -60,11 +60,12 @@ func (s *Server) newGRPCServer(requireAuth bool) *grpc.Server {
 	)
 
 	pb.RegisterNotificationServiceServer(gs, &notificationServer{svc: s.svc})
+	pb.RegisterCommandServiceServer(gs, &commandServer{svc: s.svc})
 	pb.RegisterBotdHealthServiceServer(gs, &healthServer{svc: s.svc})
 
 	// Standard gRPC health service so grpc_health_probe works for future
-	// gRPC-only deployments. CommandService and ProviderService remain skeletons
-	// and are deliberately NOT registered in this slice.
+	// gRPC-only deployments. ProviderService remains a future pull-path skeleton
+	// and is deliberately NOT registered in this slice.
 	healthSrv := health.NewServer()
 	healthSrv.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)
 	healthpb.RegisterHealthServer(gs, healthSrv)

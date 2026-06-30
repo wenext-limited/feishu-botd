@@ -98,6 +98,11 @@ func setBaseEnv(t *testing.T) {
 	t.Setenv("FEISHU_BOTD_GRPC_BIND", "")
 	t.Setenv("FEISHU_BOTD_AUTH_TOKEN_FILE", "")
 	t.Setenv("FEISHU_BOTD_ALLOW_NON_LOOPBACK_BIND", "")
+	t.Setenv("FEISHU_BOTD_COMMANDS_ENABLED", "")
+	t.Setenv("FEISHU_BOTD_BOT_OPEN_ID", "")
+	t.Setenv("FEISHU_BOTD_BOT_USER_ID", "")
+	t.Setenv("FEISHU_BOTD_BOT_UNION_ID", "")
+	t.Setenv("FEISHU_BOTD_BOT_NAMES", "")
 }
 
 func clearConfigEnv(t *testing.T) {
@@ -112,6 +117,11 @@ func clearConfigEnv(t *testing.T) {
 		"FEISHU_BOTD_GRPC_BIND",
 		"FEISHU_BOTD_AUTH_TOKEN_FILE",
 		"FEISHU_BOTD_ALLOW_NON_LOOPBACK_BIND",
+		"FEISHU_BOTD_COMMANDS_ENABLED",
+		"FEISHU_BOTD_BOT_OPEN_ID",
+		"FEISHU_BOTD_BOT_USER_ID",
+		"FEISHU_BOTD_BOT_UNION_ID",
+		"FEISHU_BOTD_BOT_NAMES",
 		"FEISHU_BOTD_CHANNELS",
 		"FEISHU_BOTD_CHANNELS_OPS",
 		"FEISHU_BOTD_DEFAULT_CHANNEL",
@@ -201,13 +211,18 @@ func TestLoadFromConfigFile(t *testing.T) {
     "app_id": "cli_file",
     "app_secret": "file-secret"
   },
-  "listeners": {
-    "http_bind": "0.0.0.0:7345",
-    "auth_token_file": "` + tokenPath + `",
-    "allow_non_loopback_bind": true
-  },
-  "channels": {
-    "ci": "oc_ci",
+	  "listeners": {
+	    "http_bind": "0.0.0.0:7345",
+	    "auth_token_file": "` + tokenPath + `",
+	    "allow_non_loopback_bind": true
+	  },
+	  "commands": {
+	    "enabled": true,
+	    "bot_open_id": "ou_bot",
+	    "bot_names": ["BuildBot", " buildbot "]
+	  },
+	  "channels": {
+	    "ci": "oc_ci",
     "ops": "oc_ops"
   },
   "default_channel": "ops",
@@ -234,6 +249,9 @@ func TestLoadFromConfigFile(t *testing.T) {
 	}
 	if cfg.Channels["ci"] != "oc_ci" || cfg.DefaultChannel != "ops" || cfg.Services["jenkins"].DefaultChannel != "ci" {
 		t.Fatalf("routing config = %#v", cfg)
+	}
+	if !cfg.Commands.Enabled || cfg.Commands.BotOpenID != "ou_bot" || len(cfg.Commands.BotNames) != 1 || cfg.Commands.BotNames[0] != "BuildBot" {
+		t.Fatalf("command config = %#v", cfg.Commands)
 	}
 }
 
@@ -264,6 +282,39 @@ func TestEnvOverridesConfigFile(t *testing.T) {
 	}
 	if cfg.Channels["ci"] != "oc_env" {
 		t.Fatalf("env channel did not override file: %#v", cfg.Channels)
+	}
+}
+
+func TestCommandConfigEnvOverridesFile(t *testing.T) {
+	clearConfigEnv(t)
+	configPath := filepath.Join(t.TempDir(), "feishu-botd.json")
+	configJSON := `{
+  "feishu": { "app_id": "cli_file", "app_secret": "file-secret" },
+  "listeners": { "http_socket": "/tmp/file.sock" },
+  "commands": {
+    "enabled": false,
+    "bot_open_id": "ou_file",
+    "bot_names": ["FileBot"]
+  },
+  "channels": { "ops": "oc_ops" }
+}`
+	if err := os.WriteFile(configPath, []byte(configJSON), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FEISHU_BOTD_CONFIG", configPath)
+	t.Setenv("FEISHU_BOTD_COMMANDS_ENABLED", "true")
+	t.Setenv("FEISHU_BOTD_BOT_OPEN_ID", "ou_env")
+	t.Setenv("FEISHU_BOTD_BOT_NAMES", "EnvBot, envbot , OtherBot")
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if !cfg.Commands.Enabled || cfg.Commands.BotOpenID != "ou_env" {
+		t.Fatalf("command env scalar override failed: %#v", cfg.Commands)
+	}
+	if got := strings.Join(cfg.Commands.BotNames, ","); got != "EnvBot,OtherBot" {
+		t.Fatalf("bot names = %q", got)
 	}
 }
 

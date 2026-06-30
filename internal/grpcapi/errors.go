@@ -20,7 +20,7 @@ func grpcCode(apiErr *notify.APIError) codes.Code {
 	case 404:
 		return codes.NotFound
 	case 409:
-		if apiErr.Code == "dedupe_in_flight" {
+		if apiErr.Code == "dedupe_in_flight" || apiErr.Code == "response_in_flight" {
 			return codes.Aborted
 		}
 		return codes.AlreadyExists

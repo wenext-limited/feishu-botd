@@ -26,11 +26,20 @@ type Config struct {
 	GRPCBindAddr   string
 	AuthToken      string
 	AllowLANBind   bool
+	Commands       CommandConfig
 	Channels       map[string]string
 	DefaultChannel string
 	Services       map[string]ServiceConfig
 	DedupeTTL      time.Duration
 	SendTimeout    time.Duration
+}
+
+type CommandConfig struct {
+	Enabled    bool     `json:"enabled"`
+	BotOpenID  string   `json:"bot_open_id"`
+	BotUserID  string   `json:"bot_user_id"`
+	BotUnionID string   `json:"bot_union_id"`
+	BotNames   []string `json:"bot_names"`
 }
 
 type ServiceConfig struct {
@@ -51,6 +60,7 @@ func LoadFromEnv() (Config, error) {
 		GRPCSocketPath: firstNonEmpty(os.Getenv("FEISHU_BOTD_GRPC_SOCKET"), fileCfg.GRPCSocketPath),
 		GRPCBindAddr:   firstNonEmpty(os.Getenv("FEISHU_BOTD_GRPC_BIND"), fileCfg.GRPCBindAddr),
 		AllowLANBind:   boolFromEnvDefault("FEISHU_BOTD_ALLOW_NON_LOOPBACK_BIND", fileCfg.AllowLANBind),
+		Commands:       commandConfigFromEnv(fileCfg.Commands),
 		Channels:       mergeStringMaps(fileCfg.Channels, loadChannels(os.Environ())),
 		DefaultChannel: firstNonEmpty(os.Getenv("FEISHU_BOTD_DEFAULT_CHANNEL"), fileCfg.DefaultChannel),
 		Services:       fileCfg.Services,
@@ -110,6 +120,7 @@ type fileConfig struct {
 	GRPCBindAddr   string
 	AuthTokenFile  string
 	AllowLANBind   bool
+	Commands       CommandConfig
 	Channels       map[string]string
 	DefaultChannel string
 	Services       map[string]ServiceConfig
@@ -120,6 +131,7 @@ type fileConfig struct {
 type configFile struct {
 	Feishu             fileFeishuConfig         `json:"feishu"`
 	Listeners          fileListenersConfig      `json:"listeners"`
+	Commands           CommandConfig            `json:"commands"`
 	Channels           map[string]string        `json:"channels"`
 	DefaultChannel     string                   `json:"default_channel"`
 	Services           map[string]ServiceConfig `json:"services"`
@@ -169,6 +181,7 @@ func loadFileConfig(path string) (fileConfig, error) {
 	cfg.GRPCBindAddr = strings.TrimSpace(raw.Listeners.GRPCBind)
 	cfg.AuthTokenFile = strings.TrimSpace(raw.Listeners.AuthTokenFile)
 	cfg.AllowLANBind = raw.Listeners.AllowNonLoopbackBind
+	cfg.Commands = normalizeCommandConfig(raw.Commands)
 	cfg.Channels = normalizeChannels(raw.Channels)
 	cfg.DefaultChannel = normalizeChannelName(raw.DefaultChannel)
 	cfg.Services = normalizeServices(raw.Services)
@@ -179,6 +192,55 @@ func loadFileConfig(path string) (fileConfig, error) {
 		cfg.SendTimeout = time.Duration(raw.SendTimeoutSeconds) * time.Second
 	}
 	return cfg, nil
+}
+
+func commandConfigFromEnv(base CommandConfig) CommandConfig {
+	cfg := normalizeCommandConfig(base)
+	cfg.Enabled = boolFromEnvDefault("FEISHU_BOTD_COMMANDS_ENABLED", cfg.Enabled)
+	cfg.BotOpenID = firstNonEmpty(os.Getenv("FEISHU_BOTD_BOT_OPEN_ID"), cfg.BotOpenID)
+	cfg.BotUserID = firstNonEmpty(os.Getenv("FEISHU_BOTD_BOT_USER_ID"), cfg.BotUserID)
+	cfg.BotUnionID = firstNonEmpty(os.Getenv("FEISHU_BOTD_BOT_UNION_ID"), cfg.BotUnionID)
+	if raw := strings.TrimSpace(os.Getenv("FEISHU_BOTD_BOT_NAMES")); raw != "" {
+		cfg.BotNames = splitList(raw)
+	}
+	return normalizeCommandConfig(cfg)
+}
+
+func normalizeCommandConfig(in CommandConfig) CommandConfig {
+	return CommandConfig{
+		Enabled:    in.Enabled,
+		BotOpenID:  strings.TrimSpace(in.BotOpenID),
+		BotUserID:  strings.TrimSpace(in.BotUserID),
+		BotUnionID: strings.TrimSpace(in.BotUnionID),
+		BotNames:   normalizeList(in.BotNames),
+	}
+}
+
+func splitList(raw string) []string {
+	parts := strings.Split(raw, ",")
+	values := make([]string, 0, len(parts))
+	for _, part := range parts {
+		values = append(values, part)
+	}
+	return values
+}
+
+func normalizeList(in []string) []string {
+	seen := make(map[string]struct{}, len(in))
+	out := make([]string, 0, len(in))
+	for _, value := range in {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		key := strings.ToLower(value)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }
 
 func loadChannels(environ []string) map[string]string {
