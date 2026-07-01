@@ -88,7 +88,7 @@ func (e *Executor) Run(ctx context.Context, chatAlias, text string) (title, mark
 		return title, fmt.Sprintf("no script configured for action %q.", action)
 	}
 
-	return title, e.execute(ctx, scriptPath, title, args)
+	return title, e.execute(ctx, scriptPath, args)
 }
 
 // resolveScript maps action to "<dir>/<command>-<action>.sh" and verifies the
@@ -114,7 +114,11 @@ func (e *Executor) resolveScript(action string) (string, error) {
 	return scriptPath, nil
 }
 
-func (e *Executor) execute(ctx context.Context, scriptPath, title string, args []string) string {
+// execute runs scriptPath and formats a markdown body only — the action
+// title is carried separately via Run's own return value and RespondCommand's
+// Title field, which Feishu already renders as the reply's heading, so it
+// must not be repeated here too.
+func (e *Executor) execute(ctx context.Context, scriptPath string, args []string) string {
 	runCtx, cancel := context.WithTimeout(ctx, e.timeout)
 	defer cancel()
 
@@ -131,7 +135,7 @@ func (e *Executor) execute(ctx context.Context, scriptPath, title string, args [
 
 	if err := cmd.Start(); err != nil {
 		e.logger.Error("script failed to start", "script", scriptPath, "error", err)
-		return fmt.Sprintf("**%s** failed to start: %s", title, err)
+		return fmt.Sprintf("failed to start: %s", err)
 	}
 
 	done := make(chan error, 1)
@@ -145,19 +149,19 @@ func (e *Executor) execute(ctx context.Context, scriptPath, title string, args [
 		// already been reaped and reused for an unrelated process.
 		select {
 		case runErr := <-done:
-			return e.formatResult(title, scriptPath, runErr, out)
+			return e.formatResult(scriptPath, runErr, out)
 		default:
 		}
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		<-done
 		e.logger.Error("script timed out", "script", scriptPath, "timeout", e.timeout)
-		return fmt.Sprintf("**%s** timed out after %s.\n\n```\n%s\n```", title, e.timeout, out.String())
+		return fmt.Sprintf("timed out after %s.\n\n```\n%s\n```", e.timeout, out.String())
 	case runErr := <-done:
-		return e.formatResult(title, scriptPath, runErr, out)
+		return e.formatResult(scriptPath, runErr, out)
 	}
 }
 
-func (e *Executor) formatResult(title, scriptPath string, runErr error, out *limitWriter) string {
+func (e *Executor) formatResult(scriptPath string, runErr error, out *limitWriter) string {
 	exitCode := 0
 	if runErr != nil {
 		var exitErr *exec.ExitError
@@ -165,10 +169,10 @@ func (e *Executor) formatResult(title, scriptPath string, runErr error, out *lim
 			exitCode = exitErr.ExitCode()
 		} else {
 			e.logger.Error("script failed to run", "script", scriptPath, "error", runErr)
-			return fmt.Sprintf("**%s** failed to run: %s", title, runErr)
+			return fmt.Sprintf("failed to run: %s", runErr)
 		}
 	}
-	return fmt.Sprintf("**%s**\n\nexit code: %d\n\n```\n%s\n```", title, exitCode, out.String())
+	return fmt.Sprintf("exit code: %d\n\n```\n%s\n```", exitCode, out.String())
 }
 
 // limitWriter caps total bytes retained and appends a truncation marker once
