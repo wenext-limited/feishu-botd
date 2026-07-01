@@ -16,6 +16,7 @@ import (
 	"feishu-botd/internal/feishu"
 	"feishu-botd/internal/grpcapi"
 	"feishu-botd/internal/httpapi"
+	"feishu-botd/internal/scriptexec"
 	"feishu-botd/internal/service"
 )
 
@@ -62,6 +63,39 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	var scriptSub *service.CommandSubscription
+	if cfg.Commands.Scripts.Enabled {
+		executor := scriptexec.New(cfg.Commands.Scripts, logger)
+		sub, apiErr := svc.SubscribeCommands(ctx, "script-executor", []string{cfg.Commands.Scripts.Command})
+		if apiErr != nil {
+			logger.Error("script executor subscribe failed", "error", apiErr)
+			os.Exit(2)
+		}
+		scriptSub = sub
+		go func() {
+			for cmd := range sub.C {
+				// Each command runs on its own goroutine (keyed by its unique
+				// DeliveryID, which RespondCommand's delivery state machine
+				// already guards) so one long-running script cannot block
+				// replies to other chats/commands. Runs against
+				// context.Background(), not the shutdown-signal ctx: a
+				// build already in flight should finish and reply (bounded
+				// by its own configured timeout) rather than have its reply
+				// silently dropped by a cancel racing SIGTERM/SIGINT.
+				go func(cmd service.CommandInput) {
+					title, markdown := executor.Run(context.Background(), cmd.ChatAlias, cmd.Text)
+					if apiErr := svc.RespondCommand(context.Background(), service.CommandResponse{
+						DeliveryID: cmd.DeliveryID,
+						Title:      title,
+						Markdown:   markdown,
+					}); apiErr != nil {
+						logger.Error("script command respond failed", "delivery", cmd.DeliveryID, "error", apiErr)
+					}
+				}(cmd)
+			}
+		}()
+	}
+
 	errCh := make(chan error, 5)
 	if cfg.SocketPath != "" {
 		go func() { errCh <- httpServer.ListenAndServeUnix(ctx, cfg.SocketPath) }()
@@ -90,6 +124,9 @@ func main() {
 	}
 	if commandReceiver != nil {
 		commandReceiver.Close()
+	}
+	if scriptSub != nil {
+		scriptSub.Close()
 	}
 
 	// Drain both transports concurrently so a slow HTTP shutdown cannot consume

@@ -38,6 +38,10 @@ Feishu app has bot capability, a long-connection event subscription for
 streaming replies, and durable outbox semantics are follow-up work. Outbound
 interactive card sends are supported through the lower-level message surface.
 
+Optionally, `commands.scripts` lets the daemon itself run a local script for
+one registered command, instead of (or alongside) an external gRPC provider —
+see [Local script execution](#local-script-execution) below.
+
 ## Configuration
 
 For Docker/manual deployment, use a config file:
@@ -85,9 +89,43 @@ FEISHU_BOTD_AUTH_TOKEN_FILE=/run/secrets/feishu-botd-token
 FEISHU_BOTD_COMMANDS_ENABLED=false
 FEISHU_BOTD_BOT_OPEN_ID=ou_xxx
 FEISHU_BOTD_BOT_NAMES=Feishu Bot
+FEISHU_BOTD_SCRIPTS_ENABLED=false
+FEISHU_BOTD_SCRIPTS_COMMAND=pls
+FEISHU_BOTD_SCRIPTS_DIR=/etc/feishu-botd/scripts
+FEISHU_BOTD_SCRIPTS_ALLOWED_CHATS=ci
+FEISHU_BOTD_SCRIPTS_TIMEOUT_SECONDS=300
 FEISHU_BOTD_DEDUPE_TTL_SECONDS=21600
 FEISHU_BOTD_SEND_TIMEOUT_SECONDS=15
 ```
+
+### Local script execution
+
+Setting `commands.scripts.enabled` lets the daemon run a local script directly
+for one registered command word — no separate provider process needed. Given:
+
+```json
+"scripts": {
+  "enabled": true,
+  "command": "pls",
+  "dir": "/etc/feishu-botd/scripts",
+  "allowed_chats": ["ci"],
+  "timeout_seconds": 300
+}
+```
+
+A message `@<bot-name> pls build ludo develop` in the `ci` chat resolves to
+`/etc/feishu-botd/scripts/pls-build.sh ludo develop`: the first word after the
+mention (`pls`) must match `command`; the second word (`build`) is the
+*action* and is resolved by naming convention to `<command>-<action>.sh` in
+`dir`; every remaining word is passed through unmodified as a positional
+argument (`ludo`, `develop`) via `argv`, never through a shell — arguments
+like `` $(whoami) `` or `; rm -rf` are passed literally and are never
+interpreted. The resolved script must live inside `dir` (no path traversal),
+exist, and be executable, and the invoking chat must be in `allowed_chats`
+(default-deny — no chats are permitted by default). Combined stdout/stderr is
+captured (truncated past ~4000 bytes) and replied in chat as the script's exit
+code plus output; the script is killed, along with any of its own
+subprocesses, if it runs past `timeout_seconds`.
 
 ## Development
 

@@ -13,8 +13,9 @@ import (
 )
 
 const (
-	defaultDedupeTTL   = 6 * time.Hour
-	defaultSendTimeout = 15 * time.Second
+	defaultDedupeTTL                = 6 * time.Hour
+	defaultSendTimeout              = 15 * time.Second
+	defaultScriptExecTimeoutSeconds = 120
 )
 
 type Config struct {
@@ -35,11 +36,24 @@ type Config struct {
 }
 
 type CommandConfig struct {
-	Enabled    bool     `json:"enabled"`
-	BotOpenID  string   `json:"bot_open_id"`
-	BotUserID  string   `json:"bot_user_id"`
-	BotUnionID string   `json:"bot_union_id"`
-	BotNames   []string `json:"bot_names"`
+	Enabled    bool             `json:"enabled"`
+	BotOpenID  string           `json:"bot_open_id"`
+	BotUserID  string           `json:"bot_user_id"`
+	BotUnionID string           `json:"bot_union_id"`
+	BotNames   []string         `json:"bot_names"`
+	Scripts    ScriptExecConfig `json:"scripts"`
+}
+
+// ScriptExecConfig enables running a local script for a registered inbound
+// command. Command is the trigger word (e.g. "pls"); the action word that
+// follows it resolves to "<Dir>/<Command>-<action>.sh". Only chats in
+// AllowedChats may trigger execution.
+type ScriptExecConfig struct {
+	Enabled        bool     `json:"enabled"`
+	Command        string   `json:"command"`
+	Dir            string   `json:"dir"`
+	AllowedChats   []string `json:"allowed_chats"`
+	TimeoutSeconds int      `json:"timeout_seconds"`
 }
 
 type ServiceConfig struct {
@@ -81,6 +95,9 @@ func LoadFromEnv() (Config, error) {
 		return Config{}, errors.New("at least one channel mapping is required")
 	}
 	if err := validateRouting(cfg); err != nil {
+		return Config{}, err
+	}
+	if err := validateScripts(cfg); err != nil {
 		return Config{}, err
 	}
 	// The HTTP and gRPC TCP listeners share a single bearer token. Load it once
@@ -203,6 +220,17 @@ func commandConfigFromEnv(base CommandConfig) CommandConfig {
 	if raw := strings.TrimSpace(os.Getenv("FEISHU_BOTD_BOT_NAMES")); raw != "" {
 		cfg.BotNames = splitList(raw)
 	}
+	cfg.Scripts.Enabled = boolFromEnvDefault("FEISHU_BOTD_SCRIPTS_ENABLED", cfg.Scripts.Enabled)
+	cfg.Scripts.Command = firstNonEmpty(os.Getenv("FEISHU_BOTD_SCRIPTS_COMMAND"), cfg.Scripts.Command)
+	cfg.Scripts.Dir = firstNonEmpty(os.Getenv("FEISHU_BOTD_SCRIPTS_DIR"), cfg.Scripts.Dir)
+	if raw := strings.TrimSpace(os.Getenv("FEISHU_BOTD_SCRIPTS_ALLOWED_CHATS")); raw != "" {
+		cfg.Scripts.AllowedChats = splitList(raw)
+	}
+	if raw := strings.TrimSpace(os.Getenv("FEISHU_BOTD_SCRIPTS_TIMEOUT_SECONDS")); raw != "" {
+		if seconds, err := strconv.Atoi(raw); err == nil && seconds > 0 {
+			cfg.Scripts.TimeoutSeconds = seconds
+		}
+	}
 	return normalizeCommandConfig(cfg)
 }
 
@@ -213,7 +241,39 @@ func normalizeCommandConfig(in CommandConfig) CommandConfig {
 		BotUserID:  strings.TrimSpace(in.BotUserID),
 		BotUnionID: strings.TrimSpace(in.BotUnionID),
 		BotNames:   normalizeList(in.BotNames),
+		Scripts:    normalizeScriptExecConfig(in.Scripts),
 	}
+}
+
+func normalizeScriptExecConfig(in ScriptExecConfig) ScriptExecConfig {
+	timeout := in.TimeoutSeconds
+	if timeout <= 0 {
+		timeout = defaultScriptExecTimeoutSeconds
+	}
+	return ScriptExecConfig{
+		Enabled:        in.Enabled,
+		Command:        strings.ToLower(strings.TrimSpace(in.Command)),
+		Dir:            strings.TrimSpace(in.Dir),
+		AllowedChats:   normalizeChannelNames(in.AllowedChats),
+		TimeoutSeconds: timeout,
+	}
+}
+
+func normalizeChannelNames(in []string) []string {
+	seen := make(map[string]struct{}, len(in))
+	out := make([]string, 0, len(in))
+	for _, value := range in {
+		name := normalizeChannelName(value)
+		if name == "" {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		out = append(out, name)
+	}
+	return out
 }
 
 func splitList(raw string) []string {
@@ -334,6 +394,35 @@ func validateRouting(cfg Config) error {
 		}
 		if _, ok := cfg.Channels[svc.DefaultChannel]; !ok {
 			return fmt.Errorf("service %q default channel %q is not configured", source, svc.DefaultChannel)
+		}
+	}
+	return nil
+}
+
+func validateScripts(cfg Config) error {
+	s := cfg.Commands.Scripts
+	if !s.Enabled {
+		return nil
+	}
+	if !cfg.Commands.Enabled {
+		return errors.New("commands.scripts.enabled requires commands.enabled to be true")
+	}
+	if s.Command == "" {
+		return errors.New("commands.scripts.command is required when commands.scripts.enabled is true")
+	}
+	if s.Dir == "" {
+		return errors.New("commands.scripts.dir is required when commands.scripts.enabled is true")
+	}
+	info, err := os.Stat(s.Dir)
+	if err != nil || !info.IsDir() {
+		return fmt.Errorf("commands.scripts.dir %q must be an existing directory", s.Dir)
+	}
+	if len(s.AllowedChats) == 0 {
+		return errors.New("commands.scripts.allowed_chats must include at least one configured channel")
+	}
+	for _, chat := range s.AllowedChats {
+		if _, ok := cfg.Channels[chat]; !ok {
+			return fmt.Errorf("commands.scripts.allowed_chats entry %q is not a configured channel", chat)
 		}
 	}
 	return nil

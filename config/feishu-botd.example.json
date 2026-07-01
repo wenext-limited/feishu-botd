@@ -14,7 +14,14 @@
     "bot_open_id": "ou_xxx",
     "bot_user_id": "",
     "bot_union_id": "",
-    "bot_names": ["Feishu Bot"]
+    "bot_names": ["Feishu Bot"],
+    "scripts": {
+      "enabled": false,
+      "command": "pls",
+      "dir": "/etc/feishu-botd/scripts",
+      "allowed_chats": ["ci"],
+      "timeout_seconds": 300
+    }
   },
   "channels": {
     "ci": "oc_xxx",

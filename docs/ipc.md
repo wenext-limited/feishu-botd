@@ -99,6 +99,18 @@ reply back to the original channel alias using the existing `SendMessage` path
 and rejects unknown, expired, in-flight, or already-answered `delivery_id`
 values.
 
+`commands.scripts` (see [README.md](../README.md#local-script-execution))
+registers an in-process subscriber — `internal/scriptexec` — that runs a local
+script for one command word and calls `Respond` itself. It uses the exact same
+`Subscribe`/`Respond` path as an external provider, just without a gRPC
+round-trip, so it's a drop-in alternative to (or can run alongside) a real
+gRPC provider — **as long as they subscribe to different command words**.
+`dispatch` fans a command out to every subscriber registered for it (this is
+true of any two providers, not just the script executor), so if
+`commands.scripts.command` collides with a word an external provider also
+subscribes to, both run and race `Respond`; the loser gets a rejected,
+un-retried `response_in_flight` and its reply is silently dropped.
+
 ### `ProviderService` (skeleton)
 
 Defined to pin the package shape for future data-provider pull flows. It is not
