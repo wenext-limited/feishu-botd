@@ -11,5 +11,6 @@ services:
     volumes:
       - ./config/feishu-botd.json:/etc/feishu-botd/config.json:ro
       - ./secrets/feishu-botd-token:/run/secrets/feishu-botd-token:ro
+      - ./scripts:/etc/feishu-botd/scripts:ro
     ports:
       - "${FEISHU_BOTD_HOST_IP:-0.0.0.0}:7345:7345"
