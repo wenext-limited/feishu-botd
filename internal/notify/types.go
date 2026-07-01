@@ -9,16 +9,17 @@ import (
 )
 
 type Request struct {
-	Source        string            `json:"source"`
-	SourceEventID string            `json:"source_event_id"`
-	DedupeKey     string            `json:"dedupe_key"`
-	Severity      string            `json:"severity"`
-	Title         string            `json:"title"`
-	Markdown      string            `json:"markdown"`
-	CardJSON      string            `json:"card_json,omitempty"`
-	Target        Target            `json:"target"`
-	Links         []Link            `json:"links"`
-	Metadata      map[string]string `json:"metadata"`
+	Source           string            `json:"source"`
+	SourceEventID    string            `json:"source_event_id"`
+	DedupeKey        string            `json:"dedupe_key"`
+	Severity         string            `json:"severity"`
+	Title            string            `json:"title"`
+	Markdown         string            `json:"markdown"`
+	CardJSON         string            `json:"card_json,omitempty"`
+	Target           Target            `json:"target"`
+	Links            []Link            `json:"links"`
+	Metadata         map[string]string `json:"metadata"`
+	ReplyToMessageID string            `json:"reply_to_message_id,omitempty"`
 }
 
 type Target struct {
@@ -81,7 +82,7 @@ func (r Request) Validate(channels map[string]string) *APIError {
 	if _, ok := channels[r.Target.Channel]; !ok {
 		return NewAPIError(404, "unknown_channel", "unknown channel", false)
 	}
-	if len(r.Source) > 64 || len(r.SourceEventID) > 160 || len(r.DedupeKey) > 240 || len(r.Title) > 200 || len(r.Markdown) > 8000 {
+	if len(r.Source) > 64 || len(r.SourceEventID) > 160 || len(r.DedupeKey) > 240 || len(r.Title) > 200 || len(r.Markdown) > 8000 || len(r.ReplyToMessageID) > 160 {
 		return BadRequest("field_too_large", "one or more fields are too large")
 	}
 	if len(r.Links) > 8 || len(r.Metadata) > 32 {

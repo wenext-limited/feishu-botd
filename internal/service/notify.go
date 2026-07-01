@@ -19,9 +19,10 @@ func (s *Service) SendNotification(ctx context.Context, req notify.Request) (not
 		return notify.Response{}, apiErr
 	}
 	// SendNotification remains the stable markdown notification contract. The
-	// lower-level SendMessage path owns card delivery, even if an HTTP caller
-	// includes an additive card_json field.
+	// lower-level SendMessage path owns card delivery and reply-threading, even
+	// if a caller includes an additive card_json or reply_to_message_id field.
 	req.CardJSON = ""
+	req.ReplyToMessageID = ""
 	result, apiErr := s.deliver(ctx, req, true)
 	if apiErr != nil {
 		return notify.Response{}, apiErr
@@ -39,12 +40,13 @@ func (s *Service) SendNotification(ctx context.Context, req notify.Request) (not
 // v1 supports markdown and raw Feishu interactive-card JSON. Other content
 // kinds are rejected by the transport adapter before reaching the service.
 type MessageInput struct {
-	Channel   string
-	Source    string
-	DedupeKey string
-	Title     string
-	Markdown  string
-	CardJSON  string
+	Channel          string
+	Source           string
+	DedupeKey        string
+	Title            string
+	Markdown         string
+	CardJSON         string
+	ReplyToMessageID string
 }
 
 // SendMessage is the lower-level send path. Deduplication applies only when a
@@ -73,17 +75,18 @@ func (s *Service) SendMessage(ctx context.Context, in MessageInput) (SendResult,
 	}
 	// Bound the same fields SendNotification caps, since both paths write to the
 	// shared dedupe store keyed by source + dedupe_key.
-	if len(in.Markdown) > 8000 || len(in.Title) > 200 || len(in.Source) > 64 || len(in.DedupeKey) > 240 || len(in.CardJSON) > 64*1024 {
+	if len(in.Markdown) > 8000 || len(in.Title) > 200 || len(in.Source) > 64 || len(in.DedupeKey) > 240 || len(in.CardJSON) > 64*1024 || len(in.ReplyToMessageID) > 160 {
 		return SendResult{}, notify.BadRequest("field_too_large", "one or more fields are too large")
 	}
 
 	req := notify.Request{
-		Source:    in.Source,
-		DedupeKey: in.DedupeKey,
-		Title:     in.Title,
-		Markdown:  in.Markdown,
-		CardJSON:  in.CardJSON,
-		Target:    notify.Target{Channel: channel},
+		Source:           in.Source,
+		DedupeKey:        in.DedupeKey,
+		Title:            in.Title,
+		Markdown:         in.Markdown,
+		CardJSON:         in.CardJSON,
+		Target:           notify.Target{Channel: channel},
+		ReplyToMessageID: in.ReplyToMessageID,
 	}
 	return s.deliver(ctx, req, strings.TrimSpace(in.DedupeKey) != "")
 }

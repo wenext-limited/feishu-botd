@@ -61,6 +61,7 @@ type commandSubscriber struct {
 
 type commandDelivery struct {
 	chatAlias string
+	messageID string
 	expiresAt time.Time
 	state     commandDeliveryState
 }
@@ -119,7 +120,7 @@ func (s *Service) DispatchCommand(ctx context.Context, in CommandInput) (int, *n
 	if _, ok := s.cfg.Channels[in.ChatAlias]; !ok {
 		return 0, notify.NewAPIError(404, "unknown_channel", "unknown channel", false)
 	}
-	if len(in.DeliveryID) > 160 || len(in.Command) > 64 || len(in.Text) > 8000 || len(in.SenderID) > 160 {
+	if len(in.DeliveryID) > 160 || len(in.Command) > 64 || len(in.Text) > 8000 || len(in.SenderID) > 160 || len(in.Metadata["message_id"]) > 160 {
 		return 0, notify.BadRequest("field_too_large", "one or more fields are too large")
 	}
 
@@ -138,18 +139,19 @@ func (s *Service) RespondCommand(ctx context.Context, in CommandResponse) *notif
 	if in.DeliveryID == "" {
 		return notify.BadRequest("missing_delivery_id", "delivery_id is required")
 	}
-	chatAlias, apiErr := s.commandBroker.beginResponse(in.DeliveryID)
+	chatAlias, messageID, apiErr := s.commandBroker.beginResponse(in.DeliveryID)
 	if apiErr != nil {
 		return apiErr
 	}
 
 	_, apiErr = s.SendMessage(ctx, MessageInput{
-		Channel:   chatAlias,
-		Source:    "command",
-		DedupeKey: "command:" + in.DeliveryID,
-		Title:     in.Title,
-		Markdown:  in.Markdown,
-		CardJSON:  in.CardJSON,
+		Channel:          chatAlias,
+		Source:           "command",
+		DedupeKey:        "command:" + in.DeliveryID,
+		Title:            in.Title,
+		Markdown:         in.Markdown,
+		CardJSON:         in.CardJSON,
+		ReplyToMessageID: messageID,
 	})
 	if apiErr != nil {
 		s.commandBroker.finishResponse(in.DeliveryID, false)
@@ -229,6 +231,7 @@ func (b *commandBroker) dispatch(in CommandInput) int {
 	if delivered > 0 {
 		b.deliveries[in.DeliveryID] = &commandDelivery{
 			chatAlias: in.ChatAlias,
+			messageID: in.Metadata["message_id"],
 			expiresAt: time.Now().Add(b.ttl),
 			state:     commandDeliveryOpen,
 		}
@@ -236,22 +239,22 @@ func (b *commandBroker) dispatch(in CommandInput) int {
 	return delivered
 }
 
-func (b *commandBroker) beginResponse(deliveryID string) (string, *notify.APIError) {
+func (b *commandBroker) beginResponse(deliveryID string) (chatAlias, messageID string, apiErr *notify.APIError) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.pruneLocked(time.Now())
 	delivery, ok := b.deliveries[deliveryID]
 	if !ok {
-		return "", notify.NewAPIError(404, "unknown_delivery", "unknown delivery", false)
+		return "", "", notify.NewAPIError(404, "unknown_delivery", "unknown delivery", false)
 	}
 	switch delivery.state {
 	case commandDeliveryResponded:
-		return "", notify.NewAPIError(409, "already_responded", "delivery already has a response", false)
+		return "", "", notify.NewAPIError(409, "already_responded", "delivery already has a response", false)
 	case commandDeliveryResponding:
-		return "", notify.NewAPIError(409, "response_in_flight", "delivery response is already being sent", true)
+		return "", "", notify.NewAPIError(409, "response_in_flight", "delivery response is already being sent", true)
 	}
 	delivery.state = commandDeliveryResponding
-	return delivery.chatAlias, nil
+	return delivery.chatAlias, delivery.messageID, nil
 }
 
 func (b *commandBroker) finishResponse(deliveryID string, sent bool) {

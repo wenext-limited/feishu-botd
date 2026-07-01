@@ -61,6 +61,13 @@ Errors are redacted:
 }
 ```
 
+`card_json` and `reply_to_message_id` are accepted on the request body (they're
+additive fields on the shared internal contract) but are always cleared before
+sending — `/v1/notify` is the stable markdown-only, fresh-message contract.
+Card delivery and reply-threading are both `/v1/message`-only, and
+reply-threading there is internal-only (see [ipc.md](./ipc.md)); no HTTP/gRPC
+caller can currently set it.
+
 ## `POST /v1/message`
 
 Lower-level send path for callers that need a specific message content type.

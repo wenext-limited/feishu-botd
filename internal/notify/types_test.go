@@ -1,6 +1,9 @@
 package notify
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestValidateRejectsUnknownChannel(t *testing.T) {
 	req := Request{Source: "xipe", SourceEventID: "evt", DedupeKey: "key", Severity: "info", Title: "title", Markdown: "body", Target: Target{Channel: "missing"}}
@@ -30,6 +33,22 @@ func TestValidateAcceptsBoundedLinksAndMetadata(t *testing.T) {
 	}
 	if err := req.Validate(map[string]string{"ops": "oc"}); err != nil {
 		t.Fatalf("valid request rejected: %#v", err)
+	}
+}
+
+func TestValidateRejectsOversizedReplyToMessageID(t *testing.T) {
+	req := Request{
+		Source:           "xipe",
+		SourceEventID:    "evt",
+		DedupeKey:        "key",
+		Severity:         "info",
+		Title:            "title",
+		Markdown:         "body",
+		Target:           Target{Channel: "ops"},
+		ReplyToMessageID: strings.Repeat("a", 161),
+	}
+	if err := req.Validate(map[string]string{"ops": "oc"}); err == nil || err.Code != "field_too_large" {
+		t.Fatalf("expected field_too_large, got %#v", err)
 	}
 }
 

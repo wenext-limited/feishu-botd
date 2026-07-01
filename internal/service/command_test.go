@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 )
@@ -62,6 +63,82 @@ func TestCommandDispatchAndRespond(t *testing.T) {
 	}
 	if sender.calls != 1 {
 		t.Fatalf("sender calls = %d, want 1", sender.calls)
+	}
+}
+
+func TestCommandRespondThreadsReplyToOriginalMessage(t *testing.T) {
+	sender := &fakeSender{messageID: "om_reply"}
+	svc := newTestService(sender)
+
+	sub, apiErr := svc.SubscribeCommands(context.Background(), "xipe", []string{"status"})
+	if apiErr != nil {
+		t.Fatalf("subscribe: %v", apiErr)
+	}
+	defer sub.Close()
+
+	_, apiErr = svc.DispatchCommand(context.Background(), CommandInput{
+		DeliveryID: "evt_1",
+		Command:    "status",
+		ChatAlias:  "ops",
+		Metadata:   map[string]string{"message_id": "om_original"},
+	})
+	if apiErr != nil {
+		t.Fatalf("dispatch: %v", apiErr)
+	}
+	<-sub.C
+
+	if apiErr := svc.RespondCommand(context.Background(), CommandResponse{
+		DeliveryID: "evt_1",
+		Markdown:   "all good",
+	}); apiErr != nil {
+		t.Fatalf("respond: %v", apiErr)
+	}
+	if sender.request.ReplyToMessageID != "om_original" {
+		t.Fatalf("reply_to_message_id = %q, want om_original", sender.request.ReplyToMessageID)
+	}
+}
+
+func TestCommandRespondWithoutMessageIDLeavesReplyEmpty(t *testing.T) {
+	sender := &fakeSender{messageID: "om_reply"}
+	svc := newTestService(sender)
+
+	sub, apiErr := svc.SubscribeCommands(context.Background(), "xipe", []string{"status"})
+	if apiErr != nil {
+		t.Fatalf("subscribe: %v", apiErr)
+	}
+	defer sub.Close()
+
+	_, apiErr = svc.DispatchCommand(context.Background(), CommandInput{
+		DeliveryID: "evt_1",
+		Command:    "status",
+		ChatAlias:  "ops",
+	})
+	if apiErr != nil {
+		t.Fatalf("dispatch: %v", apiErr)
+	}
+	<-sub.C
+
+	if apiErr := svc.RespondCommand(context.Background(), CommandResponse{
+		DeliveryID: "evt_1",
+		Markdown:   "all good",
+	}); apiErr != nil {
+		t.Fatalf("respond: %v", apiErr)
+	}
+	if sender.request.ReplyToMessageID != "" {
+		t.Fatalf("reply_to_message_id = %q, want empty", sender.request.ReplyToMessageID)
+	}
+}
+
+func TestCommandDispatchRejectsOversizedMessageIDMetadata(t *testing.T) {
+	svc := newTestService(&fakeSender{messageID: "om_reply"})
+	_, apiErr := svc.DispatchCommand(context.Background(), CommandInput{
+		DeliveryID: "evt_1",
+		Command:    "status",
+		ChatAlias:  "ops",
+		Metadata:   map[string]string{"message_id": strings.Repeat("a", 161)},
+	})
+	if apiErr == nil || apiErr.Code != "field_too_large" {
+		t.Fatalf("expected field_too_large, got %v", apiErr)
 	}
 }
 

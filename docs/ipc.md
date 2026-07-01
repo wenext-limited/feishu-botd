@@ -95,9 +95,10 @@ mention token, and dispatches the first word as `command` with the rest as
 
 `InboundCommand.chat_alias` is always a configured alias; raw Feishu chat ids are
 never exposed. Unknown or ambiguous chat ids are ignored. `Respond` sends the
-reply back to the original channel alias using the existing `SendMessage` path
-and rejects unknown, expired, in-flight, or already-answered `delivery_id`
-values.
+reply back to the original channel alias using the existing `SendMessage` path,
+threaded as a Feishu reply to the original inbound message (not a fresh
+top-level post), and rejects unknown, expired, in-flight, or already-answered
+`delivery_id` values.
 
 `commands.scripts` (see [README.md](../README.md#local-script-execution))
 registers an in-process subscriber — `internal/scriptexec` — that runs a local

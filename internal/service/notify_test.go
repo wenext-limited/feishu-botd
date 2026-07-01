@@ -114,6 +114,32 @@ func TestSendNotificationKeepsMarkdownContract(t *testing.T) {
 	}
 }
 
+func TestSendNotificationScrubsReplyToMessageID(t *testing.T) {
+	sender := &fakeSender{messageID: "om_1"}
+	svc := newTestService(sender)
+	req := validRequest()
+	req.ReplyToMessageID = "om_external_caller_supplied"
+
+	if _, apiErr := svc.SendNotification(context.Background(), req); apiErr != nil {
+		t.Fatalf("send error: %v", apiErr)
+	}
+	if sender.request.ReplyToMessageID != "" {
+		t.Fatalf("SendNotification must not honor caller-supplied reply_to_message_id, got %q", sender.request.ReplyToMessageID)
+	}
+}
+
+func TestSendMessageRejectsOversizedReplyToMessageID(t *testing.T) {
+	svc := newTestService(&fakeSender{messageID: "om_1"})
+	_, apiErr := svc.SendMessage(context.Background(), MessageInput{
+		Channel:          "ops",
+		Markdown:         "hi",
+		ReplyToMessageID: strings.Repeat("a", 161),
+	})
+	if apiErr == nil || apiErr.Code != "field_too_large" {
+		t.Fatalf("expected field_too_large, got %v", apiErr)
+	}
+}
+
 func TestSendNotificationDedupeConflict(t *testing.T) {
 	svc := newTestService(&fakeSender{messageID: "om_1"})
 	if _, apiErr := svc.SendNotification(context.Background(), validRequest()); apiErr != nil {
@@ -202,6 +228,22 @@ func TestSendMessageMarkdown(t *testing.T) {
 	}
 	if sender.chatID != "oc_test" || sender.request.Markdown != "**hello**" {
 		t.Fatalf("unexpected sender state: chat=%q req=%#v", sender.chatID, sender.request)
+	}
+}
+
+func TestSendMessageThreadsReplyToMessageID(t *testing.T) {
+	sender := &fakeSender{messageID: "om_msg"}
+	svc := newTestService(sender)
+	_, apiErr := svc.SendMessage(context.Background(), MessageInput{
+		Channel:          "ops",
+		Markdown:         "**hello**",
+		ReplyToMessageID: "om_original",
+	})
+	if apiErr != nil {
+		t.Fatalf("send message error: %v", apiErr)
+	}
+	if sender.request.ReplyToMessageID != "om_original" {
+		t.Fatalf("reply_to_message_id = %q, want om_original", sender.request.ReplyToMessageID)
 	}
 }
 
