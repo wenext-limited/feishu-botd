@@ -2,6 +2,7 @@
 /config/feishu-botd.json
 /secrets/*
 !/secrets/.gitkeep
+/scripts/pls-build.sh
 
 bin/
 dist/
