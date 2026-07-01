@@ -25,6 +25,10 @@ usage() {
 
 declare -A JENKINS_JOBS=(
   [ludo]=lamaludo-ios
+  [lama]=Lama-iOS
+  [fungo]=Fungo-ios
+  [wyak]=wyak-ios
+  [yoki]=Yoki-ios
 )
 
 PROJECT="${1:-}"
