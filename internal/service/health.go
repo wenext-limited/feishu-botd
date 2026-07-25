@@ -32,7 +32,7 @@ func (s *Service) Ready(ctx context.Context) (bool, map[string]string) {
 		checks["feishu_auth"] = "missing_credentials"
 		ready = false
 	}
-	if len(s.cfg.Channels) == 0 {
+	if len(s.cfg.Channels) == 0 && !s.cfg.Commands.Enabled {
 		checks["channels"] = "missing_channels"
 		ready = false
 	}
@@ -47,7 +47,7 @@ func (s *Service) Ready(ctx context.Context) (bool, map[string]string) {
 		if err := s.sender.Ready(checkCtx); err != nil {
 			checks["feishu_auth"] = "unavailable"
 			ready = false
-			s.logger.Warn("readiness auth check failed", "error", s.redactor.redact(err))
+			s.logFeishuFailure("readiness", "health", "feishu", err)
 		}
 	}
 

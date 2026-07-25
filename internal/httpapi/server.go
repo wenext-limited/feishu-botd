@@ -47,7 +47,7 @@ func (s *Server) ListenAndServeUnix(ctx context.Context, socketPath string) erro
 		_ = ln.Close()
 		return err
 	}
-	server := &http.Server{Handler: s.handler(false)}
+	server := &http.Server{Handler: s.unixHandler()}
 	s.track(server)
 	go func() {
 		<-ctx.Done()
@@ -57,6 +57,15 @@ func (s *Server) ListenAndServeUnix(ctx context.Context, socketPath string) erro
 	}()
 	s.logger.Info("listening on unix socket", "socket", socketPath)
 	return server.Serve(ln)
+}
+
+func (s *Server) unixHandler() http.Handler {
+	// A Unix socket authenticates the peer only at the filesystem boundary.
+	// Once provider-scoped credentials are configured, that peer may be an
+	// untrusted agent process, so outbound HTTP sends need the distinct general
+	// bearer just like outbound gRPC calls. With no provider map, preserve the
+	// compatibility shim's legacy local-trust behavior.
+	return s.handler(len(s.cfg.AgentProviders) > 0)
 }
 
 func (s *Server) ListenAndServeTCP(ctx context.Context, bindAddr string) error {

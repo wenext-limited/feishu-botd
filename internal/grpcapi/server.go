@@ -6,6 +6,7 @@ package grpcapi
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"os"
@@ -20,8 +21,10 @@ import (
 	"feishu-botd/internal/service"
 )
 
-// Server hosts the gRPC services over one or more listeners. The Unix listener
-// is unauthenticated (local trust); the TCP listener requires a bearer token.
+// Server hosts the gRPC services over one or more listeners. TCP always
+// requires the general bearer for non-provider RPCs. Unix keeps the legacy
+// local-trust mode only when no scoped providers are configured; otherwise its
+// non-health RPCs are split between general and provider bearers.
 type Server struct {
 	cfg    config.Config
 	svc    *service.Service
@@ -39,19 +42,25 @@ func NewServer(cfg config.Config, svc *service.Service, logger *slog.Logger) *Se
 }
 
 // newGRPCServer builds a grpc.Server with the standard interceptor chain. The
-// bearer-auth interceptor is added only when requireAuth is set (TCP listener).
+// General bearer auth is required on TCP and on scoped-provider Unix servers.
+// The latter prevents a provider-only peer from inheriting outbound bot-send
+// authority through filesystem access to the socket.
 func (s *Server) newGRPCServer(requireAuth bool) *grpc.Server {
+	providerAuth := newProviderAuthenticator(s.cfg.AgentProviders)
+	scopeLegacyProviders := len(s.cfg.AgentProviders) > 0
 	unary := []grpc.UnaryServerInterceptor{
-		recoveryUnaryInterceptor(s.logger, s.svc.Redact),
 		requestIDUnaryInterceptor(),
+		recoveryUnaryInterceptor(s.logger),
+		providerAuthUnaryInterceptor(providerAuth, scopeLegacyProviders),
 	}
 	stream := []grpc.StreamServerInterceptor{
-		recoveryStreamInterceptor(s.logger, s.svc.Redact),
 		requestIDStreamInterceptor(),
+		recoveryStreamInterceptor(s.logger),
+		providerAuthStreamInterceptor(providerAuth, scopeLegacyProviders),
 	}
-	if requireAuth {
-		unary = append(unary, authUnaryInterceptor(s.cfg.AuthToken))
-		stream = append(stream, authStreamInterceptor(s.cfg.AuthToken))
+	if requireAuth || scopeLegacyProviders {
+		unary = append(unary, authUnaryInterceptor(s.cfg.AuthToken, scopeLegacyProviders))
+		stream = append(stream, authStreamInterceptor(s.cfg.AuthToken, scopeLegacyProviders))
 	}
 
 	gs := grpc.NewServer(
@@ -104,6 +113,10 @@ func (s *Server) ListenAndServeTCP(ctx context.Context, bindAddr string) error {
 // serveTCP serves the authenticated gRPC server on an already-bound listener.
 // Taking a live listener lets tests avoid the close-then-rebind port race.
 func (s *Server) serveTCP(ctx context.Context, ln net.Listener) error {
+	if err := requireLoopbackTCPListener(ln); err != nil {
+		_ = ln.Close()
+		return err
+	}
 	gs := s.newGRPCServer(true)
 	s.track(gs)
 	go func() {
@@ -112,6 +125,17 @@ func (s *Server) serveTCP(ctx context.Context, ln net.Listener) error {
 	}()
 	s.logger.Info("grpc listening on tcp", "addr", ln.Addr().String())
 	return ignoreStopped(gs.Serve(ln))
+}
+
+// requireLoopbackTCPListener repeats the configuration invariant against the
+// actual bound address. This closes the gap for callers that construct Config
+// directly or pass an already-open listener to serveTCP.
+func requireLoopbackTCPListener(ln net.Listener) error {
+	addr, ok := ln.Addr().(*net.TCPAddr)
+	if !ok || addr.IP == nil || addr.IP.IsUnspecified() || !addr.IP.IsLoopback() {
+		return fmt.Errorf("grpc TCP listener is plaintext and must bind to loopback (got %s)", ln.Addr())
+	}
+	return nil
 }
 
 // Shutdown gracefully stops every listener, forcing a hard stop if ctx expires

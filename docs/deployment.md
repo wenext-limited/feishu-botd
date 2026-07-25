@@ -7,31 +7,61 @@ HTTP socket (`FEISHU_BOTD_SOCKET`) remains for the compatibility shim. The two
 transports use distinct socket paths and can run simultaneously during
 migration. See [ipc.md](./ipc.md) for the gRPC contract.
 
-TCP is intended for Docker or process-manager deployments. TCP binds are
-loopback-only by default. To expose `feishu-botd` to other machines on a LAN,
-bind to a non-loopback address such as `0.0.0.0:7345` and set
-`FEISHU_BOTD_ALLOW_NON_LOOPBACK_BIND=true`. In TCP mode, both transports require
-a bearer token loaded from
-`FEISHU_BOTD_AUTH_TOKEN_FILE`: HTTP `POST /v1/notify` expects an
-`Authorization: Bearer <token>` header, and gRPC expects the same token as
-`authorization` request metadata. The single token is shared by
-`FEISHU_BOTD_BIND` and `FEISHU_BOTD_GRPC_BIND`; health RPCs are exempt. Use a
-host firewall or Docker's host-IP port publishing to keep the listener on the
-trusted LAN.
+HTTP TCP is intended for Docker or process-manager deployments. It is
+loopback-only by default; a non-loopback HTTP bind requires
+`FEISHU_BOTD_ALLOW_NON_LOOPBACK_BIND=true` and the general bearer loaded from
+`FEISHU_BOTD_AUTH_TOKEN_FILE`. This HTTP LAN opt-in does not apply to gRPC.
+HTTP TCP is also plaintext: a bearer authenticates a caller but does not encrypt
+the token or message content. Use it only on a trusted network, or put an HTTPS
+reverse proxy or encrypted tunnel in front of the loopback listener.
+
+gRPC TCP has no built-in TLS in this release and is always loopback-only. Its
+general non-health RPCs use the same `FEISHU_BOTD_AUTH_TOKEN_FILE`, while agent
+and scoped legacy command RPCs use distinct per-provider token files configured
+under `agent_providers`. The same privilege split applies to both Unix sockets
+when `agent_providers` is non-empty: HTTP `POST /v1/notify` and
+`POST /v1/message` plus general non-health gRPC RPCs require the distinct
+general token from `listeners.auth_token_file` or
+`FEISHU_BOTD_AUTH_TOKEN_FILE`. Provider tokens authorize only their scoped
+gRPC methods and never authorize HTTP sends. If the general token is omitted
+from a scoped Unix-only deployment, those outbound interfaces fail closed.
+Only deployments without `agent_providers` retain legacy Unix local trust. For
+cross-host gRPC, use an authenticated encrypted tunnel or TLS proxy terminating
+onto loopback; a bearer token alone does not encrypt prompts, responses, or
+credentials. HTTP health/readiness and gRPC health remain unauthenticated.
+
+Inbound agent mode requires a Feishu enterprise custom app and exactly one
+active `feishu-botd` long-connection client per app. Feishu uses cluster/random
+delivery across multiple clients rather than broadcast. Because botd's
+delivery, response, and action ownership state is process-local, active-active
+replicas can split related events and are unsupported until that state is made
+durable and shared. An active/standby setup must ensure only the active process
+opens the Feishu connection.
+
+The general bearer and every provider bearer must contain at least 32 bytes.
+The loader trims and uses only the first line of each token file; later lines
+are ignored. Before upgrading, replace any shorter general token and update all
+of its callers. For example, create a new file with restrictive permissions:
+
+```sh
+umask 077
+openssl rand -base64 32 > /run/secrets/feishu-botd-token
+```
 
 Feishu app credentials and raw chat ids stay in sidecar configuration. Hook
 definitions should use stable channel names such as `ops`.
 
-Rollback is stopping the sidecar or disabling the Xipe hook that calls it.
+Rollback is stopping the sidecar or disabling the caller integration that uses
+it.
 
 ## Local Source Run
 
 ```sh
-export FEISHU_APP_ID=cli_xxx
-export FEISHU_APP_SECRET=...
+export FEISHU_APP_ID=REPLACE_WITH_APP_ID
+export FEISHU_APP_SECRET=REPLACE_WITH_APP_SECRET
 export FEISHU_BOTD_SOCKET=/tmp/feishu-botd/feishu-botd.sock
 export FEISHU_BOTD_GRPC_SOCKET=/tmp/feishu-botd/feishu-botd.grpc.sock
-export FEISHU_BOTD_CHANNELS_OPS=oc_xxx
+export FEISHU_BOTD_CHANNELS_OPS=REPLACE_WITH_OPS_CHAT_ID
 
 mkdir -p /tmp/feishu-botd
 go run ./cmd/feishu-botd
@@ -67,12 +97,14 @@ $EDITOR .env
 ```
 
 Put Feishu app credentials, channel aliases, and service defaults in
-`config/feishu-botd.json`. For example, `services.jenkins.default_channel =
-"ci"` lets Jenkins send with `"source": "jenkins"` without repeating
+`config/feishu-botd.json`. For example,
+`services.build-monitor.default_channel = "ci"` lets a build monitor send with
+`"source": "build-monitor"` without repeating
 `"target": { "channel": "ci" }` in every request.
 
 Set `FEISHU_BOTD_HOST_IP` to the Docker host's LAN IP when possible, such as
-`192.168.1.10`. Leaving it as `0.0.0.0` exposes the service on every host
+`192.0.2.10` (a documentation address; replace it with the real host address).
+Leaving it as `0.0.0.0` exposes the service on every host
 interface allowed by the host firewall.
 
 Start it:
@@ -84,18 +116,18 @@ docker compose up -d --build
 From another LAN machine:
 
 ```sh
-TOKEN="$(ssh botd-host cat /path/to/feishu-botd/secrets/feishu-botd-token)"
-curl http://192.168.1.10:7345/v1/message \
+TOKEN="$(ssh botd-host.example cat /srv/feishu-botd/secrets/feishu-botd-token)"
+curl http://192.0.2.10:7345/v1/message \
   -H "Authorization: Bearer ${TOKEN}" \
   -H 'Content-Type: application/json' \
   -d '{
-    "source": "jenkins",
-    "dedupe_key": "jenkins:build:123",
+    "source": "build-monitor",
+    "dedupe_key": "build-monitor:build:123",
     "msg_type": "interactive",
     "card": {
       "type": "template",
       "data": {
-        "template_id": "AAqBgzXLgNKzZ",
+        "template_id": "REPLACE_WITH_TEMPLATE_ID",
         "template_version_name": "1.0.3",
         "template_variable": { "title": "Build succeeded" }
       }
@@ -103,40 +135,45 @@ curl http://192.168.1.10:7345/v1/message \
   }'
 ```
 
-## Docker Beside Xipe
+## Sharing a Unix socket with another container
 
-The checked-in Docker overlay is intended to be used with Xipe's Compose file
-from the Xipe repository root:
+When a caller and `feishu-botd` run in the same Compose project, mount one named
+volume at `/run/feishu-botd` in both services. Configure the daemon with
+`FEISHU_BOTD_GRPC_SOCKET=/run/feishu-botd/feishu-botd.grpc.sock` and give the
+caller permission to connect to the socket's group (`0o660`). Keep the caller's
+startup independent unless bot delivery is a hard availability requirement.
 
-```sh
-docker compose \
-  -f docker-compose.yml \
-  -f ../feishu-botd/deploy/docker-compose.xipe.yml \
-  --profile feishu \
-  up -d --build
+[`deploy/docker-compose.consumer.example.yml`](../deploy/docker-compose.consumer.example.yml)
+is a generic overlay template. Rename its `consumer` service key to the caller's
+service key, then combine it with that service's base Compose file.
+
+An outbound notification-only caller needs only the socket path and generated
+protobuf bindings. An agent also needs its own provider token file mounted
+read-only; it must not receive the Feishu app ID, app secret, raw chat IDs,
+general bearer, or another provider's token.
+
+The checked-in base Compose file is notification-only. For an agent, add its
+provider entry to botd's private config and mount the same provider-token file
+read-only at the configured path in exactly the daemon and that agent:
+
+```yaml
+services:
+  example-agent:
+    volumes:
+      - ./secrets/example-agent-token:/run/secrets/example-agent-token:ro
+    environment:
+      FEISHU_BOTD_AGENT_PROVIDER: example-agent
+      FEISHU_BOTD_AGENT_AUTH_TOKEN_FILE: /run/secrets/example-agent-token
+
+  feishu-botd:
+    volumes:
+      - ./secrets/example-agent-token:/run/secrets/example-agent-token:ro
 ```
 
-Add these sidecar-only values to Xipe's `.env` or another deployment-owned env
-file before enabling the profile:
-
-```text
-FEISHU_APP_ID=cli_xxx
-FEISHU_APP_SECRET=...
-FEISHU_BOTD_CHANNEL=ops
-FEISHU_BOTD_CHANNELS=ops=oc_xxx
-```
-
-The overlay mounts `feishu-botd-run` into both containers and sets
-`FEISHU_BOTD_SOCKET=/run/feishu-botd/feishu-botd.sock` for Xipe. Dashboard hook
-definitions still only need the bundled command:
-
-```text
-Working directory: /usr/local/share/xipe
-Command: /usr/bin/env bash scripts/xipe-feishu-botd-hook.sh
-```
-
-The `xipe` service has no `depends_on` edge to `feishu-botd`. A stopped or
-unready sidecar is visible only as hook delivery failure.
+The corresponding private config uses
+`agent_providers.example-agent.auth_token_file =
+"/run/secrets/example-agent-token"`. Do not mount the general bearer into the
+agent container.
 
 ## macOS launchd
 
@@ -155,14 +192,10 @@ control for real app secrets.
 
 ## Rollback
 
-Disable the Xipe account-condition hook first. Then stop the sidecar:
+Disable or drain callers first, then stop the sidecar:
 
 ```sh
-docker compose \
-  -f docker-compose.yml \
-  -f ../feishu-botd/deploy/docker-compose.xipe.yml \
-  --profile feishu \
-  stop feishu-botd
+docker compose stop feishu-botd
 ```
 
 For launchd:

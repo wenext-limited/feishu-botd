@@ -7,17 +7,17 @@ import (
 
 func TestMemoryStoreDuplicateAndConflict(t *testing.T) {
 	store := NewMemoryStore(1 << 62)
-	if got := store.Reserve("xipe", "key", "fp1"); got.Duplicate || got.Conflict || got.InFlight {
+	if got := store.Reserve("example-service", "key", "fp1"); got.Duplicate || got.Conflict || got.InFlight {
 		t.Fatalf("first reserve = %#v", got)
 	}
-	if got := store.Reserve("xipe", "key", "fp1"); !got.InFlight {
+	if got := store.Reserve("example-service", "key", "fp1"); !got.InFlight {
 		t.Fatalf("second reserve before commit = %#v", got)
 	}
-	store.Commit("xipe", "key", Result{Provider: "feishu", MessageID: "om"})
-	if got := store.Reserve("xipe", "key", "fp1"); !got.Duplicate || got.Result.MessageID != "om" {
+	store.Commit("example-service", "key", Result{Provider: "feishu", MessageID: "om"})
+	if got := store.Reserve("example-service", "key", "fp1"); !got.Duplicate || got.Result.MessageID != "om" {
 		t.Fatalf("duplicate reserve = %#v", got)
 	}
-	if got := store.Reserve("xipe", "key", "fp2"); !got.Conflict {
+	if got := store.Reserve("example-service", "key", "fp2"); !got.Conflict {
 		t.Fatalf("conflict reserve = %#v", got)
 	}
 }
@@ -27,11 +27,11 @@ func TestMemoryStoreExpiresEntries(t *testing.T) {
 	store := NewMemoryStore(time.Second)
 	store.now = func() time.Time { return now }
 
-	store.Reserve("xipe", "key", "fp1")
-	store.Commit("xipe", "key", Result{Provider: "feishu", MessageID: "om"})
+	store.Reserve("example-service", "key", "fp1")
+	store.Commit("example-service", "key", Result{Provider: "feishu", MessageID: "om"})
 	now = now.Add(2 * time.Second)
 
-	if got := store.Reserve("xipe", "key", "fp2"); got.Duplicate || got.Conflict || got.InFlight {
+	if got := store.Reserve("example-service", "key", "fp2"); got.Duplicate || got.Conflict || got.InFlight {
 		t.Fatalf("expired reserve = %#v", got)
 	}
 }

@@ -13,7 +13,7 @@ import (
 )
 
 // Version is the reported service version, shared by both transports.
-const Version = "0.1.0"
+const Version = "0.2.0"
 
 // Provider names the upstream message provider in responses.
 const Provider = "feishu"
@@ -24,10 +24,13 @@ const Provider = "feishu"
 type Service struct {
 	cfg           config.Config
 	sender        feishu.Sender
+	dynamicCards  feishu.DynamicCards
 	store         *dedupe.MemoryStore
 	logger        *slog.Logger
 	redactor      *redactor
+	inboundRoutes *inboundRouteRegistry
 	commandBroker *commandBroker
+	agentBroker   *agentBroker
 }
 
 // NewService builds a Service from an immutable config snapshot.
@@ -35,13 +38,20 @@ func NewService(cfg config.Config, sender feishu.Sender, store *dedupe.MemorySto
 	if logger == nil {
 		logger = slog.Default()
 	}
+	var dynamicCards feishu.DynamicCards
+	if cards, ok := sender.(feishu.DynamicCards); ok {
+		dynamicCards = cards
+	}
 	return &Service{
 		cfg:           cfg,
 		sender:        sender,
+		dynamicCards:  dynamicCards,
 		store:         store,
 		logger:        logger,
 		redactor:      newRedactor(cfg),
+		inboundRoutes: newInboundRouteRegistry(cfg.DedupeTTL),
 		commandBroker: newCommandBroker(cfg.DedupeTTL),
+		agentBroker:   newAgentBroker(cfg.DedupeTTL),
 	}
 }
 

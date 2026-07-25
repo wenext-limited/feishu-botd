@@ -1,9 +1,9 @@
 # feishu-botd
 
-`feishu-botd` is a small local gateway for Feishu/Lark bots. It owns the
-Feishu/Lark SDK, app credentials, and token lifecycle, and lets local services
-send notifications without ever handling raw chat ids. It is general-purpose: it
-is not tied to any single project or organization.
+`feishu-botd` is a small local gateway and agent runtime for Feishu/Lark bots.
+It owns the Feishu/Lark SDK, app credentials, token lifecycle, inbound long
+connection, chat routing, and dynamic CardKit messages. Local services and
+agents use a protobuf/gRPC contract without handling raw chat ids.
 
 ## Contract
 
@@ -17,7 +17,7 @@ socket:
 | --- | --- |
 | `BotdHealthService` | `Health`, `Ready` |
 | `NotificationService` | `SendNotification`, `SendMessage` |
-| `CommandService` | `Subscribe`, `Respond` for inbound `@<bot-name> <COMMAND>` flows |
+| `CommandService` | Legacy `Subscribe`/`Respond`, plus agent event streaming and progressive CardKit responses |
 | `ProviderService` | future data providers (skeleton) |
 
 The legacy HTTP API stays as a compatibility shim over the **same** internal
@@ -32,11 +32,19 @@ POST /v1/message  (lower-level markdown/card send)
 See [docs/ipc.md](docs/ipc.md) for the full gRPC contract and error model, and
 [docs/api.md](docs/api.md) for the HTTP shim.
 
-Inbound text commands are supported when `commands.enabled` is true and the
-Feishu app has bot capability, a long-connection event subscription for
-`im.message.receive_v1`, and the needed message permissions. Card actions,
-streaming replies, and durable outbox semantics are follow-up work. Outbound
-interactive card sends are supported through the lower-level message surface.
+Inbound text commands and conversational agent prompts are supported when
+`commands.enabled` is true and the Feishu app has bot capability, the required
+message/CardKit permissions, and long-connection subscriptions for
+`im.message.receive_v1` and (when actions are used) `card.action.trigger`.
+Agents can progressively update one CardKit 2.0 response and receive normalized
+button callbacks without seeing raw Feishu routing ids or callback tokens.
+Long-connection agent mode requires an enterprise custom app and one active
+`feishu-botd` instance per app; Feishu does not broadcast events across
+multiple connected clients, and this release keeps ownership state in process.
+
+See [Building a Feishu agent](docs/agent.md) for app setup, routing semantics,
+the response state machine, platform limits, and a minimal public-safe Go
+lifecycle example under [`examples/agent/`](examples/agent/).
 
 Optionally, `commands.scripts` lets the daemon itself run a local script for
 one registered command, instead of (or alongside) an external gRPC provider —
@@ -56,19 +64,35 @@ and per-caller defaults:
 
 ```json
 {
-  "feishu": { "app_id": "cli_xxx", "app_secret": "..." },
+  "feishu": {
+    "app_id": "REPLACE_WITH_APP_ID",
+    "app_secret": "REPLACE_WITH_APP_SECRET"
+  },
   "listeners": {
     "http_bind": "0.0.0.0:7345",
+    "grpc_socket": "/run/feishu-botd/feishu-botd.grpc.sock",
     "auth_token_file": "/run/secrets/feishu-botd-token",
     "allow_non_loopback_bind": true
   },
-  "commands": {
-    "enabled": false,
-    "bot_open_id": "ou_xxx",
-    "bot_names": ["Feishu Bot"]
+  "agent_providers": {
+    "example-agent": {
+      "auth_token_file": "/run/secrets/feishu-botd-example-agent-token",
+      "allowed_commands": [],
+      "allow_unmatched_messages": true,
+      "allow_card_actions": true,
+      "allow_legacy_commands": false
+    }
   },
-  "channels": { "ci": "oc_xxx", "ops": "oc_yyy" },
-  "services": { "jenkins": { "default_channel": "ci" } }
+  "commands": {
+    "enabled": true,
+    "bot_open_id": "REPLACE_WITH_BOT_OPEN_ID",
+    "bot_names": ["Example Bot"]
+  },
+  "channels": {
+    "ci": "REPLACE_WITH_CI_CHAT_ID",
+    "ops": "REPLACE_WITH_OPS_CHAT_ID"
+  },
+  "services": { "build-monitor": { "default_channel": "ci" } }
 }
 ```
 
@@ -81,22 +105,42 @@ FEISHU_BOTD_CONFIG=/etc/feishu-botd/config.json
 Environment variables are still supported and override the file when set:
 
 ```text
-FEISHU_APP_ID=cli_xxx
-FEISHU_APP_SECRET=...
-FEISHU_BOTD_CHANNELS=ci=oc_xxx,ops=oc_yyy
+FEISHU_APP_ID=REPLACE_WITH_APP_ID
+FEISHU_APP_SECRET=REPLACE_WITH_APP_SECRET
+FEISHU_BOTD_CHANNELS=ci=REPLACE_WITH_CI_CHAT_ID,ops=REPLACE_WITH_OPS_CHAT_ID
 FEISHU_BOTD_BIND=127.0.0.1:7345
+FEISHU_BOTD_GRPC_SOCKET=/run/feishu-botd/feishu-botd.grpc.sock
 FEISHU_BOTD_AUTH_TOKEN_FILE=/run/secrets/feishu-botd-token
 FEISHU_BOTD_COMMANDS_ENABLED=false
-FEISHU_BOTD_BOT_OPEN_ID=ou_xxx
-FEISHU_BOTD_BOT_NAMES=Feishu Bot
+FEISHU_BOTD_BOT_OPEN_ID=REPLACE_WITH_BOT_OPEN_ID
+FEISHU_BOTD_BOT_NAMES=Example Bot
 FEISHU_BOTD_SCRIPTS_ENABLED=false
-FEISHU_BOTD_SCRIPTS_COMMAND=pls
+FEISHU_BOTD_SCRIPTS_COMMAND=ops
 FEISHU_BOTD_SCRIPTS_DIR=/etc/feishu-botd/scripts
 FEISHU_BOTD_SCRIPTS_ALLOWED_CHATS=ci
 FEISHU_BOTD_SCRIPTS_TIMEOUT_SECONDS=300
 FEISHU_BOTD_DEDUPE_TTL_SECONDS=21600
 FEISHU_BOTD_SEND_TIMEOUT_SECONDS=15
 ```
+
+`agent_providers` is configured in the JSON file because each provider maps to
+a separate token file. The general bearer and every provider token must contain
+at least 32 bytes. Provider tokens must be unique and must differ from the
+general bearer. Token loading trims and uses only the first line of each file.
+Existing deployments with a shorter general bearer must rotate it before
+upgrading because the daemon now fails closed at startup. The four agent RPCs
+require the matching provider token on both Unix and loopback TCP. When this map
+is non-empty, legacy command `Subscribe`/`Respond` is scoped the same way; existing
+legacy deployments without the map keep their current local/global-token mode.
+On scoped Unix listeners, HTTP `POST /v1/notify` and `POST /v1/message` plus
+other non-health gRPC RPCs require the distinct general bearer from
+`listeners.auth_token_file`; if it is omitted, those outbound interfaces fail
+closed. A provider credential never grants outbound notification authority.
+HTTP health/readiness and gRPC health remain public.
+Each subscription is limited by `allowed_commands`,
+`allow_unmatched_messages`, `allow_card_actions`, and
+`allow_legacy_commands`. Plaintext gRPC TCP is loopback-only even when the HTTP
+LAN opt-in is enabled.
 
 ### Local script execution
 
@@ -106,19 +150,19 @@ for one registered command word — no separate provider process needed. Given:
 ```json
 "scripts": {
   "enabled": true,
-  "command": "pls",
+  "command": "ops",
   "dir": "/etc/feishu-botd/scripts",
   "allowed_chats": ["ci"],
   "timeout_seconds": 300
 }
 ```
 
-A message `@<bot-name> pls build ludo develop` in the `ci` chat resolves to
-`/etc/feishu-botd/scripts/pls-build.sh ludo develop`: the first word after the
-mention (`pls`) must match `command`; the second word (`build`) is the
+A message `@<bot-name> ops run example-job staging` in the `ci` chat resolves
+to `/etc/feishu-botd/scripts/ops-run.sh example-job staging`: the first word
+after the mention (`ops`) must match `command`; the second word (`run`) is the
 *action* and is resolved by naming convention to `<command>-<action>.sh` in
 `dir`; every remaining word is passed through unmodified as a positional
-argument (`ludo`, `develop`) via `argv`, never through a shell — arguments
+argument (`example-job`, `staging`) via `argv`, never through a shell — arguments
 like `` $(whoami) `` or `; rm -rf` are passed literally and are never
 interpreted. The resolved script must live inside `dir` (no path traversal),
 exist, and be executable, and the invoking chat must be in `allowed_chats`
@@ -126,6 +170,11 @@ exist, and be executable, and the invoking chat must be in `allowed_chats`
 captured (truncated past ~4000 bytes) and replied in chat as the script's exit
 code plus output; the script is killed, along with any of its own
 subprocesses, if it runs past `timeout_seconds`.
+
+[`scripts/ops-run.example.sh`](scripts/ops-run.example.sh) is an environment-
+driven, allowlisted Jenkins example for that command shape. Copy it to
+`ops-run.sh` in the configured private script directory and provide credentials
+through the service environment; do not commit a deployment copy.
 
 ## Development
 
@@ -150,17 +199,16 @@ make build
 make image
 ```
 
-Run beside Xipe's Docker Compose stack with the optional overlay:
+Run the standalone container with the checked-in Compose file:
 
 ```sh
-cd /path/to/xipe
-docker compose \
-  -f docker-compose.yml \
-  -f ../feishu-botd/deploy/docker-compose.xipe.yml \
-  --profile feishu \
-  up -d --build
+docker compose up -d --build
 ```
 
-The overlay shares a Unix socket volume with the `xipe` container and leaves the
-sidecar optional. Xipe proxy traffic and startup do not depend on
-`feishu-botd`.
+The base Compose file is notification-only. Running an agent also requires an
+`agent_providers` entry and the matching provider token mounted read-only into
+both the daemon and agent containers; see the concrete mount example in
+[docs/deployment.md](docs/deployment.md#sharing-a-unix-socket-with-another-container).
+
+See [docs/deployment.md](docs/deployment.md) for Unix-socket, TCP, Docker, and
+process-manager deployment guidance.

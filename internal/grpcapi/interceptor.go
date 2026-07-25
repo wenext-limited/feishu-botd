@@ -2,6 +2,8 @@ package grpcapi
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -62,16 +64,15 @@ type contextStream struct {
 
 func (s *contextStream) Context() context.Context { return s.ctx }
 
-// redactFunc scrubs configured secrets from an arbitrary value's string form.
-// It is supplied by the service so the panic path honors the same redaction
-// guarantee as the normal error paths.
-type redactFunc func(any) string
-
-func recoveryUnaryInterceptor(logger *slog.Logger, redact redactFunc) grpc.UnaryServerInterceptor {
+func recoveryUnaryInterceptor(logger *slog.Logger) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (resp any, err error) {
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Error("grpc handler panic", "method", info.FullMethod, "panic", redact(r))
+				logger.Error("grpc handler panic",
+					"method", info.FullMethod,
+					"correlation", grpcRequestLogCorrelation(ctx),
+					"panic_class", "handler_panic",
+				)
 				err = status.Error(codes.Internal, "internal error")
 			}
 		}()
@@ -79,14 +80,31 @@ func recoveryUnaryInterceptor(logger *slog.Logger, redact redactFunc) grpc.Unary
 	}
 }
 
-func recoveryStreamInterceptor(logger *slog.Logger, redact redactFunc) grpc.StreamServerInterceptor {
+func recoveryStreamInterceptor(logger *slog.Logger) grpc.StreamServerInterceptor {
 	return func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) (err error) {
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Error("grpc stream handler panic", "method", info.FullMethod, "panic", redact(r))
+				logger.Error("grpc stream handler panic",
+					"method", info.FullMethod,
+					"correlation", grpcRequestLogCorrelation(ss.Context()),
+					"panic_class", "handler_panic",
+				)
 				err = status.Error(codes.Internal, "internal error")
 			}
 		}()
 		return handler(srv, ss)
 	}
+}
+
+func grpcRequestLogCorrelation(ctx context.Context) string {
+	requestID := requestIDFromContext(ctx)
+	if requestID == "" {
+		if md, ok := metadata.FromIncomingContext(ctx); ok {
+			if values := md.Get("x-request-id"); len(values) == 1 {
+				requestID = strings.TrimSpace(values[0])
+			}
+		}
+	}
+	sum := sha256.Sum256([]byte("feishu-botd/grpc-request-log/v1\x00" + requestID))
+	return "grpc_" + hex.EncodeToString(sum[:8])
 }

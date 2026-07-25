@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -56,6 +57,19 @@ func TestValidateTCPBindAllowsNonLoopbackWithOptIn(t *testing.T) {
 	for _, addr := range []string{"0.0.0.0:7345", ":7345", "192.0.2.10:7345"} {
 		if err := validateTCPBind("FEISHU_BOTD_BIND", addr, true); err != nil {
 			t.Fatalf("%s rejected with opt-in: %v", addr, err)
+		}
+	}
+}
+
+func TestValidatePlaintextGRPCBindIsAlwaysLoopbackOnly(t *testing.T) {
+	for _, addr := range []string{"127.0.0.1:7346", "localhost:7346", "[::1]:7346"} {
+		if err := validatePlaintextGRPCBind("FEISHU_BOTD_GRPC_BIND", addr); err != nil {
+			t.Fatalf("%s rejected: %v", addr, err)
+		}
+	}
+	for _, addr := range []string{"0.0.0.0:7346", ":7346", "[::]:7346", "192.0.2.10:7346", "missing-port"} {
+		if err := validatePlaintextGRPCBind("FEISHU_BOTD_GRPC_BIND", addr); err == nil {
+			t.Fatalf("%s accepted unexpectedly", addr)
 		}
 	}
 }
@@ -154,6 +168,22 @@ func TestLoadFromEnvGRPCSocketSatisfiesListenerRequirement(t *testing.T) {
 	}
 }
 
+func TestLoadFromEnvAllowsDirectMessageOnlyAgentWithoutChannels(t *testing.T) {
+	clearConfigEnv(t)
+	t.Setenv("FEISHU_APP_ID", "app_test")
+	t.Setenv("FEISHU_APP_SECRET", "test-placeholder")
+	t.Setenv("FEISHU_BOTD_GRPC_SOCKET", filepath.Join(t.TempDir(), "botd.sock"))
+	t.Setenv("FEISHU_BOTD_COMMANDS_ENABLED", "true")
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("load direct-message-only agent config: %v", err)
+	}
+	if !cfg.Commands.Enabled || len(cfg.Channels) != 0 {
+		t.Fatalf("unexpected direct-message-only routing: commands=%t channels=%d", cfg.Commands.Enabled, len(cfg.Channels))
+	}
+}
+
 func TestLoadFromEnvNoListenerFails(t *testing.T) {
 	setBaseEnv(t)
 	if _, err := LoadFromEnv(); err == nil {
@@ -169,7 +199,8 @@ func TestLoadFromEnvGRPCBindRequiresTokenFile(t *testing.T) {
 	}
 
 	tokenPath := filepath.Join(t.TempDir(), "token")
-	if err := os.WriteFile(tokenPath, []byte("abc123\n"), 0o600); err != nil {
+	const token = "0123456789abcdef0123456789abcdef"
+	if err := os.WriteFile(tokenPath, []byte(token+"\nignored"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("FEISHU_BOTD_AUTH_TOKEN_FILE", tokenPath)
@@ -177,8 +208,239 @@ func TestLoadFromEnvGRPCBindRequiresTokenFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load with token: %v", err)
 	}
-	if cfg.AuthToken != "abc123" {
-		t.Fatalf("auth token = %q", cfg.AuthToken)
+	if cfg.AuthToken != token {
+		t.Fatal("general bearer did not use the token file's first line")
+	}
+}
+
+func TestLoadFromEnvRejectsWeakGeneralBearerWithoutDisclosure(t *testing.T) {
+	setBaseEnv(t)
+	t.Setenv("FEISHU_BOTD_GRPC_BIND", "127.0.0.1:7346")
+	tokenPath := filepath.Join(t.TempDir(), "token")
+	const weakToken = "weak-general-bearer-fixture"
+	if err := os.WriteFile(tokenPath, []byte(weakToken+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FEISHU_BOTD_AUTH_TOKEN_FILE", tokenPath)
+
+	_, err := LoadFromEnv()
+	if err == nil || !strings.Contains(err.Error(), "general bearer token must be at least 32 bytes") {
+		t.Fatalf("expected minimum-length error, got %v", err)
+	}
+	if strings.Contains(err.Error(), weakToken) {
+		t.Fatal("configuration error exposed the general bearer token")
+	}
+}
+
+func TestLoadFromEnvRejectsNonLoopbackPlaintextGRPCEvenWithLANOptIn(t *testing.T) {
+	setBaseEnv(t)
+	tokenPath := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(tokenPath, []byte("fixture-general-token-0123456789abcdef01234567\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FEISHU_BOTD_GRPC_BIND", "0.0.0.0:7346")
+	t.Setenv("FEISHU_BOTD_ALLOW_NON_LOOPBACK_BIND", "true")
+	t.Setenv("FEISHU_BOTD_AUTH_TOKEN_FILE", tokenPath)
+
+	_, err := LoadFromEnv()
+	if err == nil || !strings.Contains(err.Error(), "plaintext") || !strings.Contains(err.Error(), "loopback") {
+		t.Fatalf("expected plaintext loopback error, got %v", err)
+	}
+}
+
+func TestLoadFromConfigFileLoadsScopedAgentProviderToken(t *testing.T) {
+	clearConfigEnv(t)
+	dir := t.TempDir()
+	tokenPath := filepath.Join(dir, "agent-token")
+	const token = "fixture-agent-token-0123456789abcdef0123456789"
+	const generalToken = "fixture-general-token-0123456789abcdef01234567"
+	if err := os.WriteFile(tokenPath, []byte(token+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	generalTokenPath := filepath.Join(dir, "general-token")
+	if err := os.WriteFile(generalTokenPath, []byte(generalToken+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(dir, "feishu-botd.json")
+	configJSON := `{
+  "feishu": {"app_id":"app_fixture","app_secret":"secret_fixture"},
+  "listeners": {
+    "grpc_socket":"/tmp/feishu-botd.fixture.sock",
+    "auth_token_file":"` + generalTokenPath + `"
+  },
+  "commands": {"enabled":true},
+  "agent_providers": {
+    "fixture-agent": {
+      "auth_token_file":"` + tokenPath + `",
+      "allowed_commands":[" /Ask ", "ask"],
+      "allow_unmatched_messages":true,
+      "allow_card_actions":true
+    }
+  }
+}`
+	if err := os.WriteFile(configPath, []byte(configJSON), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FEISHU_BOTD_CONFIG", configPath)
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("load provider token: %v", err)
+	}
+	if got := cfg.AgentProviders["fixture-agent"].AuthToken; got != token {
+		t.Fatal("configured provider token was not loaded")
+	}
+	if cfg.AuthToken != generalToken {
+		t.Fatal("scoped Unix general token was not loaded")
+	}
+	provider := cfg.AgentProviders["fixture-agent"]
+	if strings.Join(provider.AllowedCommands, ",") != "ask" || !provider.AllowUnmatchedMessages || !provider.AllowCardActions || provider.AllowLegacyCommands {
+		t.Fatalf("unexpected provider scope: commands=%q unmatched=%t actions=%t legacy=%t",
+			provider.AllowedCommands, provider.AllowUnmatchedMessages, provider.AllowCardActions, provider.AllowLegacyCommands)
+	}
+}
+
+func TestLoadFromConfigFileLoadsGeneralTokenForScopedUnixHTTP(t *testing.T) {
+	clearConfigEnv(t)
+	dir := t.TempDir()
+	const (
+		providerToken = "fixture-agent-token-0123456789abcdef0123456789"
+		generalToken  = "fixture-general-token-0123456789abcdef01234567"
+	)
+	providerTokenPath := filepath.Join(dir, "agent-token")
+	if err := os.WriteFile(providerTokenPath, []byte(providerToken+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	generalTokenPath := filepath.Join(dir, "general-token")
+	if err := os.WriteFile(generalTokenPath, []byte(generalToken+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(dir, "feishu-botd.json")
+	configJSON := `{
+  "feishu":{"app_id":"app_fixture","app_secret":"secret_fixture"},
+  "listeners":{
+    "http_socket":"/tmp/feishu-botd.fixture.http.sock",
+    "auth_token_file":"` + generalTokenPath + `"
+  },
+  "commands":{"enabled":true},
+  "agent_providers":{
+    "fixture-agent":{"auth_token_file":"` + providerTokenPath + `"}
+  }
+}`
+	if err := os.WriteFile(configPath, []byte(configJSON), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FEISHU_BOTD_CONFIG", configPath)
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("load scoped Unix HTTP config: %v", err)
+	}
+	if cfg.SocketPath != "/tmp/feishu-botd.fixture.http.sock" {
+		t.Fatalf("HTTP socket = %q", cfg.SocketPath)
+	}
+	if cfg.AuthToken != generalToken {
+		t.Fatal("scoped Unix HTTP general token was not loaded")
+	}
+}
+
+func TestAgentProviderStateTTLIncludesMessageUUIDRetryWindow(t *testing.T) {
+	const token = "fixture-agent-token-0123456789abcdef0123456789"
+	for _, test := range []struct {
+		name       string
+		dedupeSecs int
+		wantError  bool
+	}{
+		{name: "shorter than window and send budget", dedupeSecs: 3600, wantError: true},
+		{name: "window plus send budget", dedupeSecs: 3615},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			clearConfigEnv(t)
+			dir := t.TempDir()
+			tokenPath := filepath.Join(dir, "agent-token")
+			if err := os.WriteFile(tokenPath, []byte(token+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			configPath := filepath.Join(dir, "feishu-botd.json")
+			configJSON := `{
+  "feishu":{"app_id":"app_fixture","app_secret":"secret_fixture"},
+  "listeners":{"grpc_socket":"/tmp/feishu-botd.fixture.sock"},
+  "commands":{"enabled":true},
+  "agent_providers":{"fixture-agent":{"auth_token_file":"` + tokenPath + `"}},
+  "dedupe_ttl_seconds":` + strconv.Itoa(test.dedupeSecs) + `,
+  "send_timeout_seconds":15
+}`
+			if err := os.WriteFile(configPath, []byte(configJSON), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("FEISHU_BOTD_CONFIG", configPath)
+
+			_, err := LoadFromEnv()
+			if test.wantError {
+				if err == nil || !strings.Contains(err.Error(), "one hour plus send timeout") {
+					t.Fatalf("expected UUID retry-window error, got %v", err)
+				}
+			} else if err != nil {
+				t.Fatalf("load boundary TTL: %v", err)
+			}
+		})
+	}
+}
+
+func TestLoadFromConfigFileRejectsWeakDuplicateAndGeneralTokenCollisions(t *testing.T) {
+	const strongToken = "fixture-agent-token-0123456789abcdef0123456789"
+	tests := []struct {
+		name        string
+		tokens      []string
+		grpcTCP     bool
+		generalAuth bool
+		want        string
+	}{
+		{name: "weak", tokens: []string{"too-short"}, want: "at least 32 bytes"},
+		{name: "duplicate", tokens: []string{strongToken, strongToken}, want: "distinct auth tokens"},
+		{name: "TCP general collision", tokens: []string{strongToken}, grpcTCP: true, generalAuth: true, want: "general bearer token"},
+		{name: "scoped Unix general collision", tokens: []string{strongToken}, generalAuth: true, want: "general bearer token"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			clearConfigEnv(t)
+			dir := t.TempDir()
+			firstTokenPath := filepath.Join(dir, "provider-a-token")
+			if err := os.WriteFile(firstTokenPath, []byte(test.tokens[0]+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			providers := `"provider-a":{"auth_token_file":"` + firstTokenPath + `"}`
+			if len(test.tokens) > 1 {
+				secondTokenPath := filepath.Join(dir, "provider-b-token")
+				if err := os.WriteFile(secondTokenPath, []byte(test.tokens[1]+"\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				providers += `,"provider-b":{"auth_token_file":"` + secondTokenPath + `"}`
+			}
+			listener := `"grpc_socket":"/tmp/feishu-botd.fixture.sock"`
+			if test.grpcTCP {
+				listener = `"grpc_bind":"127.0.0.1:7346"`
+			}
+			if test.generalAuth {
+				listener += `,"auth_token_file":"` + firstTokenPath + `"`
+			}
+			configPath := filepath.Join(dir, "feishu-botd.json")
+			configJSON := `{"feishu":{"app_id":"app_fixture","app_secret":"secret_fixture"},"listeners":{` + listener + `},"commands":{"enabled":true},"agent_providers":{` + providers + `}}`
+			if err := os.WriteFile(configPath, []byte(configJSON), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("FEISHU_BOTD_CONFIG", configPath)
+
+			_, err := LoadFromEnv()
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("expected %q error, got %v", test.want, err)
+			}
+			for _, token := range test.tokens {
+				if strings.Contains(err.Error(), token) {
+					t.Fatal("configuration error exposed provider token")
+				}
+			}
+		})
 	}
 }
 
@@ -195,7 +457,8 @@ func TestLoadFromEnvLANBindRequiresOptInAndToken(t *testing.T) {
 	}
 
 	tokenPath := filepath.Join(t.TempDir(), "token")
-	if err := os.WriteFile(tokenPath, []byte("lan-token\n"), 0o600); err != nil {
+	const token = "fixture-lan-token-0123456789abcdef0123456789"
+	if err := os.WriteFile(tokenPath, []byte(token+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("FEISHU_BOTD_AUTH_TOKEN_FILE", tokenPath)
@@ -203,8 +466,8 @@ func TestLoadFromEnvLANBindRequiresOptInAndToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load with LAN bind: %v", err)
 	}
-	if !cfg.AllowLANBind || cfg.BindAddr != "0.0.0.0:7345" || cfg.AuthToken != "lan-token" {
-		t.Fatalf("unexpected config: %#v", cfg)
+	if !cfg.AllowLANBind || cfg.BindAddr != "0.0.0.0:7345" || cfg.AuthToken != token {
+		t.Fatal("LAN listener did not load the configured strong bearer")
 	}
 }
 
@@ -212,7 +475,8 @@ func TestLoadFromConfigFile(t *testing.T) {
 	clearConfigEnv(t)
 	dir := t.TempDir()
 	tokenPath := filepath.Join(dir, "token")
-	if err := os.WriteFile(tokenPath, []byte("file-token\n"), 0o600); err != nil {
+	const token = "fixture-file-token-0123456789abcdef012345678"
+	if err := os.WriteFile(tokenPath, []byte(token+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	configPath := filepath.Join(dir, "feishu-botd.json")
@@ -254,8 +518,8 @@ func TestLoadFromConfigFile(t *testing.T) {
 	if cfg.AppID != "cli_file" || cfg.AppSecret != "file-secret" {
 		t.Fatalf("feishu config = %#v", cfg)
 	}
-	if cfg.BindAddr != "0.0.0.0:7345" || !cfg.AllowLANBind || cfg.AuthToken != "file-token" {
-		t.Fatalf("listener config = %#v", cfg)
+	if cfg.BindAddr != "0.0.0.0:7345" || !cfg.AllowLANBind || cfg.AuthToken != token {
+		t.Fatal("listener config did not load the configured strong bearer")
 	}
 	if cfg.Channels["ci"] != "oc_ci" || cfg.DefaultChannel != "ops" || cfg.Services["jenkins"].DefaultChannel != "ci" {
 		t.Fatalf("routing config = %#v", cfg)

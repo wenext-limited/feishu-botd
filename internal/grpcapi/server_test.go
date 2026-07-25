@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -62,7 +63,7 @@ func (f *fakeSender) Send(ctx context.Context, chatID string, req notify.Request
 
 func validNotifyRequest(channel, dedupeKey string) *pb.SendNotificationRequest {
 	return &pb.SendNotificationRequest{
-		Source:        "xipe",
+		Source:        "example-service",
 		SourceEventId: "evt_1",
 		DedupeKey:     dedupeKey,
 		Severity:      pb.Severity_SEVERITY_CRITICAL,
@@ -128,15 +129,16 @@ func startUnixServerWithService(t *testing.T, cfg config.Config, sender *fakeSen
 	return conn, svc
 }
 
-func dial(t *testing.T, dialer func(context.Context) (net.Conn, error)) *grpc.ClientConn {
+func dial(t *testing.T, dialer func(context.Context) (net.Conn, error), extraOptions ...grpc.DialOption) *grpc.ClientConn {
 	t.Helper()
-	conn, err := grpc.NewClient(
-		"passthrough:///feishu-botd",
+	options := []grpc.DialOption{
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
 			return dialer(ctx)
 		}),
-	)
+	}
+	options = append(options, extraOptions...)
+	conn, err := grpc.NewClient("passthrough:///feishu-botd", options...)
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
@@ -163,6 +165,24 @@ func waitHealthy(t *testing.T, conn *grpc.ClientConn, errCh chan error) {
 		}
 	}
 	t.Fatalf("grpc server did not become ready: %v", lastErr)
+}
+
+func TestServeTCPRejectsActualNonLoopbackListener(t *testing.T) {
+	cfg := testConfig()
+	cfg.AuthToken = "public-test-token"
+	srv := newTestServer(cfg, &fakeSender{messageID: "unused"})
+	ln, err := net.Listen("tcp", "0.0.0.0:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = srv.serveTCP(context.Background(), ln)
+	if err == nil || !strings.Contains(err.Error(), "plaintext") || !strings.Contains(err.Error(), "loopback") {
+		t.Fatalf("expected plaintext loopback rejection, got %v", err)
+	}
+	if closeErr := ln.Close(); closeErr == nil {
+		t.Fatal("rejected listener was not closed")
+	}
 }
 
 func channelTarget(alias string) *pb.MessageTarget {
@@ -197,7 +217,7 @@ func TestGRPCUnixHealthAndNotify(t *testing.T) {
 
 	nc := pb.NewNotificationServiceClient(conn)
 	req := &pb.SendNotificationRequest{
-		Source:        "xipe",
+		Source:        "example-service",
 		SourceEventId: "evt_1",
 		DedupeKey:     "k1",
 		Severity:      pb.Severity_SEVERITY_CRITICAL,
@@ -336,7 +356,7 @@ func TestGRPCCommandSubscribeAndRespond(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	stream, err := cc.Subscribe(ctx, &pb.SubscribeRequest{Provider: "xipe", Commands: []string{"status"}})
+	stream, err := cc.Subscribe(ctx, &pb.SubscribeRequest{Provider: "example-service", Commands: []string{"status"}})
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
@@ -349,7 +369,11 @@ func TestGRPCCommandSubscribeAndRespond(t *testing.T) {
 			Text:       "prod",
 			ChatAlias:  "ops",
 			SenderID:   "ou_sender",
-			Metadata:   map[string]string{"message_id": "om_1"},
+			Metadata: map[string]string{
+				"chat_type": "group", "message_type": "text",
+				"event_id": "event_private", "message_id": "message_private",
+				"thread_id": "thread_private", "root_id": "root_private", "parent_id": "parent_private",
+			},
 		})
 		if delivered == 1 {
 			break
@@ -368,6 +392,14 @@ func TestGRPCCommandSubscribeAndRespond(t *testing.T) {
 	if cmd.GetDeliveryId() != "evt_1" || cmd.GetCommand() != "status" || cmd.GetText() != "prod" || cmd.GetChatAlias() != "ops" {
 		t.Fatalf("command = %#v", cmd)
 	}
+	if len(cmd.GetMetadata()) != 2 || cmd.GetMetadata()["chat_type"] != "group" || cmd.GetMetadata()["message_type"] != "text" {
+		t.Fatalf("provider-safe command metadata = %#v", cmd.GetMetadata())
+	}
+	for _, privateKey := range []string{"event_id", "message_id", "thread_id", "root_id", "parent_id"} {
+		if _, exposed := cmd.GetMetadata()[privateKey]; exposed {
+			t.Fatalf("private metadata key %q crossed the provider boundary", privateKey)
+		}
+	}
 
 	resp, err := cc.Respond(context.Background(), &pb.RespondRequest{
 		DeliveryId: "evt_1",
@@ -379,7 +411,7 @@ func TestGRPCCommandSubscribeAndRespond(t *testing.T) {
 	if !resp.GetAccepted() {
 		t.Fatalf("response not accepted: %#v", resp)
 	}
-	if sender.chatID != "oc_test" || sender.request.Markdown != "all good" || sender.request.Target.Channel != "ops" {
+	if sender.chatID != "oc_test" || sender.request.Markdown != "all good" || sender.request.Target.Channel != "ops" || sender.request.ReplyToMessageID != "message_private" {
 		t.Fatalf("reply chat=%q request=%#v", sender.chatID, sender.request)
 	}
 

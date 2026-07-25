@@ -17,16 +17,22 @@ func grpcCode(apiErr *notify.APIError) codes.Code {
 		return codes.InvalidArgument
 	case 401:
 		return codes.Unauthenticated
+	case 403:
+		return codes.PermissionDenied
 	case 404:
 		return codes.NotFound
 	case 409:
-		if apiErr.Code == "dedupe_in_flight" || apiErr.Code == "response_in_flight" {
+		if apiErr.Code == "dedupe_in_flight" || apiErr.Code == "response_in_flight" || apiErr.Code == "operation_in_flight" || apiErr.Code == "revision_conflict" {
 			return codes.Aborted
 		}
 		return codes.AlreadyExists
+	case 412:
+		return codes.FailedPrecondition
+	case 429:
+		return codes.ResourceExhausted
 	case 501:
 		return codes.Unimplemented
-	case 502:
+	case 502, 503:
 		return codes.Unavailable
 	default:
 		return codes.Internal

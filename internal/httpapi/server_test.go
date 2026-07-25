@@ -59,7 +59,7 @@ func testServer(sender *fakeSender) *Server {
 }
 
 func validBody() []byte {
-	body := notify.Request{Source: "xipe", SourceEventID: "evt_1", DedupeKey: "xipe:evt_1:ops", Severity: "critical", Title: "Title", Markdown: "**Body**", Target: notify.Target{Channel: "ops"}, Metadata: map[string]string{"trigger": "reauth_required"}}
+	body := notify.Request{Source: "example-service", SourceEventID: "evt_1", DedupeKey: "example-service:evt_1:ops", Severity: "critical", Title: "Title", Markdown: "**Body**", Target: notify.Target{Channel: "ops"}, Metadata: map[string]string{"trigger": "reauth_required"}}
 	data, _ := json.Marshal(body)
 	return data
 }
@@ -96,6 +96,121 @@ func TestHealthAndReady(t *testing.T) {
 	server.handler(false).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("ready status = %d", rec.Code)
+	}
+}
+
+func TestScopedUnixHTTPRequiresGeneralBearerForOutboundRoutes(t *testing.T) {
+	const (
+		generalToken  = "fixture-general-token-0123456789abcdef01234567"
+		providerToken = "fixture-agent-token-0123456789abcdef0123456789"
+	)
+	requests := []struct {
+		name string
+		path string
+		body func() []byte
+	}{
+		{name: "notify", path: "/v1/notify", body: validBody},
+		{name: "message", path: "/v1/message", body: validMessageCardBody},
+	}
+	credentials := []struct {
+		name       string
+		token      string
+		wantStatus int
+		wantCalls  int
+	}{
+		{name: "missing", wantStatus: http.StatusUnauthorized},
+		{name: "provider", token: providerToken, wantStatus: http.StatusUnauthorized},
+		{name: "general", token: generalToken, wantStatus: http.StatusOK, wantCalls: 1},
+	}
+
+	for _, request := range requests {
+		for _, credential := range credentials {
+			t.Run(request.name+"/"+credential.name, func(t *testing.T) {
+				sender := &fakeSender{messageID: "om_scoped"}
+				server := testServer(sender)
+				server.cfg.AuthToken = generalToken
+				server.cfg.AgentProviders = map[string]config.AgentProviderConfig{
+					"fixture-agent": {AuthToken: providerToken},
+				}
+
+				rec := httptest.NewRecorder()
+				req := httptest.NewRequest(http.MethodPost, request.path, bytes.NewReader(request.body()))
+				if credential.token != "" {
+					req.Header.Set("Authorization", "Bearer "+credential.token)
+				}
+				server.unixHandler().ServeHTTP(rec, req)
+
+				if rec.Code != credential.wantStatus {
+					t.Fatalf("status = %d, want %d; body=%s", rec.Code, credential.wantStatus, rec.Body.String())
+				}
+				if sender.calls != credential.wantCalls {
+					t.Fatalf("sender calls = %d, want %d", sender.calls, credential.wantCalls)
+				}
+			})
+		}
+	}
+}
+
+func TestScopedUnixHTTPWithoutGeneralTokenFailsClosed(t *testing.T) {
+	server := testServer(&fakeSender{messageID: "om_scoped"})
+	server.cfg.AuthToken = ""
+	server.cfg.AgentProviders = map[string]config.AgentProviderConfig{
+		"fixture-agent": {AuthToken: "fixture-agent-token-0123456789abcdef0123456789"},
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/notify", bytes.NewReader(validBody()))
+	req.Header.Set("Authorization", "Bearer fixture-agent-token-0123456789abcdef0123456789")
+	server.unixHandler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusUnauthorized, rec.Body.String())
+	}
+}
+
+func TestScopedUnixHTTPHealthAndReadinessRemainPublic(t *testing.T) {
+	server := testServer(&fakeSender{messageID: "om_scoped"})
+	server.cfg.AuthToken = ""
+	server.cfg.AgentProviders = map[string]config.AgentProviderConfig{
+		"fixture-agent": {AuthToken: "fixture-agent-token-0123456789abcdef0123456789"},
+	}
+
+	for _, path := range []string{"/healthz", "/readyz"} {
+		t.Run(path, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			server.unixHandler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestLegacyUnixHTTPWithoutProvidersRetainsLocalTrust(t *testing.T) {
+	requests := []struct {
+		name string
+		path string
+		body func() []byte
+	}{
+		{name: "notify", path: "/v1/notify", body: validBody},
+		{name: "message", path: "/v1/message", body: validMessageCardBody},
+	}
+
+	for _, request := range requests {
+		t.Run(request.name, func(t *testing.T) {
+			sender := &fakeSender{messageID: "om_legacy"}
+			server := testServer(sender)
+			server.cfg.AuthToken = ""
+			server.cfg.AgentProviders = nil
+
+			rec := httptest.NewRecorder()
+			server.unixHandler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, request.path, bytes.NewReader(request.body())))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+			}
+			if sender.calls != 1 {
+				t.Fatalf("sender calls = %d, want 1", sender.calls)
+			}
+		})
 	}
 }
 

@@ -5,12 +5,19 @@ callers. It delegates to the same internal service logic as the gRPC contract;
 new integrations should prefer gRPC. See [ipc.md](./ipc.md) for the
 protobuf-first contract, the equivalent gRPC RPCs, and the shared error model.
 
+TCP requests to the two `POST` routes require the general bearer token. Unix
+socket requests also require that same distinct general bearer whenever
+`agent_providers` is configured; a provider token does not authorize HTTP
+sends, and omitting the general token makes those routes fail closed. Unix
+deployments without `agent_providers` retain legacy local trust. `GET /healthz`
+and `GET /readyz` remain unauthenticated on both transports.
+
 ## `GET /healthz`
 
 Returns process liveness only.
 
 ```json
-{"status":"ok","service":"feishu-botd","version":"0.1.0"}
+{"status":"ok","service":"feishu-botd","version":"0.2.0"}
 ```
 
 ## `GET /readyz`
@@ -24,15 +31,15 @@ Sends one notification to a configured local channel.
 
 ```json
 {
-  "source": "xipe",
-  "source_event_id": "01J...",
-  "dedupe_key": "xipe:account-condition:01J...:ops",
+  "source": "monitoring",
+  "source_event_id": "REPLACE_WITH_SOURCE_EVENT_ID",
+  "dedupe_key": "monitoring:service-health:event-001:ops",
   "severity": "critical",
-  "title": "Xipe account needs re-auth",
-  "markdown": "**Account**: acct_123",
+  "title": "Service health check failed",
+  "markdown": "**Service**: example-api",
   "target": { "channel": "ops" },
   "links": [],
-  "metadata": { "trigger": "reauth_required" }
+  "metadata": { "trigger": "health_check_failed" }
 }
 ```
 
@@ -42,8 +49,8 @@ Successful response:
 {
   "status": "sent",
   "provider": "feishu",
-  "dedupe_key": "xipe:account-condition:01J...:ops",
-  "message_id": "om_xxx",
+  "dedupe_key": "monitoring:service-health:event-001:ops",
+  "message_id": "REPLACE_WITH_MESSAGE_ID",
   "duplicate": false
 }
 ```
@@ -56,7 +63,7 @@ Errors are redacted:
     "code": "feishu_unavailable",
     "message": "Feishu send failed",
     "retryable": true,
-    "request_id": "req_..."
+    "request_id": "REPLACE_WITH_REQUEST_ID"
   }
 }
 ```
@@ -79,11 +86,11 @@ Markdown:
 
 ```json
 {
-  "source": "jenkins",
-  "dedupe_key": "jenkins:build:123",
+  "source": "build-monitor",
+  "dedupe_key": "build-monitor:build:123",
   "markdown": {
     "title": "Build succeeded",
-    "markdown": "**Project**: WeNext"
+    "markdown": "**Project**: example-app"
   }
 }
 ```
@@ -92,13 +99,13 @@ Interactive card:
 
 ```json
 {
-  "source": "jenkins",
-  "dedupe_key": "jenkins:build:123",
+  "source": "build-monitor",
+  "dedupe_key": "build-monitor:build:123",
   "msg_type": "interactive",
   "card": {
     "type": "template",
     "data": {
-      "template_id": "AAqBgzXLgNKzZ",
+      "template_id": "REPLACE_WITH_TEMPLATE_ID",
       "template_version_name": "1.0.3",
       "template_variable": {
         "title": "Build succeeded"
@@ -113,7 +120,7 @@ Successful response:
 ```json
 {
   "provider": "feishu",
-  "message_id": "om_xxx",
+  "message_id": "REPLACE_WITH_MESSAGE_ID",
   "duplicate": false
 }
 ```

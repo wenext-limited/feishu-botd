@@ -19,8 +19,12 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	CommandService_Subscribe_FullMethodName = "/feishubotd.v1.CommandService/Subscribe"
-	CommandService_Respond_FullMethodName   = "/feishubotd.v1.CommandService/Respond"
+	CommandService_Subscribe_FullMethodName            = "/feishubotd.v1.CommandService/Subscribe"
+	CommandService_Respond_FullMethodName              = "/feishubotd.v1.CommandService/Respond"
+	CommandService_SubscribeAgentEvents_FullMethodName = "/feishubotd.v1.CommandService/SubscribeAgentEvents"
+	CommandService_StartAgentResponse_FullMethodName   = "/feishubotd.v1.CommandService/StartAgentResponse"
+	CommandService_UpdateAgentResponse_FullMethodName  = "/feishubotd.v1.CommandService/UpdateAgentResponse"
+	CommandService_FinishAgentResponse_FullMethodName  = "/feishubotd.v1.CommandService/FinishAgentResponse"
 )
 
 // CommandServiceClient is the client API for CommandService service.
@@ -33,8 +37,18 @@ const (
 // is deliberate: inbound is push-shaped, and a stream avoids polling and keeps
 // Feishu credentials inside botd.
 type CommandServiceClient interface {
+	// Provider credentials travel in gRPC authorization metadata, never message
+	// fields. Agent RPCs always require them; legacy Subscribe/Respond require
+	// them when the daemon configures scoped agent_providers.
 	Subscribe(ctx context.Context, in *SubscribeRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[SubscribeResponse], error)
 	Respond(ctx context.Context, in *RespondRequest, opts ...grpc.CallOption) (*RespondResponse, error)
+	// SubscribeAgentEvents is the full-fidelity agent ingress path. It is kept
+	// separate from Subscribe so existing command consumers never receive an
+	// event variant they do not understand.
+	SubscribeAgentEvents(ctx context.Context, in *SubscribeAgentEventsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[SubscribeAgentEventsResponse], error)
+	StartAgentResponse(ctx context.Context, in *StartAgentResponseRequest, opts ...grpc.CallOption) (*StartAgentResponseResponse, error)
+	UpdateAgentResponse(ctx context.Context, in *UpdateAgentResponseRequest, opts ...grpc.CallOption) (*UpdateAgentResponseResponse, error)
+	FinishAgentResponse(ctx context.Context, in *FinishAgentResponseRequest, opts ...grpc.CallOption) (*FinishAgentResponseResponse, error)
 }
 
 type commandServiceClient struct {
@@ -74,6 +88,55 @@ func (c *commandServiceClient) Respond(ctx context.Context, in *RespondRequest, 
 	return out, nil
 }
 
+func (c *commandServiceClient) SubscribeAgentEvents(ctx context.Context, in *SubscribeAgentEventsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[SubscribeAgentEventsResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &CommandService_ServiceDesc.Streams[1], CommandService_SubscribeAgentEvents_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[SubscribeAgentEventsRequest, SubscribeAgentEventsResponse]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type CommandService_SubscribeAgentEventsClient = grpc.ServerStreamingClient[SubscribeAgentEventsResponse]
+
+func (c *commandServiceClient) StartAgentResponse(ctx context.Context, in *StartAgentResponseRequest, opts ...grpc.CallOption) (*StartAgentResponseResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(StartAgentResponseResponse)
+	err := c.cc.Invoke(ctx, CommandService_StartAgentResponse_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *commandServiceClient) UpdateAgentResponse(ctx context.Context, in *UpdateAgentResponseRequest, opts ...grpc.CallOption) (*UpdateAgentResponseResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UpdateAgentResponseResponse)
+	err := c.cc.Invoke(ctx, CommandService_UpdateAgentResponse_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *commandServiceClient) FinishAgentResponse(ctx context.Context, in *FinishAgentResponseRequest, opts ...grpc.CallOption) (*FinishAgentResponseResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(FinishAgentResponseResponse)
+	err := c.cc.Invoke(ctx, CommandService_FinishAgentResponse_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // CommandServiceServer is the server API for CommandService service.
 // All implementations must embed UnimplementedCommandServiceServer
 // for forward compatibility.
@@ -84,8 +147,18 @@ func (c *commandServiceClient) Respond(ctx context.Context, in *RespondRequest, 
 // is deliberate: inbound is push-shaped, and a stream avoids polling and keeps
 // Feishu credentials inside botd.
 type CommandServiceServer interface {
+	// Provider credentials travel in gRPC authorization metadata, never message
+	// fields. Agent RPCs always require them; legacy Subscribe/Respond require
+	// them when the daemon configures scoped agent_providers.
 	Subscribe(*SubscribeRequest, grpc.ServerStreamingServer[SubscribeResponse]) error
 	Respond(context.Context, *RespondRequest) (*RespondResponse, error)
+	// SubscribeAgentEvents is the full-fidelity agent ingress path. It is kept
+	// separate from Subscribe so existing command consumers never receive an
+	// event variant they do not understand.
+	SubscribeAgentEvents(*SubscribeAgentEventsRequest, grpc.ServerStreamingServer[SubscribeAgentEventsResponse]) error
+	StartAgentResponse(context.Context, *StartAgentResponseRequest) (*StartAgentResponseResponse, error)
+	UpdateAgentResponse(context.Context, *UpdateAgentResponseRequest) (*UpdateAgentResponseResponse, error)
+	FinishAgentResponse(context.Context, *FinishAgentResponseRequest) (*FinishAgentResponseResponse, error)
 	mustEmbedUnimplementedCommandServiceServer()
 }
 
@@ -101,6 +174,18 @@ func (UnimplementedCommandServiceServer) Subscribe(*SubscribeRequest, grpc.Serve
 }
 func (UnimplementedCommandServiceServer) Respond(context.Context, *RespondRequest) (*RespondResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Respond not implemented")
+}
+func (UnimplementedCommandServiceServer) SubscribeAgentEvents(*SubscribeAgentEventsRequest, grpc.ServerStreamingServer[SubscribeAgentEventsResponse]) error {
+	return status.Errorf(codes.Unimplemented, "method SubscribeAgentEvents not implemented")
+}
+func (UnimplementedCommandServiceServer) StartAgentResponse(context.Context, *StartAgentResponseRequest) (*StartAgentResponseResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method StartAgentResponse not implemented")
+}
+func (UnimplementedCommandServiceServer) UpdateAgentResponse(context.Context, *UpdateAgentResponseRequest) (*UpdateAgentResponseResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UpdateAgentResponse not implemented")
+}
+func (UnimplementedCommandServiceServer) FinishAgentResponse(context.Context, *FinishAgentResponseRequest) (*FinishAgentResponseResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method FinishAgentResponse not implemented")
 }
 func (UnimplementedCommandServiceServer) mustEmbedUnimplementedCommandServiceServer() {}
 func (UnimplementedCommandServiceServer) testEmbeddedByValue()                        {}
@@ -152,6 +237,71 @@ func _CommandService_Respond_Handler(srv interface{}, ctx context.Context, dec f
 	return interceptor(ctx, in, info, handler)
 }
 
+func _CommandService_SubscribeAgentEvents_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(SubscribeAgentEventsRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(CommandServiceServer).SubscribeAgentEvents(m, &grpc.GenericServerStream[SubscribeAgentEventsRequest, SubscribeAgentEventsResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type CommandService_SubscribeAgentEventsServer = grpc.ServerStreamingServer[SubscribeAgentEventsResponse]
+
+func _CommandService_StartAgentResponse_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(StartAgentResponseRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CommandServiceServer).StartAgentResponse(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CommandService_StartAgentResponse_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CommandServiceServer).StartAgentResponse(ctx, req.(*StartAgentResponseRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _CommandService_UpdateAgentResponse_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateAgentResponseRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CommandServiceServer).UpdateAgentResponse(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CommandService_UpdateAgentResponse_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CommandServiceServer).UpdateAgentResponse(ctx, req.(*UpdateAgentResponseRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _CommandService_FinishAgentResponse_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(FinishAgentResponseRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CommandServiceServer).FinishAgentResponse(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CommandService_FinishAgentResponse_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CommandServiceServer).FinishAgentResponse(ctx, req.(*FinishAgentResponseRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // CommandService_ServiceDesc is the grpc.ServiceDesc for CommandService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -163,11 +313,28 @@ var CommandService_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "Respond",
 			Handler:    _CommandService_Respond_Handler,
 		},
+		{
+			MethodName: "StartAgentResponse",
+			Handler:    _CommandService_StartAgentResponse_Handler,
+		},
+		{
+			MethodName: "UpdateAgentResponse",
+			Handler:    _CommandService_UpdateAgentResponse_Handler,
+		},
+		{
+			MethodName: "FinishAgentResponse",
+			Handler:    _CommandService_FinishAgentResponse_Handler,
+		},
 	},
 	Streams: []grpc.StreamDesc{
 		{
 			StreamName:    "Subscribe",
 			Handler:       _CommandService_Subscribe_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "SubscribeAgentEvents",
+			Handler:       _CommandService_SubscribeAgentEvents_Handler,
 			ServerStreams: true,
 		},
 	},

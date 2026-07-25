@@ -200,7 +200,7 @@ func (x *Link) GetUrl() string {
 	return ""
 }
 
-// MarkdownContent is the only content kind implemented in v1.
+// MarkdownContent carries a titled markdown body.
 type MarkdownContent struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Title         string                 `protobuf:"bytes,1,opt,name=title,proto3" json:"title,omitempty"`

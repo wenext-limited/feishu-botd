@@ -1,5 +1,9 @@
 .git
 .gitignore
+.agents
+.codex
+AGENTS.md
+.DS_Store
 .env
 config/feishu-botd.json
 secrets
@@ -9,3 +13,5 @@ tmp
 *.log
 Dockerfile
 deploy/*.local.*
+/scripts/*.sh
+!/scripts/*.example.sh

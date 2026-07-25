@@ -32,7 +32,7 @@ func TestTargetChannel(t *testing.T) {
 
 func TestNotifyRequestFromProto(t *testing.T) {
 	in := &pb.SendNotificationRequest{
-		Source:        "xipe",
+		Source:        "example-service",
 		SourceEventId: "evt_1",
 		DedupeKey:     "k1",
 		Severity:      pb.Severity_SEVERITY_CRITICAL,
@@ -43,7 +43,7 @@ func TestNotifyRequestFromProto(t *testing.T) {
 		Metadata:      map[string]string{"k": "v"},
 	}
 	req := notifyRequestFromProto(in)
-	if req.Source != "xipe" || req.SourceEventID != "evt_1" || req.DedupeKey != "k1" {
+	if req.Source != "example-service" || req.SourceEventID != "evt_1" || req.DedupeKey != "k1" {
 		t.Fatalf("identity fields = %#v", req)
 	}
 	if req.Severity != "critical" || req.Title != "Title" || req.Markdown != "**body**" {

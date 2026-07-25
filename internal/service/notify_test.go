@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"log/slog"
@@ -10,6 +11,7 @@ import (
 
 	"feishu-botd/internal/config"
 	"feishu-botd/internal/dedupe"
+	"feishu-botd/internal/feishu"
 	"feishu-botd/internal/notify"
 )
 
@@ -56,9 +58,9 @@ func newTestService(sender *fakeSender) *Service {
 
 func validRequest() notify.Request {
 	return notify.Request{
-		Source:        "xipe",
+		Source:        "example-service",
 		SourceEventID: "evt_1",
-		DedupeKey:     "xipe:evt_1:ops",
+		DedupeKey:     "example-service:evt_1:ops",
 		Severity:      "critical",
 		Title:         "Title",
 		Markdown:      "**Body**",
@@ -174,6 +176,44 @@ func TestSendNotificationProviderFailureAbortsReservation(t *testing.T) {
 	}
 	if sender.calls != 2 {
 		t.Fatalf("sender calls = %d, want 2", sender.calls)
+	}
+}
+
+func TestSendNotificationLogsNoRequestOrProviderErrorContent(t *testing.T) {
+	const (
+		providerMessage = "PRIVATE_PROVIDER_ERROR_BODY"
+		sourceValue     = "PRIVATE_SOURCE_NAME"
+		eventValue      = "PRIVATE_SOURCE_EVENT_ID"
+		dedupeValue     = "PRIVATE_DEDUPE_CAPABILITY"
+	)
+	var logs bytes.Buffer
+	sender := &fakeSender{err: &feishu.DynamicCardAPIError{
+		Operation: "message reply", HTTPStatus: 504, Code: 230999,
+		Message: providerMessage, RequestID: "req_safe_support_handle",
+	}}
+	svc := newTestService(sender)
+	svc.logger = slog.New(slog.NewJSONHandler(&logs, nil))
+	req := validRequest()
+	req.Source = sourceValue
+	req.SourceEventID = eventValue
+	req.DedupeKey = dedupeValue
+
+	if _, apiErr := svc.SendNotification(context.Background(), req); apiErr == nil || apiErr.Code != "feishu_unavailable" {
+		t.Fatalf("provider failure = %v", apiErr)
+	}
+	output := logs.String()
+	for _, forbidden := range []string{providerMessage, sourceValue, eventValue, dedupeValue, "message reply", "oc_test", "ops"} {
+		if strings.Contains(output, forbidden) {
+			t.Fatalf("notification log leaked request/provider content")
+		}
+	}
+	for _, required := range []string{
+		`"operation":"notify"`, `"correlation":"notification_`,
+		`"http_status":504`, `"code":230999`, `"request_id":"req_safe_support_handle"`,
+	} {
+		if !strings.Contains(output, required) {
+			t.Fatalf("notification failure log is missing safe field %q: %s", required, output)
+		}
 	}
 }
 

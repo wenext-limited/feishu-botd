@@ -46,18 +46,27 @@ func main() {
 			BotNames:   cfg.Commands.BotNames,
 		}, func(ctx context.Context, cmd feishu.InboundCommand) error {
 			_, apiErr := svc.DispatchCommand(ctx, service.CommandInput{
-				DeliveryID: cmd.DeliveryID,
-				Command:    cmd.Command,
-				Text:       cmd.Text,
-				ChatAlias:  cmd.ChatAlias,
-				SenderID:   cmd.SenderID,
-				Metadata:   cmd.Metadata,
+				DeliveryID:     cmd.DeliveryID,
+				Command:        cmd.Command,
+				Text:           cmd.Text,
+				Prompt:         cmd.Prompt,
+				ConversationID: cmd.ConversationID,
+				ChatAlias:      cmd.ChatAlias,
+				SenderID:       cmd.SenderID,
+				Metadata:       cmd.Metadata,
+				ChatID:         cmd.ChatID,
 			})
 			if apiErr != nil {
 				return apiErr
 			}
 			return nil
 		}, logger)
+		commandReceiver.SetCardActionHandler(func(ctx context.Context, action feishu.InboundCardAction) error {
+			if apiErr := svc.DispatchInboundCardAction(ctx, action); apiErr != nil {
+				return apiErr
+			}
+			return nil
+		})
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -85,11 +94,14 @@ func main() {
 				go func(cmd service.CommandInput) {
 					title, markdown := executor.Run(context.Background(), cmd.ChatAlias, cmd.Text)
 					if apiErr := svc.RespondCommand(context.Background(), service.CommandResponse{
+						Provider:   "script-executor",
 						DeliveryID: cmd.DeliveryID,
 						Title:      title,
 						Markdown:   markdown,
 					}); apiErr != nil {
-						logger.Error("script command respond failed", "delivery", cmd.DeliveryID, "error", apiErr)
+						// The response error may embed provider or routing details. Keep
+						// daemon logs content-free at this public integration boundary.
+						logger.Error("script command respond failed")
 					}
 				}(cmd)
 			}

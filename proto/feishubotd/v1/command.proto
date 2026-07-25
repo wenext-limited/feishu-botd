@@ -12,8 +12,19 @@ option go_package = "feishu-botd/gen/feishubotd/v1;feishubotdv1";
 // is deliberate: inbound is push-shaped, and a stream avoids polling and keeps
 // Feishu credentials inside botd.
 service CommandService {
+  // Provider credentials travel in gRPC authorization metadata, never message
+  // fields. Agent RPCs always require them; legacy Subscribe/Respond require
+  // them when the daemon configures scoped agent_providers.
   rpc Subscribe(SubscribeRequest) returns (stream SubscribeResponse);
   rpc Respond(RespondRequest) returns (RespondResponse);
+
+  // SubscribeAgentEvents is the full-fidelity agent ingress path. It is kept
+  // separate from Subscribe so existing command consumers never receive an
+  // event variant they do not understand.
+  rpc SubscribeAgentEvents(SubscribeAgentEventsRequest) returns (stream SubscribeAgentEventsResponse);
+  rpc StartAgentResponse(StartAgentResponseRequest) returns (StartAgentResponseResponse);
+  rpc UpdateAgentResponse(UpdateAgentResponseRequest) returns (UpdateAgentResponseResponse);
+  rpc FinishAgentResponse(FinishAgentResponseRequest) returns (FinishAgentResponseResponse);
 }
 
 // ProviderService is the FUTURE pull path (botd asks a registered client to
@@ -26,7 +37,9 @@ service ProviderService {
 }
 
 message SubscribeRequest {
-  string provider = 1; // logical provider id, e.g. "xipe"
+  // Logical id (e.g. "example-service"). In scoped mode it must match the
+  // bearer-authenticated principal and commands must be config-allowed.
+  string provider = 1;
   repeated string commands = 2; // command names this provider handles
   reserved 3 to 15;
 }
@@ -37,11 +50,14 @@ message SubscribeResponse {
 }
 
 message InboundCommand {
+  // Opaque botd-derived retry/claim handle; never a raw Feishu event id.
   string delivery_id = 1; // echo in RespondRequest
   string command = 2; // e.g. "status"
   string text = 3; // remaining args
   string chat_alias = 4; // resolved alias, never a raw chat id
   string sender_id = 5; // opaque Feishu sender id
+  // Provider-safe allowlist (currently chat_type and message_type). Raw Feishu
+  // event, message, thread, root, parent, and chat ids are omitted.
   map<string, string> metadata = 6;
   reserved 7 to 31;
 }
@@ -57,6 +73,139 @@ message RespondRequest {
 
 message RespondResponse {
   bool accepted = 1;
+}
+
+// SubscribeAgentEventsRequest selects the provider-owned agent event stream.
+// Exact command matches win. include_unmatched_messages receives P2P prompts
+// and otherwise-unhandled group mentions, which is the natural chat-agent mode.
+message SubscribeAgentEventsRequest {
+  // Must match the bearer-authenticated principal. Every selector below is
+  // checked against that principal's configured allowlist before registration.
+  string provider = 1;
+  repeated string commands = 2;
+  bool include_unmatched_messages = 3;
+  bool include_card_actions = 4;
+  reserved 5 to 15;
+}
+
+message SubscribeAgentEventsResponse {
+  InboundAgentEvent event = 1;
+}
+
+message InboundAgentEvent {
+  // Opaque botd-derived retry/claim handle; never a raw Feishu event id.
+  string delivery_id = 1;
+  string conversation_id = 2; // opaque botd-derived conversation identity
+  string chat_alias = 3; // configured alias or "direct"; never a raw chat id
+  string sender_id = 4; // opaque Feishu sender identity
+  map<string, string> metadata = 5;
+  oneof payload {
+    InboundAgentMessage message = 10;
+    InboundCardAction card_action = 11;
+  }
+  reserved 6 to 9, 12 to 31;
+}
+
+message InboundAgentMessage {
+  string text = 1; // complete mention-stripped prompt; newlines are preserved
+  string command = 2; // optional normalized first word
+  string command_text = 3; // optional remainder for command-style agents
+}
+
+message InboundCardAction {
+  string response_id = 1;
+  string action_id = 2;
+  // Normalized JSON object containing typed Feishu action and form values.
+  // Callback tokens, card ids, message ids, and raw chat ids are omitted.
+  string payload_json = 3;
+}
+
+message AgentResponseContent {
+  string title = 1;
+  // Always the complete accumulated answer, never a token delta.
+  string markdown = 2;
+  repeated AgentResponseAction actions = 3;
+  reserved 4 to 15;
+}
+
+message AgentResponseAction {
+  string action_id = 1;
+  string label = 2;
+  // Optional JSON object returned unchanged inside an action event payload.
+  string payload_json = 3;
+  AgentResponseActionStyle style = 4;
+}
+
+enum AgentResponseActionStyle {
+  AGENT_RESPONSE_ACTION_STYLE_UNSPECIFIED = 0;
+  AGENT_RESPONSE_ACTION_STYLE_DEFAULT = 1;
+  AGENT_RESPONSE_ACTION_STYLE_PRIMARY = 2;
+  AGENT_RESPONSE_ACTION_STYLE_DANGER = 3;
+}
+
+message StartAgentResponseRequest {
+  string provider = 1; // must match the bearer-authenticated principal
+  string delivery_id = 2;
+  // Provider-generated idempotency key. Reusing it with different content is
+  // rejected; retrying the same operation returns duplicate=true.
+  string operation_id = 3;
+  AgentResponseContent content = 10;
+  reserved 4 to 9, 11 to 31;
+}
+
+message UpdateAgentResponseRequest {
+  string provider = 1; // must match the bearer-authenticated principal
+  string response_id = 2;
+  string operation_id = 3;
+  uint64 expected_revision = 4;
+  // Complete accumulated answer. The initial successful Start has revision 1.
+  string markdown = 10;
+  reserved 5 to 9, 11 to 31;
+}
+
+message FinishAgentResponseRequest {
+  string provider = 1; // must match the bearer-authenticated principal
+  string response_id = 2;
+  string operation_id = 3;
+  uint64 expected_revision = 4;
+  AgentResponseOutcome outcome = 5;
+  string markdown = 10; // complete final answer
+  string summary = 11; // compact fallback/notification text for the final card
+  reserved 6 to 9, 12 to 31;
+}
+
+enum AgentResponseOutcome {
+  AGENT_RESPONSE_OUTCOME_UNSPECIFIED = 0;
+  AGENT_RESPONSE_OUTCOME_COMPLETED = 1;
+  AGENT_RESPONSE_OUTCOME_FAILED = 2;
+  AGENT_RESPONSE_OUTCOME_CANCELLED = 3;
+}
+
+enum AgentResponsePhase {
+  AGENT_RESPONSE_PHASE_UNSPECIFIED = 0;
+  AGENT_RESPONSE_PHASE_STREAMING = 1;
+  AGENT_RESPONSE_PHASE_COMPLETED = 2;
+  AGENT_RESPONSE_PHASE_FAILED = 3;
+  AGENT_RESPONSE_PHASE_CANCELLED = 4;
+}
+
+message AgentResponseReceipt {
+  string response_id = 1; // opaque update capability; Feishu ids remain private
+  uint64 revision = 2;
+  AgentResponsePhase phase = 3;
+  bool duplicate = 4;
+}
+
+message StartAgentResponseResponse {
+  AgentResponseReceipt response = 1;
+}
+
+message UpdateAgentResponseResponse {
+  AgentResponseReceipt response = 1;
+}
+
+message FinishAgentResponseResponse {
+  AgentResponseReceipt response = 1;
 }
 
 message RegisterProviderRequest {

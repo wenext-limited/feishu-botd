@@ -1,8 +1,12 @@
 .env
+/.agents/
+/.codex/
+.DS_Store
 /config/feishu-botd.json
 /secrets/*
 !/secrets/.gitkeep
-/scripts/pls-build.sh
+/scripts/*.sh
+!/scripts/*.example.sh
 
 bin/
 dist/

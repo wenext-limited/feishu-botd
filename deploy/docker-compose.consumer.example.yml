@@ -1,0 +1,42 @@
+# Generic Compose overlay for connecting another service to feishu-botd over
+# Unix sockets. Rename `consumer` to the service key from your base Compose
+# file, then run this overlay together with that file.
+
+services:
+  consumer:
+    group_add:
+      - "${FEISHU_BOTD_SOCKET_GID:-10001}"
+    volumes:
+      - feishu-botd-run:/run/feishu-botd
+    environment:
+      FEISHU_BOTD_GRPC_SOCKET: /run/feishu-botd/feishu-botd.grpc.sock
+      FEISHU_BOTD_HTTP_SOCKET: /run/feishu-botd/feishu-botd.sock
+      FEISHU_BOTD_DEFAULT_CHANNEL: ${FEISHU_BOTD_CHANNEL:-ops}
+      FEISHU_BOTD_TIMEOUT_SECONDS: ${FEISHU_BOTD_TIMEOUT_SECONDS:-15}
+
+  feishu-botd:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: ${FEISHU_BOTD_IMAGE:-feishu-botd:latest}
+    restart: unless-stopped
+    volumes:
+      - feishu-botd-run:/run/feishu-botd
+    environment:
+      FEISHU_APP_ID: ${FEISHU_APP_ID:?Set FEISHU_APP_ID}
+      FEISHU_APP_SECRET: ${FEISHU_APP_SECRET:?Set FEISHU_APP_SECRET}
+      FEISHU_BOTD_SOCKET: /run/feishu-botd/feishu-botd.sock
+      FEISHU_BOTD_GRPC_SOCKET: /run/feishu-botd/feishu-botd.grpc.sock
+      FEISHU_BOTD_CHANNELS: ${FEISHU_BOTD_CHANNELS:-}
+      FEISHU_BOTD_DEDUPE_TTL_SECONDS: ${FEISHU_BOTD_DEDUPE_TTL_SECONDS:-21600}
+      FEISHU_BOTD_SEND_TIMEOUT_SECONDS: ${FEISHU_BOTD_SEND_TIMEOUT_SECONDS:-15}
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - curl -fsS --unix-socket /run/feishu-botd/feishu-botd.sock http://localhost/healthz >/dev/null
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  feishu-botd-run:

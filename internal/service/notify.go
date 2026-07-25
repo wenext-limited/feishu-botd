@@ -137,12 +137,7 @@ func (s *Service) deliver(ctx context.Context, req notify.Request, dedupeEnabled
 		if dedupeEnabled {
 			s.store.Abort(req.Source, req.DedupeKey)
 		}
-		s.logger.Warn("send failed",
-			"source", req.Source,
-			"event", req.SourceEventID,
-			"channel", req.Target.Channel,
-			"error", s.redactor.redact(err),
-		)
+		s.logFeishuFailure("notify", "notification", notificationLogIdentity(req), err)
 		return SendResult{}, notify.NewAPIError(502, "feishu_unavailable", "Feishu send failed", true)
 	}
 
@@ -151,10 +146,12 @@ func (s *Service) deliver(ctx context.Context, req notify.Request, dedupeEnabled
 		s.store.Commit(req.Source, req.DedupeKey, result)
 	}
 	s.logger.Info("send ok",
-		"source", req.Source,
-		"event", req.SourceEventID,
-		"channel", req.Target.Channel,
+		"correlation", opaqueLogCorrelationID("notification", notificationLogIdentity(req)),
 		"severity", req.Severity,
 	)
 	return SendResult{Provider: result.Provider, MessageID: result.MessageID, Duplicate: false}, nil
+}
+
+func notificationLogIdentity(req notify.Request) string {
+	return req.Source + "\x00" + req.SourceEventID + "\x00" + req.DedupeKey
 }

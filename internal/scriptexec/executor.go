@@ -60,7 +60,7 @@ func New(cfg config.ScriptExecConfig, logger *slog.Logger) *Executor {
 }
 
 // Run resolves and executes the script for a single inbound command's Text
-// field (e.g. "build ludo develop") and returns a chat-ready title/markdown
+// field (e.g. "build sample-app staging") and returns a chat-ready title/markdown
 // reply. It never returns an error: every failure mode is reported as a
 // user-facing markdown explanation instead, and logged.
 func (e *Executor) Run(ctx context.Context, chatAlias, text string) (title, markdown string) {

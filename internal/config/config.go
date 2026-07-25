@@ -16,6 +16,7 @@ const (
 	defaultDedupeTTL                = 6 * time.Hour
 	defaultSendTimeout              = 15 * time.Second
 	defaultScriptExecTimeoutSeconds = 120
+	minimumBearerTokenBytes         = 32
 )
 
 type Config struct {
@@ -26,6 +27,7 @@ type Config struct {
 	GRPCSocketPath string
 	GRPCBindAddr   string
 	AuthToken      string
+	AgentProviders map[string]AgentProviderConfig
 	AllowLANBind   bool
 	Commands       CommandConfig
 	Channels       map[string]string
@@ -33,6 +35,18 @@ type Config struct {
 	Services       map[string]ServiceConfig
 	DedupeTTL      time.Duration
 	SendTimeout    time.Duration
+}
+
+// AgentProviderConfig binds one agent (and, when configured, legacy command)
+// provider identity to a credential.
+// AuthToken is loaded from the provider's configured token file and must never
+// be serialized or logged.
+type AgentProviderConfig struct {
+	AuthToken              string
+	AllowedCommands        []string
+	AllowUnmatchedMessages bool
+	AllowCardActions       bool
+	AllowLegacyCommands    bool
 }
 
 type CommandConfig struct {
@@ -45,7 +59,7 @@ type CommandConfig struct {
 }
 
 // ScriptExecConfig enables running a local script for a registered inbound
-// command. Command is the trigger word (e.g. "pls"); the action word that
+// command. Command is the trigger word (e.g. "ops"); the action word that
 // follows it resolves to "<Dir>/<Command>-<action>.sh". Only chats in
 // AllowedChats may trigger execution.
 type ScriptExecConfig struct {
@@ -73,6 +87,7 @@ func LoadFromEnv() (Config, error) {
 		BindAddr:       firstNonEmpty(os.Getenv("FEISHU_BOTD_BIND"), fileCfg.BindAddr),
 		GRPCSocketPath: firstNonEmpty(os.Getenv("FEISHU_BOTD_GRPC_SOCKET"), fileCfg.GRPCSocketPath),
 		GRPCBindAddr:   firstNonEmpty(os.Getenv("FEISHU_BOTD_GRPC_BIND"), fileCfg.GRPCBindAddr),
+		AgentProviders: make(map[string]AgentProviderConfig),
 		AllowLANBind:   boolFromEnvDefault("FEISHU_BOTD_ALLOW_NON_LOOPBACK_BIND", fileCfg.AllowLANBind),
 		Commands:       commandConfigFromEnv(fileCfg.Commands),
 		Channels:       mergeStringMaps(fileCfg.Channels, loadChannels(os.Environ())),
@@ -91,8 +106,11 @@ func LoadFromEnv() (Config, error) {
 	if cfg.SocketPath == "" && cfg.BindAddr == "" && cfg.GRPCSocketPath == "" && cfg.GRPCBindAddr == "" {
 		return Config{}, errors.New("at least one listener is required: set FEISHU_BOTD_SOCKET, FEISHU_BOTD_BIND, FEISHU_BOTD_GRPC_SOCKET, FEISHU_BOTD_GRPC_BIND, or config listeners")
 	}
-	if len(cfg.Channels) == 0 {
-		return Config{}, errors.New("at least one channel mapping is required")
+	// A direct-message-only agent has no static chat id to configure. Preserve
+	// the channel requirement for outbound-only deployments, while allowing the
+	// inbound long-connection path to route P2P replies from private event state.
+	if len(cfg.Channels) == 0 && !cfg.Commands.Enabled {
+		return Config{}, errors.New("at least one channel mapping is required unless commands are enabled for direct messages")
 	}
 	if err := validateRouting(cfg); err != nil {
 		return Config{}, err
@@ -100,30 +118,62 @@ func LoadFromEnv() (Config, error) {
 	if err := validateScripts(cfg); err != nil {
 		return Config{}, err
 	}
+	for provider, providerCfg := range fileCfg.AgentProviders {
+		token, err := readTokenFile(providerCfg.AuthTokenFile)
+		if err != nil {
+			return Config{}, fmt.Errorf("load provider %q token: %w", provider, err)
+		}
+		cfg.AgentProviders[provider] = AgentProviderConfig{
+			AuthToken:              token,
+			AllowedCommands:        append([]string(nil), providerCfg.AllowedCommands...),
+			AllowUnmatchedMessages: providerCfg.AllowUnmatchedMessages,
+			AllowCardActions:       providerCfg.AllowCardActions,
+			AllowLegacyCommands:    providerCfg.AllowLegacyCommands,
+		}
+	}
+	if err := validateAgentProviderTokens(cfg.AgentProviders, ""); err != nil {
+		return Config{}, err
+	}
+	if len(cfg.AgentProviders) > 0 && cfg.DedupeTTL < time.Hour+cfg.SendTimeout {
+		return Config{}, fmt.Errorf("dedupe TTL must be at least one hour plus send timeout when agent_providers is configured")
+	}
+
 	// The HTTP and gRPC TCP listeners share a single bearer token. Load it once
-	// when either TCP listener is enabled. TCP binds stay loopback-only unless
-	// the deployment explicitly opts into a non-loopback/LAN bind.
-	if cfg.BindAddr != "" || cfg.GRPCBindAddr != "" {
-		for _, bind := range []struct{ name, addr string }{
-			{"FEISHU_BOTD_BIND", cfg.BindAddr},
-			{"FEISHU_BOTD_GRPC_BIND", cfg.GRPCBindAddr},
-		} {
-			if bind.addr == "" {
-				continue
-			}
-			if err := validateTCPBind(bind.name, bind.addr, cfg.AllowLANBind); err != nil {
+	// when either TCP listener is enabled. HTTP can explicitly opt into a LAN
+	// bind; plaintext gRPC is always loopback-only.
+	hasTCPListener := cfg.BindAddr != "" || cfg.GRPCBindAddr != ""
+	if hasTCPListener {
+		if cfg.BindAddr != "" {
+			if err := validateTCPBind("FEISHU_BOTD_BIND", cfg.BindAddr, cfg.AllowLANBind); err != nil {
 				return Config{}, err
 			}
 		}
-		tokenFile := firstNonEmpty(os.Getenv("FEISHU_BOTD_AUTH_TOKEN_FILE"), fileCfg.AuthTokenFile)
-		if tokenFile == "" {
-			return Config{}, errors.New("FEISHU_BOTD_AUTH_TOKEN_FILE or config listeners.auth_token_file is required when a TCP listener is set")
+		if cfg.GRPCBindAddr != "" {
+			if err := validatePlaintextGRPCBind("FEISHU_BOTD_GRPC_BIND", cfg.GRPCBindAddr); err != nil {
+				return Config{}, err
+			}
 		}
+	}
+	tokenFile := firstNonEmpty(os.Getenv("FEISHU_BOTD_AUTH_TOKEN_FILE"), fileCfg.AuthTokenFile)
+	if hasTCPListener && tokenFile == "" {
+		return Config{}, errors.New("FEISHU_BOTD_AUTH_TOKEN_FILE or config listeners.auth_token_file is required when a TCP listener is set")
+	}
+	// A scoped Unix deployment may optionally authorize general outbound HTTP
+	// and gRPC callers with the same token-file setting. If omitted, those
+	// routes/RPCs fail closed while provider and health interfaces remain
+	// available.
+	if tokenFile != "" && (hasTCPListener || len(cfg.AgentProviders) > 0) {
 		token, err := readTokenFile(tokenFile)
 		if err != nil {
 			return Config{}, err
 		}
+		if len(token) < minimumBearerTokenBytes {
+			return Config{}, fmt.Errorf("general bearer token must be at least %d bytes", minimumBearerTokenBytes)
+		}
 		cfg.AuthToken = token
+	}
+	if err := validateAgentProviderTokens(cfg.AgentProviders, cfg.AuthToken); err != nil {
+		return Config{}, err
 	}
 	return cfg, nil
 }
@@ -136,6 +186,7 @@ type fileConfig struct {
 	GRPCSocketPath string
 	GRPCBindAddr   string
 	AuthTokenFile  string
+	AgentProviders map[string]fileAgentProviderConfig
 	AllowLANBind   bool
 	Commands       CommandConfig
 	Channels       map[string]string
@@ -146,14 +197,23 @@ type fileConfig struct {
 }
 
 type configFile struct {
-	Feishu             fileFeishuConfig         `json:"feishu"`
-	Listeners          fileListenersConfig      `json:"listeners"`
-	Commands           CommandConfig            `json:"commands"`
-	Channels           map[string]string        `json:"channels"`
-	DefaultChannel     string                   `json:"default_channel"`
-	Services           map[string]ServiceConfig `json:"services"`
-	DedupeTTLSeconds   int                      `json:"dedupe_ttl_seconds"`
-	SendTimeoutSeconds int                      `json:"send_timeout_seconds"`
+	Feishu             fileFeishuConfig                   `json:"feishu"`
+	Listeners          fileListenersConfig                `json:"listeners"`
+	Commands           CommandConfig                      `json:"commands"`
+	Channels           map[string]string                  `json:"channels"`
+	DefaultChannel     string                             `json:"default_channel"`
+	Services           map[string]ServiceConfig           `json:"services"`
+	AgentProviders     map[string]fileAgentProviderConfig `json:"agent_providers"`
+	DedupeTTLSeconds   int                                `json:"dedupe_ttl_seconds"`
+	SendTimeoutSeconds int                                `json:"send_timeout_seconds"`
+}
+
+type fileAgentProviderConfig struct {
+	AuthTokenFile          string   `json:"auth_token_file"`
+	AllowedCommands        []string `json:"allowed_commands"`
+	AllowUnmatchedMessages bool     `json:"allow_unmatched_messages"`
+	AllowCardActions       bool     `json:"allow_card_actions"`
+	AllowLegacyCommands    bool     `json:"allow_legacy_commands"`
 }
 
 type fileFeishuConfig struct {
@@ -197,6 +257,11 @@ func loadFileConfig(path string) (fileConfig, error) {
 	cfg.GRPCSocketPath = strings.TrimSpace(raw.Listeners.GRPCSocket)
 	cfg.GRPCBindAddr = strings.TrimSpace(raw.Listeners.GRPCBind)
 	cfg.AuthTokenFile = strings.TrimSpace(raw.Listeners.AuthTokenFile)
+	agentProviders, err := normalizeAgentProviderConfigs(raw.AgentProviders)
+	if err != nil {
+		return fileConfig{}, err
+	}
+	cfg.AgentProviders = agentProviders
 	cfg.AllowLANBind = raw.Listeners.AllowNonLoopbackBind
 	cfg.Commands = normalizeCommandConfig(raw.Commands)
 	cfg.Channels = normalizeChannels(raw.Channels)
@@ -456,6 +521,24 @@ func validateLoopbackBind(name, addr string) error {
 	return validateTCPBind(name, addr, false)
 }
 
+// validatePlaintextGRPCBind keeps user prompts, agent output, and bearer
+// credentials off non-loopback plaintext links. Cross-host deployments must
+// terminate an authenticated encrypted transport before this loopback listener.
+func validatePlaintextGRPCBind(name, addr string) error {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("%s must be host:port: %w", name, err)
+	}
+	if host == "localhost" {
+		return nil
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || !ip.IsLoopback() {
+		return fmt.Errorf("%s is plaintext and must bind to loopback; use a Unix socket or terminate authenticated TLS before a loopback listener", name)
+	}
+	return nil
+}
+
 func validateTCPBind(name, addr string, allowNonLoopback bool) error {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
@@ -477,16 +560,89 @@ func validateTCPBind(name, addr string, allowNonLoopback bool) error {
 func readTokenFile(path string) (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return "", fmt.Errorf("read FEISHU_BOTD_AUTH_TOKEN_FILE: %w", err)
+		return "", fmt.Errorf("read token file: %w", err)
 	}
 	line := strings.TrimSpace(strings.SplitN(string(data), "\n", 2)[0])
 	if line == "" {
-		return "", errors.New("FEISHU_BOTD_AUTH_TOKEN_FILE is empty")
+		return "", errors.New("token file is empty")
 	}
 	for _, r := range line {
 		if !(r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || strings.ContainsRune("._~+/=-", r)) {
-			return "", errors.New("FEISHU_BOTD_AUTH_TOKEN_FILE contains an invalid bearer token")
+			return "", errors.New("token file contains an invalid bearer token")
 		}
 	}
 	return line, nil
+}
+
+func normalizeAgentProviderConfigs(in map[string]fileAgentProviderConfig) (map[string]fileAgentProviderConfig, error) {
+	out := make(map[string]fileAgentProviderConfig, len(in))
+	for rawProvider, providerCfg := range in {
+		provider := strings.TrimSpace(rawProvider)
+		if provider == "" {
+			return nil, errors.New("agent_providers contains an empty provider name")
+		}
+		if len(provider) > 64 {
+			return nil, fmt.Errorf("provider %q exceeds 64 bytes", provider)
+		}
+		if _, duplicate := out[provider]; duplicate {
+			return nil, fmt.Errorf("provider %q is configured more than once after trimming", provider)
+		}
+		tokenFile := strings.TrimSpace(providerCfg.AuthTokenFile)
+		if tokenFile == "" {
+			return nil, fmt.Errorf("provider %q auth_token_file is required", provider)
+		}
+		commands, err := normalizeProviderCommands(providerCfg.AllowedCommands)
+		if err != nil {
+			return nil, fmt.Errorf("provider %q: %w", provider, err)
+		}
+		out[provider] = fileAgentProviderConfig{
+			AuthTokenFile:          tokenFile,
+			AllowedCommands:        commands,
+			AllowUnmatchedMessages: providerCfg.AllowUnmatchedMessages,
+			AllowCardActions:       providerCfg.AllowCardActions,
+			AllowLegacyCommands:    providerCfg.AllowLegacyCommands,
+		}
+	}
+	return out, nil
+}
+
+func normalizeProviderCommands(in []string) ([]string, error) {
+	seen := make(map[string]struct{}, len(in))
+	out := make([]string, 0, len(in))
+	for _, command := range in {
+		command = strings.ToLower(strings.TrimLeft(strings.TrimSpace(command), "/"))
+		if command == "" {
+			continue
+		}
+		if len(command) > 64 {
+			return nil, errors.New("allowed_commands entry exceeds 64 bytes")
+		}
+		if _, duplicate := seen[command]; duplicate {
+			continue
+		}
+		seen[command] = struct{}{}
+		out = append(out, command)
+	}
+	return out, nil
+}
+
+func validateAgentProviderTokens(providers map[string]AgentProviderConfig, generalToken string) error {
+	owners := make(map[string]string, len(providers))
+	for provider, providerCfg := range providers {
+		token := strings.TrimSpace(providerCfg.AuthToken)
+		if token == "" {
+			return fmt.Errorf("provider %q has an empty auth token", provider)
+		}
+		if len(token) < minimumBearerTokenBytes {
+			return fmt.Errorf("provider %q auth token must be at least %d bytes", provider, minimumBearerTokenBytes)
+		}
+		if other, duplicate := owners[token]; duplicate {
+			return fmt.Errorf("providers %q and %q must use distinct auth tokens", other, provider)
+		}
+		owners[token] = provider
+		if generalToken != "" && token == generalToken {
+			return fmt.Errorf("provider %q token must differ from the general bearer token", provider)
+		}
+	}
+	return nil
 }

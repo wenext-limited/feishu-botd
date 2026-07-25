@@ -27,7 +27,7 @@ func writeScript(t *testing.T, dir, name, body string, executable bool) string {
 func newTestExecutor(t *testing.T, dir string) *Executor {
 	t.Helper()
 	return New(config.ScriptExecConfig{
-		Command:        "pls",
+		Command:        "ops",
 		Dir:            dir,
 		AllowedChats:   []string{"ops"},
 		TimeoutSeconds: 5,
@@ -36,11 +36,11 @@ func newTestExecutor(t *testing.T, dir string) *Executor {
 
 func TestRunExecutesResolvedScriptWithArgs(t *testing.T) {
 	dir := t.TempDir()
-	writeScript(t, dir, "pls-build.sh", "#!/bin/sh\nfor a in \"$@\"; do echo \"arg:$a\"; done\n", true)
+	writeScript(t, dir, "ops-build.sh", "#!/bin/sh\nfor a in \"$@\"; do echo \"arg:$a\"; done\n", true)
 	e := newTestExecutor(t, dir)
 
-	_, markdown := e.Run(context.Background(), "ops", "build ludo develop")
-	if !strings.Contains(markdown, "arg:ludo") || !strings.Contains(markdown, "arg:develop") {
+	_, markdown := e.Run(context.Background(), "ops", "build sample-app staging")
+	if !strings.Contains(markdown, "arg:sample-app") || !strings.Contains(markdown, "arg:staging") {
 		t.Fatalf("markdown missing expected args: %s", markdown)
 	}
 	if !strings.Contains(markdown, "exit code: 0") {
@@ -50,10 +50,10 @@ func TestRunExecutesResolvedScriptWithArgs(t *testing.T) {
 
 func TestRunRejectsDisallowedChat(t *testing.T) {
 	dir := t.TempDir()
-	writeScript(t, dir, "pls-build.sh", "#!/bin/sh\necho ran\n", true)
+	writeScript(t, dir, "ops-build.sh", "#!/bin/sh\necho ran\n", true)
 	e := newTestExecutor(t, dir)
 
-	_, markdown := e.Run(context.Background(), "unknown-chat", "build ludo develop")
+	_, markdown := e.Run(context.Background(), "unknown-chat", "build sample-app staging")
 	if !strings.Contains(markdown, "not allowed") {
 		t.Fatalf("expected not-allowed message, got: %s", markdown)
 	}
@@ -63,7 +63,7 @@ func TestRunRejectsInvalidActionName(t *testing.T) {
 	dir := t.TempDir()
 	e := newTestExecutor(t, dir)
 
-	for _, text := range []string{"../etc/passwd arg", "build/ludo arg", "build; rm -rf / arg", "/absolute arg"} {
+	for _, text := range []string{"../etc/passwd arg", "build/sample-app arg", "build; rm -rf / arg", "/absolute arg"} {
 		_, markdown := e.Run(context.Background(), "ops", text)
 		if !strings.Contains(markdown, "invalid action") {
 			t.Fatalf("text %q: expected invalid action message, got: %s", text, markdown)
@@ -85,7 +85,7 @@ func TestRunRejectsUnknownAction(t *testing.T) {
 	dir := t.TempDir()
 	e := newTestExecutor(t, dir)
 
-	_, markdown := e.Run(context.Background(), "ops", "deploy ludo")
+	_, markdown := e.Run(context.Background(), "ops", "deploy sample-app")
 	if !strings.Contains(markdown, "no script configured") {
 		t.Fatalf("expected no-script message, got: %s", markdown)
 	}
@@ -93,10 +93,10 @@ func TestRunRejectsUnknownAction(t *testing.T) {
 
 func TestRunRejectsNonExecutableScript(t *testing.T) {
 	dir := t.TempDir()
-	writeScript(t, dir, "pls-build.sh", "#!/bin/sh\necho ran\n", false)
+	writeScript(t, dir, "ops-build.sh", "#!/bin/sh\necho ran\n", false)
 	e := newTestExecutor(t, dir)
 
-	_, markdown := e.Run(context.Background(), "ops", "build ludo")
+	_, markdown := e.Run(context.Background(), "ops", "build sample-app")
 	if !strings.Contains(markdown, "no script configured") {
 		t.Fatalf("expected no-script message for non-executable script, got: %s", markdown)
 	}
@@ -104,18 +104,18 @@ func TestRunRejectsNonExecutableScript(t *testing.T) {
 
 func TestRunActionIsCaseInsensitiveArgsPreserveCase(t *testing.T) {
 	dir := t.TempDir()
-	writeScript(t, dir, "pls-build.sh", "#!/bin/sh\nfor a in \"$@\"; do echo \"arg:$a\"; done\n", true)
+	writeScript(t, dir, "ops-build.sh", "#!/bin/sh\nfor a in \"$@\"; do echo \"arg:$a\"; done\n", true)
 	e := newTestExecutor(t, dir)
 
-	_, markdown := e.Run(context.Background(), "ops", "BUILD Develop")
-	if !strings.Contains(markdown, "arg:Develop") {
+	_, markdown := e.Run(context.Background(), "ops", "BUILD Staging")
+	if !strings.Contains(markdown, "arg:Staging") {
 		t.Fatalf("expected case-preserved arg, got: %s", markdown)
 	}
 }
 
 func TestRunDoesNotInterpretArgsAsShell(t *testing.T) {
 	dir := t.TempDir()
-	writeScript(t, dir, "pls-build.sh", "#!/bin/sh\nfor a in \"$@\"; do echo \"arg:$a\"; done\n", true)
+	writeScript(t, dir, "ops-build.sh", "#!/bin/sh\nfor a in \"$@\"; do echo \"arg:$a\"; done\n", true)
 	e := newTestExecutor(t, dir)
 
 	_, markdown := e.Run(context.Background(), "ops", "build $(whoami) `id`")
@@ -126,9 +126,9 @@ func TestRunDoesNotInterpretArgsAsShell(t *testing.T) {
 
 func TestRunEnforcesTimeout(t *testing.T) {
 	dir := t.TempDir()
-	writeScript(t, dir, "pls-build.sh", "#!/bin/sh\nsleep 3\necho done\n", true)
+	writeScript(t, dir, "ops-build.sh", "#!/bin/sh\nsleep 3\necho done\n", true)
 	e := New(config.ScriptExecConfig{
-		Command:        "pls",
+		Command:        "ops",
 		Dir:            dir,
 		AllowedChats:   []string{"ops"},
 		TimeoutSeconds: 1,
@@ -146,7 +146,7 @@ func TestRunEnforcesTimeout(t *testing.T) {
 
 func TestRunTruncatesLargeOutput(t *testing.T) {
 	dir := t.TempDir()
-	writeScript(t, dir, "pls-build.sh", "#!/bin/sh\nyes x | head -c 20000\n", true)
+	writeScript(t, dir, "ops-build.sh", "#!/bin/sh\nyes x | head -c 20000\n", true)
 	e := newTestExecutor(t, dir)
 
 	_, markdown := e.Run(context.Background(), "ops", "build")
@@ -162,7 +162,7 @@ func TestRunRejectsSymlinkedScript(t *testing.T) {
 	dir := t.TempDir()
 	outsideDir := t.TempDir()
 	target := writeScript(t, outsideDir, "real.sh", "#!/bin/sh\necho SHOULD_NOT_RUN\n", true)
-	if err := os.Symlink(target, filepath.Join(dir, "pls-build.sh")); err != nil {
+	if err := os.Symlink(target, filepath.Join(dir, "ops-build.sh")); err != nil {
 		t.Fatal(err)
 	}
 	e := newTestExecutor(t, dir)
@@ -178,7 +178,7 @@ func TestRunRejectsSymlinkedScript(t *testing.T) {
 
 func TestRunNonZeroExitCode(t *testing.T) {
 	dir := t.TempDir()
-	writeScript(t, dir, "pls-build.sh", "#!/bin/sh\necho failing\nexit 3\n", true)
+	writeScript(t, dir, "ops-build.sh", "#!/bin/sh\necho failing\nexit 3\n", true)
 	e := newTestExecutor(t, dir)
 
 	_, markdown := e.Run(context.Background(), "ops", "build")

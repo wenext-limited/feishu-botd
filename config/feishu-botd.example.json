@@ -1,31 +1,33 @@
 {
   "feishu": {
-    "app_id": "cli_xxx",
-    "app_secret": "replace-me"
+    "app_id": "REPLACE_WITH_FEISHU_APP_ID",
+    "app_secret": "REPLACE_WITH_FEISHU_APP_SECRET"
   },
   "listeners": {
     "http_socket": "/run/feishu-botd/feishu-botd.sock",
     "http_bind": "0.0.0.0:7345",
+    "grpc_socket": "/run/feishu-botd/feishu-botd.grpc.sock",
     "auth_token_file": "/run/secrets/feishu-botd-token",
     "allow_non_loopback_bind": true
   },
+  "agent_providers": {},
   "commands": {
     "enabled": false,
-    "bot_open_id": "ou_xxx",
+    "bot_open_id": "REPLACE_WITH_FEISHU_BOT_OPEN_ID",
     "bot_user_id": "",
     "bot_union_id": "",
     "bot_names": ["Feishu Bot"],
     "scripts": {
       "enabled": false,
-      "command": "pls",
+      "command": "ops",
       "dir": "/etc/feishu-botd/scripts",
       "allowed_chats": ["ci"],
       "timeout_seconds": 300
     }
   },
   "channels": {
-    "ci": "oc_xxx",
-    "ops": "oc_yyy"
+    "ci": "REPLACE_WITH_FEISHU_CHAT_ID_CI",
+    "ops": "REPLACE_WITH_FEISHU_CHAT_ID_OPS"
   },
   "default_channel": "ops",
   "services": {

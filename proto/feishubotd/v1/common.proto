@@ -36,7 +36,7 @@ message Link {
 // (SendMessage) and the inbound command surface (CommandService), so
 // they live in common.proto.
 
-// MarkdownContent is the only content kind implemented in v1.
+// MarkdownContent carries a titled markdown body.
 message MarkdownContent {
   string title = 1;
   string markdown = 2;

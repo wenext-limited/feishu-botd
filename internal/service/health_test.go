@@ -54,3 +54,16 @@ func TestReadyAuthFailure(t *testing.T) {
 		t.Fatalf("feishu_auth = %q", checks["feishu_auth"])
 	}
 }
+
+func TestReadyAllowsDirectMessageOnlyAgentWithoutChannels(t *testing.T) {
+	cfg := config.Config{
+		AppID: "app_test", AppSecret: "test-placeholder",
+		Commands: config.CommandConfig{Enabled: true},
+		Channels: map[string]string{}, SendTimeout: time.Second,
+	}
+	svc := NewService(cfg, &fakeSender{}, dedupe.NewMemoryStore(time.Hour), slog.Default())
+	ready, checks := svc.Ready(context.Background())
+	if !ready || checks["channels"] != "ok" {
+		t.Fatalf("direct-message-only readiness: ready=%t channels=%q", ready, checks["channels"])
+	}
+}

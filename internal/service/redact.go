@@ -17,6 +17,9 @@ type redactor struct {
 
 func newRedactor(cfg config.Config) *redactor {
 	candidates := []string{cfg.AppSecret, cfg.AuthToken}
+	for _, provider := range cfg.AgentProviders {
+		candidates = append(candidates, provider.AuthToken)
+	}
 	for _, chatID := range cfg.Channels {
 		candidates = append(candidates, chatID)
 	}

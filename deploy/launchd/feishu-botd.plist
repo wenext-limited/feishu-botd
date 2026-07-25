@@ -14,13 +14,13 @@
   <key>EnvironmentVariables</key>
   <dict>
     <key>FEISHU_APP_ID</key>
-    <string>cli_xxx</string>
+    <string>REPLACE_WITH_FEISHU_APP_ID</string>
     <key>FEISHU_APP_SECRET</key>
-    <string>replace-with-secret</string>
+    <string>REPLACE_WITH_FEISHU_APP_SECRET</string>
     <key>FEISHU_BOTD_SOCKET</key>
     <string>/tmp/feishu-botd/feishu-botd.sock</string>
     <key>FEISHU_BOTD_CHANNELS_OPS</key>
-    <string>oc_xxx</string>
+    <string>REPLACE_WITH_FEISHU_CHAT_ID_OPS</string>
     <key>FEISHU_BOTD_DEDUPE_TTL_SECONDS</key>
     <string>21600</string>
     <key>FEISHU_BOTD_SEND_TIMEOUT_SECONDS</key>

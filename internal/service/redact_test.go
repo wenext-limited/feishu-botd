@@ -12,11 +12,14 @@ func TestRedactRemovesConfiguredSecrets(t *testing.T) {
 	cfg := config.Config{
 		AppSecret: "secret-value",
 		AuthToken: "token-value",
-		Channels:  map[string]string{"ops": "oc_secret"},
+		AgentProviders: map[string]config.AgentProviderConfig{
+			"fixture-agent": {AuthToken: "agent-token-value"},
+		},
+		Channels: map[string]string{"ops": "oc_secret"},
 	}
 	r := newRedactor(cfg)
-	msg := r.redact(errors.New("secret-value token-value oc_secret visible"))
-	for _, leaked := range []string{"secret-value", "token-value", "oc_secret"} {
+	msg := r.redact(errors.New("secret-value token-value agent-token-value oc_secret visible"))
+	for _, leaked := range []string{"secret-value", "token-value", "agent-token-value", "oc_secret"} {
 		if strings.Contains(msg, leaked) {
 			t.Fatalf("redacted message leaked %q: %s", leaked, msg)
 		}
