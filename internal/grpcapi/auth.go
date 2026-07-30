@@ -19,6 +19,8 @@ type providerPrincipalKey struct{}
 type providerPrincipal struct {
 	provider               string
 	allowedCommands        map[string]struct{}
+	allowedApps            []string
+	allowedAppsConfigured  bool
 	allowUnmatchedMessages bool
 	allowCardActions       bool
 	allowFollowUpMessages  bool
@@ -46,10 +48,19 @@ func newProviderAuthenticator(providers map[string]config.AgentProviderConfig) p
 				allowedCommands[normalized] = struct{}{}
 			}
 		}
+		allowedAppsConfigured := providerCfg.AllowedAppsConfigured || providerCfg.AllowedApps != nil
+		var allowedApps []string
+		if allowedAppsConfigured {
+			// Preserve a configured empty allowlist as a non-nil empty slice. Nil
+			// means the field was absent and therefore permits every app.
+			allowedApps = append([]string{}, providerCfg.AllowedApps...)
+		}
 		authenticator.credentials = append(authenticator.credentials, providerCredential{
 			principal: providerPrincipal{
 				provider:               provider,
 				allowedCommands:        allowedCommands,
+				allowedApps:            allowedApps,
+				allowedAppsConfigured:  allowedAppsConfigured,
 				allowUnmatchedMessages: providerCfg.AllowUnmatchedMessages,
 				allowCardActions:       providerCfg.AllowCardActions,
 				allowFollowUpMessages:  providerCfg.AllowFollowUpMessages,
@@ -167,6 +178,14 @@ func authenticatedProvider(ctx context.Context) (providerPrincipal, error) {
 		return providerPrincipal{}, providerUnauthenticated(ctx)
 	}
 	return principal, nil
+}
+
+func authenticatedProviderAppScope(ctx context.Context) (allowedApps []string, configured bool) {
+	principal, ok := ctx.Value(providerPrincipalKey{}).(providerPrincipal)
+	if !ok || !principal.allowedAppsConfigured {
+		return nil, false
+	}
+	return append([]string{}, principal.allowedApps...), true
 }
 
 func requireProviderIdentity(ctx context.Context, requested string) error {

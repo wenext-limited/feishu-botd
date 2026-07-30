@@ -4,12 +4,32 @@
 `.proto` files under [`proto/feishubotd/v1/`](../proto/feishubotd/v1) are the
 shared, language-neutral contract. The Go daemon owns the Feishu/Lark SDK,
 credentials, token lifecycle, channel-alias resolution, inbound events, and
-CardKit response lifecycle. Client apps — Go, Rust, or otherwise — talk to the
-daemon over gRPC and generate their own bindings from `proto/`. There is no
-shared client crate.
+CardKit response lifecycle for one or more Feishu apps. Client apps — Go, Rust,
+or otherwise — talk to the daemon over gRPC and generate their own bindings
+from `proto/`. There is no shared client crate.
 
 The legacy HTTP `POST /v1/notify` endpoint remains as a compatibility shim over
 the exact same internal service logic (see [api.md](./api.md)).
+
+## Multi-app routing without wire changes
+
+No protobuf or HTTP request has an app field. Multi-app routing uses identities
+that callers already send:
+
+- A bare channel alias resolves through one global directory to the owning app
+  and private Feishu chat id.
+- An inbound `delivery_id`, `response_id`, or `conversation_id` is an opaque
+  daemon-issued handle whose internal state records the source app.
+- `InboundAgentEvent.metadata["app_alias"]` is optional, public context for a
+  provider that wants it. It is never required for routing or authorization,
+  and old clients may ignore the additive map entry.
+
+This keeps existing generated clients and exact request state machines
+unchanged. Replies, CardKit operations, callback dedupe, delivery claims,
+operation receipts, and follow-up grants are app-scoped internally; a handle
+created by app A can send only through app A. App aliases may cross the provider
+boundary, while `app_id`, `app_secret`, raw routing ids, and SDK connection
+details may not.
 
 ## Transports
 
@@ -70,8 +90,18 @@ All services live in package `feishubotd.v1`.
 | `Health` | Process liveness. Mirrors `GET /healthz`. |
 | `Ready` | Redacted readiness checks (config, credentials, channels, dedupe). Mirrors `GET /readyz`. |
 
+`Ready` keeps the existing aggregate `config`, `feishu_auth`, `channels`, and
+`dedupe_store` entries, then adds `feishu_auth.<alias>` for each app. Per-app
+auth is `ok`, `missing_credentials`, or `unavailable`. The multi-app process also
+reports `feishu_connection.<alias>` as `starting`, `connected`,
+`reconnecting`, `disconnected`, or `unavailable`. Any app auth failure or any
+connection state other than `connected` makes `ready = false`. Keys contain
+only public aliases; credential and SDK error text is never returned.
+
 The daemon also registers the standard `grpc.health.v1.Health` service so
-`grpc_health_probe` works for gRPC-only deployments.
+`grpc_health_probe` works for gRPC-only deployments. Like `/healthz`, that
+standard service is static liveness; use `BotdHealthService.Ready` for the
+per-app readiness states.
 
 ### `NotificationService`
 
@@ -85,7 +115,10 @@ The daemon also registers the standard `grpc.health.v1.Health` service so
 `target` — so `source` + `dedupe_key` make every call idempotent. Callers can
 route with a stable **channel alias** (`target.channel = "ops"`), or omit the
 target when `source` has a configured service default. Raw Feishu chat ids and
-app credentials live only in daemon config.
+app credentials live only in daemon config. Channel aliases are globally unique
+across apps and resolve internally to `(app, chat)`. Deduplication is scoped to
+that resolved app, so the same caller key used for two different apps does not
+cause a cross-app conflict.
 
 `SendMessage` carries a `content` oneof (`markdown` | `text` | `card`).
 `markdown` and `card.card_json` are implemented in v1; `text` returns
@@ -105,13 +138,14 @@ is supplied.
 | `FinishAgentResponse` | Applies final content, records the outcome, and disables CardKit streaming mode. |
 | `SendAgentFollowUp` | Posts one later, standalone message into a conversation the provider has already received an agent event from. |
 
-Inbound Feishu events are enabled only when `commands.enabled` or
-`FEISHU_BOTD_COMMANDS_ENABLED=true` is set. Users invoke commands as
-`@<bot-name> <COMMAND> [args...]`. The daemon opens the Feishu long connection,
-handles `im.message.receive_v1`, accepts text messages from configured channel
-aliases, verifies the configured bot-name or bot-id mention, strips Feishu's
-mention token, and dispatches the first word as `command` with the rest as
-`text`.
+Inbound Feishu events are dispatched only for an app whose `commands.enabled`
+is true (the existing `FEISHU_BOTD_COMMANDS_ENABLED` override affects the
+reserved `default` app). Users invoke commands as
+`@<bot-name> <COMMAND> [args...]`. The daemon opens one Feishu long connection
+per configured app, handles `im.message.receive_v1`, accepts text messages from
+globally unique configured channel aliases, verifies that app's configured
+bot-name or bot-id mention, strips Feishu's mention token, and dispatches the
+first word as `command` with the rest as `text`.
 
 `InboundCommand.chat_alias` is always a configured alias; raw Feishu chat ids are
 never exposed. Its metadata is limited to `chat_type` and `message_type`; raw
@@ -128,7 +162,9 @@ registers an in-process subscriber — `internal/scriptexec` — that runs a loc
 script for one command word and calls `Respond` itself. It uses the exact same
 `Subscribe`/`Respond` path as an external provider, just without a gRPC
 round-trip, so it's a drop-in alternative to (or can run alongside) a real
-gRPC provider — **as long as they subscribe to different command words**.
+gRPC provider — **as long as they subscribe to different command words**. A
+named app configures this under `apps.<alias>.commands.scripts`; its internal
+subscription and allowed chats are restricted to that app.
 `dispatch` delivers at most once per provider, even if that provider has
 overlapping streams. Distinct providers can each receive the same command, so if
 `commands.scripts.command` collides with a word an external provider also
@@ -145,6 +181,13 @@ inbound commands. Legacy deployments with no `agent_providers` map keep their
 existing Unix/global-token mode; the in-process script executor is not a gRPC
 peer and remains internal.
 
+An agent provider may also configure `allowed_apps`. When it is absent, the
+provider retains access to every configured app; an explicit empty list allows
+none. The daemon applies this config-only scope before legacy or agent event
+fan-out and rechecks the app resolved from every opaque mutation handle.
+Disallowed handles return the same `unknown_delivery`, `unknown_response`, or
+`unknown_conversation` errors as nonexistent handles.
+
 #### Agent ingress and routing
 
 `SubscribeAgentEventsRequest` requires a stable `provider` and at least one of:
@@ -158,8 +201,9 @@ the general notification bearer cannot use an agent RPC. The daemon also checks
 requested selectors against that provider's `allowed_commands`,
 `allow_unmatched_messages`, and `allow_card_actions` before registering the
 stream. Legacy streams additionally require `allow_legacy_commands`, and
-follow-up sends require `allow_follow_up_messages`. Grant unmatched-message
-access carefully because it includes direct-message prompts.
+follow-up sends require `allow_follow_up_messages`. Event candidates are then
+filtered by `allowed_apps` before exact-command/fallback arbitration. Grant
+unmatched-message access carefully because it includes direct-message prompts.
 
 Exact command subscribers win over unmatched subscribers. A successfully
 delivered legacy group command wins before either agent selector. For a single
@@ -174,14 +218,17 @@ paths or after subscriber churn. Delivery is still best-effort: enqueue is
 non-blocking and there is no provider ACK or durable replay log.
 
 Direct (`p2p`) text needs no mention and is exposed as `chat_alias = "direct"`.
-Group and topic-group text must originate in a uniquely configured channel
-alias and mention the configured bot. `InboundAgentMessage.text` contains the
-complete mention-stripped prompt, while `command` and `command_text` expose the
-optional first-word view. `conversation_id` is an opaque hash of the raw chat
-and optional thread. Only `chat_type` and `message_type` pass through metadata.
-Raw event/chat/message/card ids and callback credentials never enter the public
-stream. `delivery_id` and `conversation_id` are stable, domain-separated opaque
-handles derived by botd.
+Group and topic-group text must originate in a globally unique configured
+channel alias and mention that app's configured bot. `InboundAgentMessage.text`
+contains the complete mention-stripped prompt, while `command` and
+`command_text` expose the optional first-word view. `conversation_id` is an
+opaque hash of the raw chat and optional thread. The `default` app preserves
+the historical derivation byte-for-byte; only additional apps are namespaced.
+Agent-event metadata is limited to `chat_type`, `message_type`, and the trusted
+public `app_alias`. Legacy command metadata remains limited to `chat_type` and
+`message_type`. Raw event/chat/message/card ids and callback credentials never
+enter the public stream. `delivery_id` and `conversation_id` are stable,
+domain-separated opaque handles derived by botd.
 
 #### Agent response state machine
 
@@ -204,11 +251,12 @@ markdown, and an optional preview `summary`. Outcome must be `COMPLETED`,
 streaming mode, and increments the semantic revision once even when finalizing
 requires two CardKit operations.
 
-Every operation is idempotent within botd's process state. A transport retry
-must reuse the same `operation_id` and semantic request. A completed retry
-returns `duplicate = true`; update and finish retries return their recorded
-operation receipt, while a start retry returns the response handle's current
-state. Reuse with different fields is an `operation_conflict`. A stale
+Every operation is idempotent within botd's app-scoped process state. A
+transport retry must reuse the same `operation_id` and semantic request. A
+completed retry returns `duplicate = true`; update and finish retries return
+their recorded operation receipt, while a start retry returns the response
+handle's current state. Reuse with different fields is an
+`operation_conflict`. A stale
 `expected_revision` is a `revision_conflict`, a different concurrent mutation
 is `operation_in_flight`, and a terminal response is `response_closed`. The
 `provider` must own both the inbound delivery and the response handle.
@@ -221,9 +269,10 @@ Feishu automatically closes streaming mode after roughly 10 minutes and allows
 CardKit entity operations for 14 days. botd's agent state is deliberately
 process-local: handles and operation receipts expire after the configured
 dedupe TTL (six hours by default) and are lost on restart, so an old card cannot
-be resumed through its prior `response_id`. Run one active long-connection
-client per Feishu app: Feishu cluster-delivers each event to one random client,
-and this release has no shared ownership store for active-active replicas.
+be resumed through its prior `response_id`. Run one active botd process owning a
+given Feishu app; one multi-app process opens one connection per app. Feishu
+cluster-delivers each event to one random client, and this release has no shared
+ownership store for active-active replicas.
 
 With `agent_providers` configured, startup requires the dedupe TTL to be at
 least one hour plus `send_timeout`. That keeps an ambiguous Start claim alive
@@ -259,10 +308,12 @@ previously delivered `InboundAgentEvent`, an `operation_id`, the complete
 preview. It returns an opaque `follow_up_id` and a `duplicate` flag. There is no
 revision and no later edit: this is an ordinary message, not a CardKit entity.
 
-botd records a private reverse map from `conversation_id` to the concrete chat
-and optional thread each time it delivers an agent event, and keeps it for the
-dedupe TTL. Three checks run before any Feishu call: the provider bearer must
-match the request `provider`, that provider must have
+botd records a private, app-scoped reverse map from `conversation_id` to the
+owning app, concrete chat, and optional thread each time it delivers an agent
+event, and keeps it for the dedupe TTL. The app is resolved from the handle, not
+provider metadata, so a follow-up cannot leave through another app's sender.
+Three checks run before any Feishu call: the provider bearer must match the
+request `provider`, that provider must have
 `allow_follow_up_messages` in its config (default false, granted separately from
 the ingress selectors because it lets an agent speak unprompted), and it must
 have received an agent event for that exact conversation inside the TTL. A
@@ -342,7 +393,8 @@ stable machine `code`, a redacted `message`, a `retryable` flag, and a
 
 Generated Go under [`gen/feishubotd/v1/`](../gen/feishubotd/v1) is **committed**,
 so `go build`/`go test` and the Docker build never run codegen. Regenerate only
-when the `.proto` files change:
+when the `.proto` files change. Multi-app support is internal routing plus
+configuration and does not regenerate these bindings:
 
 ```sh
 make proto        # buf generate + gofmt

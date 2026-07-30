@@ -18,7 +18,13 @@ func (c *commandServer) Subscribe(in *pb.SubscribeRequest, stream pb.CommandServ
 	if err := authorizeLegacySubscription(stream.Context(), in.GetProvider(), in.GetCommands()); err != nil {
 		return err
 	}
-	sub, apiErr := c.svc.SubscribeCommands(stream.Context(), in.GetProvider(), in.GetCommands())
+	allowedApps, allowedAppsConfigured := authenticatedProviderAppScope(stream.Context())
+	sub, apiErr := c.svc.SubscribeCommandsForApps(stream.Context(), service.CommandSubscribeOptions{
+		Provider:              in.GetProvider(),
+		Commands:              in.GetCommands(),
+		AllowedApps:           allowedApps,
+		AllowedAppsConfigured: allowedAppsConfigured,
+	})
 	if apiErr != nil {
 		return grpcError(apiErr, requestIDFromContext(stream.Context()))
 	}
@@ -67,11 +73,14 @@ func (c *commandServer) SubscribeAgentEvents(in *pb.SubscribeAgentEventsRequest,
 	); err != nil {
 		return err
 	}
+	allowedApps, allowedAppsConfigured := authenticatedProviderAppScope(stream.Context())
 	sub, apiErr := c.svc.SubscribeAgentEvents(stream.Context(), service.AgentSubscribeOptions{
 		Provider:                 in.GetProvider(),
 		Commands:                 in.GetCommands(),
 		IncludeUnmatchedMessages: in.GetIncludeUnmatchedMessages(),
 		IncludeCardActions:       in.GetIncludeCardActions(),
+		AllowedApps:              allowedApps,
+		AllowedAppsConfigured:    allowedAppsConfigured,
 	})
 	if apiErr != nil {
 		return grpcError(apiErr, requestIDFromContext(stream.Context()))

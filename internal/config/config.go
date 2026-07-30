@@ -7,19 +7,44 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 )
 
 const (
+	// DefaultAppAlias is reserved for the legacy top-level feishu, commands, and
+	// channels configuration. Keeping that app's identity stable preserves every
+	// existing environment override and daemon-derived conversation id.
+	DefaultAppAlias                 = "default"
 	defaultDedupeTTL                = 6 * time.Hour
 	defaultSendTimeout              = 15 * time.Second
 	defaultScriptExecTimeoutSeconds = 120
 	minimumBearerTokenBytes         = 32
 )
 
+// AppConfig is one Feishu application's private runtime configuration.
+// AppID and AppSecret must never be serialized, logged, or sent to providers.
+type AppConfig struct {
+	AppID     string
+	AppSecret string
+	Commands  CommandConfig
+	Channels  map[string]string
+}
+
+// ChannelRoute resolves one globally unique public channel alias to the Feishu
+// application and raw chat id that own it. ChatID remains daemon-private.
+type ChannelRoute struct {
+	AppAlias string
+	ChatID   string
+}
+
 type Config struct {
+	// AppID, AppSecret, Commands, and Channels are retained as compatibility
+	// projections for legacy callers and tests. New runtime code should use
+	// EffectiveApps and ResolveChannel. Channels is the global alias-to-chat
+	// projection; AppID/AppSecret/Commands describe only the default app.
 	AppID          string
 	AppSecret      string
 	SocketPath     string
@@ -31,6 +56,8 @@ type Config struct {
 	AllowLANBind   bool
 	Commands       CommandConfig
 	Channels       map[string]string
+	Apps           map[string]AppConfig
+	ChannelRoutes  map[string]ChannelRoute
 	DefaultChannel string
 	Services       map[string]ServiceConfig
 	DedupeTTL      time.Duration
@@ -48,6 +75,10 @@ type AgentProviderConfig struct {
 	AllowCardActions       bool
 	AllowFollowUpMessages  bool
 	AllowLegacyCommands    bool
+	// AllowedAppsConfigured distinguishes an absent allowed_apps field (all
+	// configured apps) from an explicitly empty list (no apps).
+	AllowedApps           []string
+	AllowedAppsConfigured bool
 }
 
 type CommandConfig struct {
@@ -75,12 +106,97 @@ type ServiceConfig struct {
 	DefaultChannel string `json:"default_channel"`
 }
 
+// EffectiveApps returns a defensive copy of the canonical app registry. The
+// legacy fallback keeps programmatic Config literals written before multi-app
+// support working unchanged.
+func (c Config) EffectiveApps() map[string]AppConfig {
+	apps := cloneApps(c.Apps)
+	if _, exists := apps[DefaultAppAlias]; !exists && (strings.TrimSpace(c.AppID) != "" || strings.TrimSpace(c.AppSecret) != "") {
+		channels := make(map[string]string)
+		if c.ChannelRoutes != nil {
+			for alias, route := range c.ChannelRoutes {
+				if route.AppAlias == DefaultAppAlias {
+					channels[alias] = route.ChatID
+				}
+			}
+		} else {
+			channels = cloneStringMap(c.Channels)
+		}
+		apps[DefaultAppAlias] = AppConfig{
+			AppID:     strings.TrimSpace(c.AppID),
+			AppSecret: strings.TrimSpace(c.AppSecret),
+			Commands:  cloneCommandConfig(c.Commands),
+			Channels:  channels,
+		}
+	}
+	return apps
+}
+
+// ResolveChannel maps one public alias to its private app/chat route. The
+// fallback preserves direct Config literals that predate ChannelRoutes.
+func (c Config) ResolveChannel(alias string) (appAlias, chatID string, ok bool) {
+	alias = normalizeChannelName(alias)
+	if alias == "" {
+		return "", "", false
+	}
+	if route, exists := c.ChannelRoutes[alias]; exists {
+		appAlias = strings.TrimSpace(route.AppAlias)
+		if appAlias == "" {
+			appAlias = DefaultAppAlias
+		}
+		chatID = strings.TrimSpace(route.ChatID)
+		return appAlias, chatID, chatID != ""
+	}
+	if c.ChannelRoutes != nil {
+		return "", "", false
+	}
+	chatID = strings.TrimSpace(c.Channels[alias])
+	if chatID == "" {
+		return "", "", false
+	}
+	return DefaultAppAlias, chatID, true
+}
+
+// AppAliases returns all configured application aliases in deterministic order.
+func (c Config) AppAliases() []string {
+	apps := c.EffectiveApps()
+	aliases := make([]string, 0, len(apps))
+	for alias := range apps {
+		aliases = append(aliases, alias)
+	}
+	sort.Strings(aliases)
+	return aliases
+}
+
+// ProviderAllowsApp reports whether a configured provider may observe or mutate
+// state owned by appAlias. An absent provider entry is unrestricted so internal
+// in-process subscribers and legacy unscoped deployments retain their behavior.
+func (c Config) ProviderAllowsApp(provider, appAlias string) bool {
+	provider = strings.TrimSpace(provider)
+	appAlias = strings.TrimSpace(appAlias)
+	if appAlias == "" {
+		appAlias = DefaultAppAlias
+	}
+	providerCfg, configured := c.AgentProviders[provider]
+	if !configured || (!providerCfg.AllowedAppsConfigured && providerCfg.AllowedApps == nil) {
+		return true
+	}
+	for _, allowed := range providerCfg.AllowedApps {
+		if allowed == appAlias {
+			return true
+		}
+	}
+	return false
+}
+
 func LoadFromEnv() (Config, error) {
 	fileCfg, err := loadFileConfig(strings.TrimSpace(os.Getenv("FEISHU_BOTD_CONFIG")))
 	if err != nil {
 		return Config{}, err
 	}
 
+	legacyCommands := commandConfigFromEnv(fileCfg.Commands)
+	legacyChannels := mergeStringMaps(fileCfg.Channels, loadChannels(os.Environ()))
 	cfg := Config{
 		AppID:          firstNonEmpty(os.Getenv("FEISHU_APP_ID"), fileCfg.AppID),
 		AppSecret:      firstNonEmpty(os.Getenv("FEISHU_APP_SECRET"), fileCfg.AppSecret),
@@ -90,39 +206,58 @@ func LoadFromEnv() (Config, error) {
 		GRPCBindAddr:   firstNonEmpty(os.Getenv("FEISHU_BOTD_GRPC_BIND"), fileCfg.GRPCBindAddr),
 		AgentProviders: make(map[string]AgentProviderConfig),
 		AllowLANBind:   boolFromEnvDefault("FEISHU_BOTD_ALLOW_NON_LOOPBACK_BIND", fileCfg.AllowLANBind),
-		Commands:       commandConfigFromEnv(fileCfg.Commands),
-		Channels:       mergeStringMaps(fileCfg.Channels, loadChannels(os.Environ())),
+		Commands:       legacyCommands,
+		Apps:           cloneApps(fileCfg.Apps),
 		DefaultChannel: firstNonEmpty(os.Getenv("FEISHU_BOTD_DEFAULT_CHANNEL"), fileCfg.DefaultChannel),
 		Services:       fileCfg.Services,
 		DedupeTTL:      durationFromEnv("FEISHU_BOTD_DEDUPE_TTL_SECONDS", fileCfg.DedupeTTL),
 		SendTimeout:    durationFromEnv("FEISHU_BOTD_SEND_TIMEOUT_SECONDS", fileCfg.SendTimeout),
 	}
 
-	if cfg.AppID == "" {
+	hasLegacyCredentials := cfg.AppID != "" || cfg.AppSecret != ""
+	switch {
+	case hasLegacyCredentials:
+		if cfg.AppID == "" {
+			return Config{}, errors.New("FEISHU_APP_ID or config feishu.app_id is required")
+		}
+		if cfg.AppSecret == "" {
+			return Config{}, errors.New("FEISHU_APP_SECRET or config feishu.app_secret is required")
+		}
+		cfg.Apps[DefaultAppAlias] = AppConfig{
+			AppID:     cfg.AppID,
+			AppSecret: cfg.AppSecret,
+			Commands:  cloneCommandConfig(legacyCommands),
+			Channels:  cloneStringMap(legacyChannels),
+		}
+	case len(cfg.Apps) == 0:
 		return Config{}, errors.New("FEISHU_APP_ID or config feishu.app_id is required")
+	case hasLegacyAppSettings(legacyCommands, legacyChannels):
+		return Config{}, errors.New("legacy commands or channels require FEISHU_APP_ID and FEISHU_APP_SECRET or config feishu credentials")
 	}
-	if cfg.AppSecret == "" {
-		return Config{}, errors.New("FEISHU_APP_SECRET or config feishu.app_secret is required")
+	if err := validateApps(cfg.Apps); err != nil {
+		return Config{}, err
 	}
+	channels, routes, err := buildChannelRoutes(cfg.Apps)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.Channels = channels
+	cfg.ChannelRoutes = routes
 	if cfg.SocketPath == "" && cfg.BindAddr == "" && cfg.GRPCSocketPath == "" && cfg.GRPCBindAddr == "" {
 		return Config{}, errors.New("at least one listener is required: set FEISHU_BOTD_SOCKET, FEISHU_BOTD_BIND, FEISHU_BOTD_GRPC_SOCKET, FEISHU_BOTD_GRPC_BIND, or config listeners")
 	}
-	// A direct-message-only agent has no static chat id to configure. Preserve
-	// the channel requirement for outbound-only deployments, while allowing the
-	// inbound long-connection path to route P2P replies from private event state.
-	if len(cfg.Channels) == 0 && !cfg.Commands.Enabled {
-		return Config{}, errors.New("at least one channel mapping is required unless commands are enabled for direct messages")
-	}
 	if err := validateRouting(cfg); err != nil {
-		return Config{}, err
-	}
-	if err := validateScripts(cfg); err != nil {
 		return Config{}, err
 	}
 	for provider, providerCfg := range fileCfg.AgentProviders {
 		token, err := readTokenFile(providerCfg.AuthTokenFile)
 		if err != nil {
 			return Config{}, fmt.Errorf("load provider %q token: %w", provider, err)
+		}
+		allowedApps := []string(nil)
+		allowedAppsConfigured := providerCfg.AllowedApps.Set
+		if allowedAppsConfigured {
+			allowedApps = append([]string{}, providerCfg.AllowedApps.Values...)
 		}
 		cfg.AgentProviders[provider] = AgentProviderConfig{
 			AuthToken:              token,
@@ -131,7 +266,12 @@ func LoadFromEnv() (Config, error) {
 			AllowCardActions:       providerCfg.AllowCardActions,
 			AllowFollowUpMessages:  providerCfg.AllowFollowUpMessages,
 			AllowLegacyCommands:    providerCfg.AllowLegacyCommands,
+			AllowedApps:            allowedApps,
+			AllowedAppsConfigured:  allowedAppsConfigured,
 		}
+	}
+	if err := validateAgentProviderApps(cfg.AgentProviders, cfg.Apps); err != nil {
+		return Config{}, err
 	}
 	if err := validateAgentProviderTokens(cfg.AgentProviders, ""); err != nil {
 		return Config{}, err
@@ -192,6 +332,7 @@ type fileConfig struct {
 	AllowLANBind   bool
 	Commands       CommandConfig
 	Channels       map[string]string
+	Apps           map[string]AppConfig
 	DefaultChannel string
 	Services       map[string]ServiceConfig
 	DedupeTTL      time.Duration
@@ -200,6 +341,7 @@ type fileConfig struct {
 
 type configFile struct {
 	Feishu             fileFeishuConfig                   `json:"feishu"`
+	Apps               map[string]fileAppConfig           `json:"apps"`
 	Listeners          fileListenersConfig                `json:"listeners"`
 	Commands           CommandConfig                      `json:"commands"`
 	Channels           map[string]string                  `json:"channels"`
@@ -211,12 +353,41 @@ type configFile struct {
 }
 
 type fileAgentProviderConfig struct {
-	AuthTokenFile          string   `json:"auth_token_file"`
-	AllowedCommands        []string `json:"allowed_commands"`
-	AllowUnmatchedMessages bool     `json:"allow_unmatched_messages"`
-	AllowCardActions       bool     `json:"allow_card_actions"`
-	AllowFollowUpMessages  bool     `json:"allow_follow_up_messages"`
-	AllowLegacyCommands    bool     `json:"allow_legacy_commands"`
+	AuthTokenFile          string             `json:"auth_token_file"`
+	AllowedCommands        []string           `json:"allowed_commands"`
+	AllowedApps            optionalStringList `json:"allowed_apps"`
+	AllowUnmatchedMessages bool               `json:"allow_unmatched_messages"`
+	AllowCardActions       bool               `json:"allow_card_actions"`
+	AllowFollowUpMessages  bool               `json:"allow_follow_up_messages"`
+	AllowLegacyCommands    bool               `json:"allow_legacy_commands"`
+}
+
+// optionalStringList preserves the security-relevant distinction between an
+// omitted allowlist and an explicitly empty one. JSON null is rejected because
+// treating it as omission would silently widen provider authority.
+type optionalStringList struct {
+	Values []string
+	Set    bool
+}
+
+func (o *optionalStringList) UnmarshalJSON(data []byte) error {
+	o.Set = true
+	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+		return errors.New("allowed_apps must be an array, not null")
+	}
+	var values []string
+	if err := json.Unmarshal(data, &values); err != nil {
+		return err
+	}
+	o.Values = values
+	return nil
+}
+
+type fileAppConfig struct {
+	AppID     string            `json:"app_id"`
+	AppSecret string            `json:"app_secret"`
+	Commands  CommandConfig     `json:"commands"`
+	Channels  map[string]string `json:"channels"`
 }
 
 type fileFeishuConfig struct {
@@ -236,6 +407,7 @@ type fileListenersConfig struct {
 func loadFileConfig(path string) (fileConfig, error) {
 	cfg := fileConfig{
 		Channels:    map[string]string{},
+		Apps:        map[string]AppConfig{},
 		Services:    map[string]ServiceConfig{},
 		DedupeTTL:   defaultDedupeTTL,
 		SendTimeout: defaultSendTimeout,
@@ -265,9 +437,18 @@ func loadFileConfig(path string) (fileConfig, error) {
 		return fileConfig{}, err
 	}
 	cfg.AgentProviders = agentProviders
+	apps, err := normalizeFileApps(raw.Apps)
+	if err != nil {
+		return fileConfig{}, err
+	}
+	cfg.Apps = apps
 	cfg.AllowLANBind = raw.Listeners.AllowNonLoopbackBind
 	cfg.Commands = normalizeCommandConfig(raw.Commands)
-	cfg.Channels = normalizeChannels(raw.Channels)
+	channels, err := normalizeChannelsStrict(raw.Channels, "legacy default app")
+	if err != nil {
+		return fileConfig{}, err
+	}
+	cfg.Channels = channels
 	cfg.DefaultChannel = normalizeChannelName(raw.DefaultChannel)
 	cfg.Services = normalizeServices(raw.Services)
 	if raw.DedupeTTLSeconds > 0 {
@@ -311,6 +492,128 @@ func normalizeCommandConfig(in CommandConfig) CommandConfig {
 		BotNames:   normalizeList(in.BotNames),
 		Scripts:    normalizeScriptExecConfig(in.Scripts),
 	}
+}
+
+func cloneCommandConfig(in CommandConfig) CommandConfig {
+	return CommandConfig{
+		Enabled:    in.Enabled,
+		BotOpenID:  in.BotOpenID,
+		BotUserID:  in.BotUserID,
+		BotUnionID: in.BotUnionID,
+		BotNames:   cloneStrings(in.BotNames),
+		Scripts: ScriptExecConfig{
+			Enabled:        in.Scripts.Enabled,
+			Command:        in.Scripts.Command,
+			Dir:            in.Scripts.Dir,
+			AllowedChats:   cloneStrings(in.Scripts.AllowedChats),
+			TimeoutSeconds: in.Scripts.TimeoutSeconds,
+		},
+	}
+}
+
+func cloneStrings(in []string) []string {
+	if in == nil {
+		return nil
+	}
+	return append(make([]string, 0, len(in)), in...)
+}
+
+func cloneStringMap(in map[string]string) map[string]string {
+	out := make(map[string]string, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
+}
+
+func cloneApps(in map[string]AppConfig) map[string]AppConfig {
+	out := make(map[string]AppConfig, len(in)+1)
+	for alias, app := range in {
+		out[alias] = AppConfig{
+			AppID:     app.AppID,
+			AppSecret: app.AppSecret,
+			Commands:  cloneCommandConfig(app.Commands),
+			Channels:  cloneStringMap(app.Channels),
+		}
+	}
+	return out
+}
+
+func normalizeFileApps(in map[string]fileAppConfig) (map[string]AppConfig, error) {
+	out := make(map[string]AppConfig, len(in))
+	rawAliases := make([]string, 0, len(in))
+	for rawAlias := range in {
+		rawAliases = append(rawAliases, rawAlias)
+	}
+	sort.Strings(rawAliases)
+	for _, rawAlias := range rawAliases {
+		app := in[rawAlias]
+		alias := strings.TrimSpace(rawAlias)
+		if alias == "" {
+			return nil, errors.New("apps contains an empty app alias")
+		}
+		if len(alias) > 64 {
+			return nil, fmt.Errorf("app alias %q exceeds 64 bytes", alias)
+		}
+		if !validAppAlias(alias) {
+			return nil, fmt.Errorf("app alias %q must match [A-Za-z0-9][A-Za-z0-9._-]*", alias)
+		}
+		if strings.EqualFold(alias, DefaultAppAlias) {
+			return nil, fmt.Errorf("apps.%s is reserved for the legacy top-level app", DefaultAppAlias)
+		}
+		if _, duplicate := out[alias]; duplicate {
+			return nil, fmt.Errorf("app alias %q is configured more than once after trimming", alias)
+		}
+		channels, err := normalizeChannelsStrict(app.Channels, fmt.Sprintf("app %q", alias))
+		if err != nil {
+			return nil, err
+		}
+		out[alias] = AppConfig{
+			AppID:     strings.TrimSpace(app.AppID),
+			AppSecret: strings.TrimSpace(app.AppSecret),
+			Commands:  normalizeCommandConfig(app.Commands),
+			Channels:  channels,
+		}
+	}
+	return out, nil
+}
+
+func validAppAlias(alias string) bool {
+	for index := 0; index < len(alias); index++ {
+		char := alias[index]
+		alphaNumeric := char >= 'a' && char <= 'z' ||
+			char >= 'A' && char <= 'Z' ||
+			char >= '0' && char <= '9'
+		if alphaNumeric {
+			continue
+		}
+		if index > 0 && (char == '.' || char == '_' || char == '-') {
+			continue
+		}
+		return false
+	}
+	return alias != ""
+}
+
+func normalizeChannelsStrict(in map[string]string, owner string) (map[string]string, error) {
+	out := make(map[string]string, len(in))
+	rawAliases := make([]string, 0, len(in))
+	for rawAlias := range in {
+		rawAliases = append(rawAliases, rawAlias)
+	}
+	sort.Strings(rawAliases)
+	for _, rawAlias := range rawAliases {
+		alias := normalizeChannelName(rawAlias)
+		chatID := strings.TrimSpace(in[rawAlias])
+		if alias == "" || chatID == "" {
+			continue
+		}
+		if _, duplicate := out[alias]; duplicate {
+			return nil, fmt.Errorf("%s configures channel alias %q more than once after normalization", owner, alias)
+		}
+		out[alias] = chatID
+	}
+	return out, nil
 }
 
 func normalizeScriptExecConfig(in ScriptExecConfig) ScriptExecConfig {
@@ -450,6 +753,89 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
+func hasLegacyAppSettings(commands CommandConfig, channels map[string]string) bool {
+	return len(channels) > 0 ||
+		commands.Enabled ||
+		commands.BotOpenID != "" ||
+		commands.BotUserID != "" ||
+		commands.BotUnionID != "" ||
+		len(commands.BotNames) > 0 ||
+		commands.Scripts.Enabled ||
+		commands.Scripts.Command != "" ||
+		commands.Scripts.Dir != "" ||
+		len(commands.Scripts.AllowedChats) > 0
+}
+
+func validateApps(apps map[string]AppConfig) error {
+	aliases := make([]string, 0, len(apps))
+	for alias := range apps {
+		aliases = append(aliases, alias)
+	}
+	sort.Strings(aliases)
+
+	appIDOwners := make(map[string]string, len(apps))
+	for _, alias := range aliases {
+		app := apps[alias]
+		if strings.TrimSpace(app.AppID) == "" {
+			if alias == DefaultAppAlias {
+				return errors.New("FEISHU_APP_ID or config feishu.app_id is required")
+			}
+			return fmt.Errorf("app %q app_id is required", alias)
+		}
+		if strings.TrimSpace(app.AppSecret) == "" {
+			if alias == DefaultAppAlias {
+				return errors.New("FEISHU_APP_SECRET or config feishu.app_secret is required")
+			}
+			return fmt.Errorf("app %q app_secret is required", alias)
+		}
+		if other, duplicate := appIDOwners[app.AppID]; duplicate {
+			return fmt.Errorf("apps %q and %q must use distinct app_id values", other, alias)
+		}
+		appIDOwners[app.AppID] = alias
+		// A direct-message-only agent has no static chat id to configure.
+		if len(app.Channels) == 0 && !app.Commands.Enabled {
+			if alias == DefaultAppAlias {
+				return errors.New("at least one channel mapping is required unless commands are enabled for direct messages")
+			}
+			return fmt.Errorf("app %q requires at least one channel mapping unless commands are enabled for direct messages", alias)
+		}
+		if err := validateAppScripts(alias, app); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func buildChannelRoutes(apps map[string]AppConfig) (map[string]string, map[string]ChannelRoute, error) {
+	channels := make(map[string]string)
+	routes := make(map[string]ChannelRoute)
+	aliases := make([]string, 0, len(apps))
+	for alias := range apps {
+		aliases = append(aliases, alias)
+	}
+	sort.Strings(aliases)
+	for _, appAlias := range aliases {
+		app := apps[appAlias]
+		channelAliases := make([]string, 0, len(app.Channels))
+		for channelAlias := range app.Channels {
+			channelAliases = append(channelAliases, channelAlias)
+		}
+		sort.Strings(channelAliases)
+		for _, channelAlias := range channelAliases {
+			if existing, duplicate := routes[channelAlias]; duplicate {
+				return nil, nil, fmt.Errorf(
+					"channel alias %q is configured by both app %q and app %q",
+					channelAlias, existing.AppAlias, appAlias,
+				)
+			}
+			chatID := app.Channels[channelAlias]
+			channels[channelAlias] = chatID
+			routes[channelAlias] = ChannelRoute{AppAlias: appAlias, ChatID: chatID}
+		}
+	}
+	return channels, routes, nil
+}
+
 func validateRouting(cfg Config) error {
 	if cfg.DefaultChannel != "" {
 		if _, ok := cfg.Channels[cfg.DefaultChannel]; !ok {
@@ -468,29 +854,42 @@ func validateRouting(cfg Config) error {
 }
 
 func validateScripts(cfg Config) error {
-	s := cfg.Commands.Scripts
+	return validateAppScripts(DefaultAppAlias, AppConfig{
+		AppID:     cfg.AppID,
+		AppSecret: cfg.AppSecret,
+		Commands:  cfg.Commands,
+		Channels:  cfg.Channels,
+	})
+}
+
+func validateAppScripts(appAlias string, app AppConfig) error {
+	s := app.Commands.Scripts
 	if !s.Enabled {
 		return nil
 	}
-	if !cfg.Commands.Enabled {
-		return errors.New("commands.scripts.enabled requires commands.enabled to be true")
+	prefix := "commands"
+	if appAlias != DefaultAppAlias {
+		prefix = fmt.Sprintf("apps.%s.commands", appAlias)
+	}
+	if !app.Commands.Enabled {
+		return fmt.Errorf("%s.scripts.enabled requires %s.enabled to be true", prefix, prefix)
 	}
 	if s.Command == "" {
-		return errors.New("commands.scripts.command is required when commands.scripts.enabled is true")
+		return fmt.Errorf("%s.scripts.command is required when %s.scripts.enabled is true", prefix, prefix)
 	}
 	if s.Dir == "" {
-		return errors.New("commands.scripts.dir is required when commands.scripts.enabled is true")
+		return fmt.Errorf("%s.scripts.dir is required when %s.scripts.enabled is true", prefix, prefix)
 	}
 	info, err := os.Stat(s.Dir)
 	if err != nil || !info.IsDir() {
-		return fmt.Errorf("commands.scripts.dir %q must be an existing directory", s.Dir)
+		return fmt.Errorf("%s.scripts.dir %q must be an existing directory", prefix, s.Dir)
 	}
 	if len(s.AllowedChats) == 0 {
-		return errors.New("commands.scripts.allowed_chats must include at least one configured channel")
+		return fmt.Errorf("%s.scripts.allowed_chats must include at least one configured channel", prefix)
 	}
 	for _, chat := range s.AllowedChats {
-		if _, ok := cfg.Channels[chat]; !ok {
-			return fmt.Errorf("commands.scripts.allowed_chats entry %q is not a configured channel", chat)
+		if _, ok := app.Channels[chat]; !ok {
+			return fmt.Errorf("%s.scripts.allowed_chats entry %q is not a configured channel for app %q", prefix, chat, appAlias)
 		}
 	}
 	return nil
@@ -598,14 +997,43 @@ func normalizeAgentProviderConfigs(in map[string]fileAgentProviderConfig) (map[s
 		if err != nil {
 			return nil, fmt.Errorf("provider %q: %w", provider, err)
 		}
+		allowedApps := optionalStringList{}
+		if providerCfg.AllowedApps.Set {
+			apps, err := normalizeProviderApps(providerCfg.AllowedApps.Values)
+			if err != nil {
+				return nil, fmt.Errorf("provider %q: %w", provider, err)
+			}
+			allowedApps = optionalStringList{Values: apps, Set: true}
+		}
 		out[provider] = fileAgentProviderConfig{
 			AuthTokenFile:          tokenFile,
 			AllowedCommands:        commands,
+			AllowedApps:            allowedApps,
 			AllowUnmatchedMessages: providerCfg.AllowUnmatchedMessages,
 			AllowCardActions:       providerCfg.AllowCardActions,
 			AllowFollowUpMessages:  providerCfg.AllowFollowUpMessages,
 			AllowLegacyCommands:    providerCfg.AllowLegacyCommands,
 		}
+	}
+	return out, nil
+}
+
+func normalizeProviderApps(in []string) ([]string, error) {
+	seen := make(map[string]struct{}, len(in))
+	out := make([]string, 0, len(in))
+	for _, rawAlias := range in {
+		alias := strings.TrimSpace(rawAlias)
+		if alias == "" {
+			return nil, errors.New("allowed_apps contains an empty app alias")
+		}
+		if len(alias) > 64 {
+			return nil, errors.New("allowed_apps entry exceeds 64 bytes")
+		}
+		if _, duplicate := seen[alias]; duplicate {
+			continue
+		}
+		seen[alias] = struct{}{}
+		out = append(out, alias)
 	}
 	return out, nil
 }
@@ -628,6 +1056,26 @@ func normalizeProviderCommands(in []string) ([]string, error) {
 		out = append(out, command)
 	}
 	return out, nil
+}
+
+func validateAgentProviderApps(providers map[string]AgentProviderConfig, apps map[string]AppConfig) error {
+	names := make([]string, 0, len(providers))
+	for provider := range providers {
+		names = append(names, provider)
+	}
+	sort.Strings(names)
+	for _, provider := range names {
+		providerCfg := providers[provider]
+		if !providerCfg.AllowedAppsConfigured {
+			continue
+		}
+		for _, alias := range providerCfg.AllowedApps {
+			if _, exists := apps[alias]; !exists {
+				return fmt.Errorf("provider %q allowed_apps references unknown app alias %q", provider, alias)
+			}
+		}
+	}
+	return nil
 }
 
 func validateAgentProviderTokens(providers map[string]AgentProviderConfig, generalToken string) error {

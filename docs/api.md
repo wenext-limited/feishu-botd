@@ -5,6 +5,12 @@ callers. It delegates to the same internal service logic as the gRPC contract;
 new integrations should prefer gRPC. See [ipc.md](./ipc.md) for the
 protobuf-first contract, the equivalent gRPC RPCs, and the shared error model.
 
+The request shapes do not change for a multi-app daemon: there is no app field.
+Every caller still supplies a bare channel alias (or uses a configured service
+default), and botd resolves that globally unique alias to the owning app and
+private Feishu chat id. App aliases are public configuration names, but app ids,
+secrets, and raw chat ids never enter HTTP bodies or responses.
+
 TCP requests to the two `POST` routes require the general bearer token. Unix
 socket requests also require that same distinct general bearer whenever
 `agent_providers` is configured; a provider token does not authorize HTTP
@@ -23,11 +29,18 @@ Returns process liveness only.
 ## `GET /readyz`
 
 Returns redacted readiness checks for config, Feishu credentials, channels, and
-dedupe state. It does not send a test message.
+dedupe state. Existing aggregate keys remain unchanged. Multi-app readiness
+adds `feishu_auth.<alias>` (`ok`, `missing_credentials`, or `unavailable`) and
+`feishu_connection.<alias>` (`starting`, `connected`, `reconnecting`,
+`disconnected`, or `unavailable`). Any failed app auth check or connection
+state other than `connected` returns `503 unready`. It does not send a test
+message or expose SDK error text.
 
 ## `POST /v1/notify`
 
 Sends one notification to a configured local channel.
+The alias selects its owning app internally; callers do not pass an app alias
+separately. Global and per-service default channels use the same resolution.
 
 ```json
 {
@@ -80,7 +93,9 @@ caller can currently set it.
 Lower-level send path for callers that need a specific message content type.
 It supports markdown and Feishu interactive cards. `dedupe_key` is optional;
 when present, duplicate sends return the original `message_id`. `target.channel`
-may be omitted when `source` has a configured service default.
+may be omitted when `source` has a configured service default. Dedupe state is
+scoped to the resolved app, so reusing the same source/key against aliases owned
+by two different apps does not create a cross-app duplicate or conflict.
 
 Markdown:
 

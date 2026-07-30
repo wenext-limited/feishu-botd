@@ -2,9 +2,12 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"strings"
 
+	"feishu-botd/internal/config"
 	"feishu-botd/internal/dedupe"
 	"feishu-botd/internal/notify"
 )
@@ -17,6 +20,9 @@ func (s *Service) SendNotification(ctx context.Context, req notify.Request) (not
 	req.Target.Channel = s.resolveChannel(req.Target.Channel, req.Source)
 	if apiErr := req.Validate(s.cfg.Channels); apiErr != nil {
 		return notify.Response{}, apiErr
+	}
+	if _, _, ok := s.cfg.ResolveChannel(req.Target.Channel); !ok {
+		return notify.Response{}, notify.NewAPIError(404, "unknown_channel", "unknown channel", false)
 	}
 	// SendNotification remains the stable markdown notification contract. The
 	// lower-level SendMessage path owns card delivery and reply-threading, even
@@ -56,7 +62,7 @@ func (s *Service) SendMessage(ctx context.Context, in MessageInput) (SendResult,
 	if channel == "" {
 		return SendResult{}, notify.BadRequest("missing_channel", "target.channel is required")
 	}
-	if _, ok := s.cfg.Channels[channel]; !ok {
+	if _, _, ok := s.cfg.ResolveChannel(channel); !ok {
 		return SendResult{}, notify.NewAPIError(404, "unknown_channel", "unknown channel", false)
 	}
 	markdown := strings.TrimSpace(in.Markdown)
@@ -115,9 +121,18 @@ func validateCardJSON(cardJSON string) *notify.APIError {
 // touched. The channel alias in req.Target is assumed to already be validated
 // against config by the caller.
 func (s *Service) deliver(ctx context.Context, req notify.Request, dedupeEnabled bool) (SendResult, *notify.APIError) {
+	appAlias, chatID, ok := s.cfg.ResolveChannel(req.Target.Channel)
+	if !ok {
+		return SendResult{}, notify.NewAPIError(404, "unknown_channel", "unknown channel", false)
+	}
+	backend, ok := s.backendForApp(appAlias)
+	if !ok {
+		return SendResult{}, notify.NewAPIError(502, "feishu_unavailable", "Feishu sender is unavailable", true)
+	}
+	dedupeSource := appScopedDedupeSource(appAlias, req.Source)
 	if dedupeEnabled {
 		fingerprint := req.Fingerprint()
-		reserved := s.store.Reserve(req.Source, req.DedupeKey, fingerprint)
+		reserved := s.store.Reserve(dedupeSource, req.DedupeKey, fingerprint)
 		switch {
 		case reserved.Conflict:
 			return SendResult{}, notify.NewAPIError(409, "dedupe_conflict", "dedupe key reused with different content", false)
@@ -128,14 +143,13 @@ func (s *Service) deliver(ctx context.Context, req notify.Request, dedupeEnabled
 		}
 	}
 
-	chatID := s.cfg.Channels[req.Target.Channel]
 	sendCtx, cancel := context.WithTimeout(ctx, s.cfg.SendTimeout)
 	defer cancel()
 
-	messageID, err := s.sender.Send(sendCtx, chatID, req)
+	messageID, err := backend.sender.Send(sendCtx, chatID, req)
 	if err != nil {
 		if dedupeEnabled {
-			s.store.Abort(req.Source, req.DedupeKey)
+			s.store.Abort(dedupeSource, req.DedupeKey)
 		}
 		s.logFeishuFailure("notify", "notification", notificationLogIdentity(req), err)
 		return SendResult{}, notify.NewAPIError(502, "feishu_unavailable", "Feishu send failed", true)
@@ -143,13 +157,26 @@ func (s *Service) deliver(ctx context.Context, req notify.Request, dedupeEnabled
 
 	result := dedupe.Result{Provider: Provider, MessageID: messageID}
 	if dedupeEnabled {
-		s.store.Commit(req.Source, req.DedupeKey, result)
+		s.store.Commit(dedupeSource, req.DedupeKey, result)
 	}
 	s.logger.Info("send ok",
 		"correlation", opaqueLogCorrelationID("notification", notificationLogIdentity(req)),
 		"severity", req.Severity,
 	)
 	return SendResult{Provider: result.Provider, MessageID: result.MessageID, Duplicate: false}, nil
+}
+
+func appScopedDedupeSource(appAlias, source string) string {
+	if effectiveAppAlias(appAlias) == config.DefaultAppAlias {
+		return source
+	}
+	sum := sha256.Sum256([]byte(
+		"feishu-botd/app-dedupe/v2\x00" + effectiveAppAlias(appAlias) + "\x00" + source,
+	))
+	// The fixed prefix plus a full hex digest is longer than the maximum
+	// caller-controlled source (64 bytes), so a default-app caller cannot forge
+	// a named app's internal store namespace.
+	return "feishu-botd/internal-app-dedupe/v2:" + hex.EncodeToString(sum[:])
 }
 
 func notificationLogIdentity(req notify.Request) string {

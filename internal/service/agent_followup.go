@@ -40,6 +40,7 @@ type AgentFollowUpReceipt struct {
 type agentConversationRoute struct {
 	mu sync.Mutex
 
+	appAlias  string
 	chatAlias string
 	chatID    string
 	// threadReplyTo is set only for a thread-scoped conversation. A follow-up
@@ -55,6 +56,7 @@ type agentConversationRoute struct {
 }
 
 type agentFollowUpOperation struct {
+	provider    string
 	fingerprint string
 	followUpID  string
 	pending     bool
@@ -84,13 +86,23 @@ func (s *Service) SendAgentFollowUp(ctx context.Context, in SendAgentFollowUpInp
 	}
 
 	now := time.Now()
-	route := s.agentBroker.lookupConversation(conversationID, now)
-	if route == nil {
+	route, appAlias, chatAlias, privateChatID, replyToMessageID, ok := s.agentBroker.lookupAndPinConversation(
+		conversationID,
+		provider,
+		operationID,
+		func(resolvedApp string) bool { return s.appAllowed(provider, resolvedApp) },
+		now,
+		s.cfg.SendTimeout,
+	)
+	if !ok {
 		return AgentFollowUpReceipt{}, unknownConversationError()
 	}
-	chatAlias, privateChatID, replyToMessageID := route.target()
-	chatID := s.followUpChatID(chatAlias, privateChatID)
+	chatID := s.followUpChatID(appAlias, chatAlias, privateChatID)
 	if chatID == "" {
+		return AgentFollowUpReceipt{}, unknownConversationError()
+	}
+	backend, ok := s.backendForApp(appAlias)
+	if !ok {
 		return AgentFollowUpReceipt{}, unknownConversationError()
 	}
 
@@ -109,7 +121,7 @@ func (s *Service) SendAgentFollowUp(ctx context.Context, in SendAgentFollowUpInp
 
 	sendCtx, cancel := context.WithTimeout(ctx, s.cfg.SendTimeout)
 	defer cancel()
-	if _, err := s.sender.Send(sendCtx, chatID, notify.Request{
+	if _, err := backend.sender.Send(sendCtx, chatID, notify.Request{
 		Source:           agentFollowUpSource,
 		DedupeKey:        followUpID,
 		Title:            summary,
@@ -117,10 +129,10 @@ func (s *Service) SendAgentFollowUp(ctx context.Context, in SendAgentFollowUpInp
 		ReplyToMessageID: replyToMessageID,
 	}); err != nil {
 		s.logFeishuFailure("agent follow-up", "follow_up", followUpID, err)
-		route.abortFollowUp(operationID, err, time.Now())
+		route.abortFollowUp(provider, operationID, err, time.Now())
 		return AgentFollowUpReceipt{}, agentMessageCallError(err, "Feishu follow-up send failed")
 	}
-	route.commitFollowUp(operationID)
+	route.commitFollowUp(provider, operationID)
 	return AgentFollowUpReceipt{FollowUpID: followUpID}, nil
 }
 
@@ -128,17 +140,21 @@ func (s *Service) SendAgentFollowUp(ctx context.Context, in SendAgentFollowUpInp
 // does: a group conversation routes through its configured alias, while a direct
 // message uses the private ingress route captured at dispatch. An alias that has
 // since been removed from config leaves the conversation unaddressable.
-func (s *Service) followUpChatID(chatAlias, privateChatID string) string {
+func (s *Service) followUpChatID(appAlias, chatAlias, privateChatID string) string {
 	if chatAlias == "direct" {
 		return privateChatID
 	}
-	return s.cfg.Channels[chatAlias]
+	resolvedApp, chatID, ok := s.cfg.ResolveChannel(chatAlias)
+	if !ok || resolvedApp != effectiveAppAlias(appAlias) {
+		return ""
+	}
+	return chatID
 }
 
-func (r *agentConversationRoute) target() (chatAlias, chatID, replyToMessageID string) {
+func (r *agentConversationRoute) target() (appAlias, chatAlias, chatID, replyToMessageID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.chatAlias, r.chatID, r.threadReplyTo
+	return r.appAlias, r.chatAlias, r.chatID, r.threadReplyTo
 }
 
 func (r *agentConversationRoute) expired(now time.Time) bool {
@@ -155,13 +171,13 @@ func (r *agentConversationRoute) beginFollowUp(
 ) (followUpID string, replay bool, apiErr *notify.APIError) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	grantedUntil, granted := r.providers[provider]
-	if !granted || !now.Before(grantedUntil) {
-		return "", false, unknownConversationError()
-	}
 
-	op, exists := r.operations[operationID]
+	operationKey := r.followUpOperationKeyLocked(provider, operationID)
+	op, exists := r.operations[operationKey]
 	if exists {
+		if op.provider == "" {
+			op.provider = provider
+		}
 		if op.fingerprint != fingerprint {
 			return "", false, notify.NewAPIError(409, "operation_conflict", "operation id reused with different content", false)
 		}
@@ -175,30 +191,48 @@ func (r *agentConversationRoute) beginFollowUp(
 			return "", false, closedAgentSendError("send_retry_expired")
 		}
 	} else {
+		grantedUntil, granted := r.providers[provider]
+		if !granted || !now.Before(grantedUntil) {
+			return "", false, unknownConversationError()
+		}
 		handle, err := randomOpaqueID("fup_")
 		if err != nil {
 			return "", false, notify.NewAPIError(500, "internal", "could not create follow-up handle", true)
 		}
-		op = &agentFollowUpOperation{fingerprint: fingerprint, followUpID: handle}
-		r.operations[operationID] = op
+		op = &agentFollowUpOperation{provider: provider, fingerprint: fingerprint, followUpID: handle}
+		r.operations[operationKey] = op
 	}
 	op.pending = true
 	return op.followUpID, false, nil
 }
 
-func (r *agentConversationRoute) commitFollowUp(operationID string) {
+func (r *agentConversationRoute) followUpOperationKeyLocked(provider, operationID string) string {
+	scoped := "feishu-botd/internal-follow-up-operation/v1:" +
+		hashJSON([2]string{provider, operationID})
+	if _, exists := r.operations[scoped]; exists {
+		return scoped
+	}
+	if existing := r.operations[operationID]; existing == nil || existing.provider == "" || existing.provider == provider {
+		return operationID
+	}
+	return scoped
+}
+
+func (r *agentConversationRoute) commitFollowUp(provider, operationID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if op, ok := r.operations[operationID]; ok {
+	key := r.followUpOperationKeyLocked(provider, operationID)
+	if op, ok := r.operations[key]; ok {
 		op.pending = false
 		op.complete = true
 	}
 }
 
-func (r *agentConversationRoute) abortFollowUp(operationID string, err error, now time.Time) {
+func (r *agentConversationRoute) abortFollowUp(provider, operationID string, err error, now time.Time) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	op, ok := r.operations[operationID]
+	key := r.followUpOperationKeyLocked(provider, operationID)
+	op, ok := r.operations[key]
 	if !ok {
 		return
 	}
@@ -214,7 +248,7 @@ func (r *agentConversationRoute) abortFollowUp(operationID string, err error, no
 	case op.ambiguousAt.IsZero():
 		// Nothing was delivered and no earlier attempt is in doubt, so release
 		// the id and let a corrected request reuse it.
-		delete(r.operations, operationID)
+		delete(r.operations, key)
 	default:
 		// A definitive rejection after an ambiguous attempt cannot prove the
 		// earlier attempt failed. Keep the record pinned to its fingerprint so
@@ -229,6 +263,63 @@ func (b *agentBroker) lookupConversation(conversationID string, now time.Time) *
 	return b.conversations[conversationID]
 }
 
+// lookupAndPinConversation resolves an opaque conversation handle while holding
+// the broker lock that also governs pruning. Once authorized, the exact route
+// is retained for at least one state TTL and one send timeout so an in-flight
+// follow-up cannot be pruned and rebound to another app. An existing operation
+// remains replayable after the original conversation grant expires, but a new
+// operation still requires a live grant.
+func (b *agentBroker) lookupAndPinConversation(
+	conversationID, provider, operationID string,
+	appAllowed func(string) bool,
+	now time.Time,
+	sendTimeout time.Duration,
+) (
+	route *agentConversationRoute,
+	appAlias, chatAlias, chatID, replyToMessageID string,
+	ok bool,
+) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.pruneLocked(now)
+	route = b.conversations[strings.TrimSpace(conversationID)]
+	if route == nil {
+		return nil, "", "", "", "", false
+	}
+
+	route.mu.Lock()
+	defer route.mu.Unlock()
+	if appAllowed != nil && !appAllowed(route.appAlias) {
+		return nil, "", "", "", "", false
+	}
+	operationKey := route.followUpOperationKeyLocked(provider, operationID)
+	op := route.operations[operationKey]
+	grantedUntil, granted := route.providers[provider]
+	if (op == nil || op.provider != "" && op.provider != provider) &&
+		(!granted || !now.Before(grantedUntil)) {
+		return nil, "", "", "", "", false
+	}
+
+	retainFor := b.ttl
+	if retainFor < sendTimeout {
+		retainFor = sendTimeout
+	}
+	if retainUntil := now.Add(retainFor); route.expiresAt.Before(retainUntil) {
+		route.expiresAt = retainUntil
+	}
+	return route, route.appAlias, route.chatAlias, route.chatID, route.threadReplyTo, true
+}
+
+func (b *agentBroker) conversationAppConflictLocked(conversationID, appAlias string) bool {
+	route := b.conversations[strings.TrimSpace(conversationID)]
+	if route == nil {
+		return false
+	}
+	route.mu.Lock()
+	defer route.mu.Unlock()
+	return effectiveAppAlias(route.appAlias) != effectiveAppAlias(appAlias)
+}
+
 // recordConversationLocked captures the reverse route for a delivered agent
 // message and grants each receiving provider a TTL-bounded follow-up scope.
 func (b *agentBroker) recordConversationLocked(in CommandInput, providers map[string]struct{}, now time.Time) {
@@ -239,6 +330,7 @@ func (b *agentBroker) recordConversationLocked(in CommandInput, providers map[st
 	route, ok := b.conversations[conversationID]
 	if !ok {
 		route = &agentConversationRoute{
+			appAlias:   in.AppAlias,
 			providers:  make(map[string]time.Time, len(providers)),
 			operations: make(map[string]*agentFollowUpOperation),
 		}
@@ -247,6 +339,11 @@ func (b *agentBroker) recordConversationLocked(in CommandInput, providers map[st
 	expiresAt := now.Add(b.ttl)
 	route.mu.Lock()
 	defer route.mu.Unlock()
+	// Opaque conversation handles must reverse-resolve to exactly one app,
+	// because the provider request intentionally carries no app field.
+	if effectiveAppAlias(route.appAlias) != effectiveAppAlias(in.AppAlias) {
+		return
+	}
 	route.chatAlias = in.ChatAlias
 	route.chatID = in.ChatID
 	route.threadReplyTo = followUpThreadReply(in.Metadata)

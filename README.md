@@ -1,9 +1,11 @@
 # feishu-botd
 
 `feishu-botd` is a small local gateway and agent runtime for Feishu/Lark bots.
-It owns the Feishu/Lark SDK, app credentials, token lifecycle, inbound long
-connection, chat routing, and dynamic CardKit messages. Local services and
-agents use a protobuf/gRPC contract without handling raw chat ids.
+One process can own one or more apps, each with its own credentials, bot
+identity, sender, and inbound long connection. The daemon owns the Feishu/Lark
+SDK, token lifecycle, chat routing, and dynamic CardKit messages. Local services
+and agents use a protobuf/gRPC contract without handling raw chat ids or
+selecting an app on each request.
 
 ## Contract
 
@@ -32,14 +34,14 @@ POST /v1/message  (lower-level markdown/card send)
 See [docs/ipc.md](docs/ipc.md) for the full gRPC contract and error model, and
 [docs/api.md](docs/api.md) for the HTTP shim.
 
-Inbound text commands and conversational agent prompts are supported when
-`commands.enabled` is true and the Feishu app has bot capability, the required
+Inbound text commands and conversational agent prompts are supported for each
+app whose `commands.enabled` is true and that has bot capability, the required
 message/CardKit permissions, and long-connection subscriptions for
 `im.message.receive_v1` and (when actions are used) `card.action.trigger`.
 Agents can progressively update one CardKit 2.0 response and receive normalized
 button callbacks without seeing raw Feishu routing ids or callback tokens.
-Long-connection agent mode requires an enterprise custom app and one active
-`feishu-botd` instance per app; Feishu does not broadcast events across
+Long-connection agent mode requires enterprise custom apps and one active
+`feishu-botd` process owning each app; Feishu does not broadcast events across
 multiple connected clients, and this release keeps ownership state in process.
 
 See [Building a Feishu agent](docs/agent.md) for app setup, routing semantics,
@@ -59,14 +61,29 @@ cp config/feishu-botd.example.json config/feishu-botd.json
 $EDITOR config/feishu-botd.json
 ```
 
-The config file contains the Feishu app credentials, listeners, channel aliases,
-and per-caller defaults:
+The config file contains Feishu app credentials, listeners, channel aliases,
+and per-caller defaults. This example keeps the existing top-level app as
+`default` and adds a second app named `support`:
 
 ```json
 {
   "feishu": {
-    "app_id": "REPLACE_WITH_APP_ID",
-    "app_secret": "REPLACE_WITH_APP_SECRET"
+    "app_id": "REPLACE_WITH_DEFAULT_APP_ID",
+    "app_secret": "REPLACE_WITH_DEFAULT_APP_SECRET"
+  },
+  "apps": {
+    "support": {
+      "app_id": "REPLACE_WITH_SUPPORT_APP_ID",
+      "app_secret": "REPLACE_WITH_SUPPORT_APP_SECRET",
+      "commands": {
+        "enabled": true,
+        "bot_open_id": "REPLACE_WITH_SUPPORT_BOT_OPEN_ID",
+        "bot_names": ["Support Bot"]
+      },
+      "channels": {
+        "support": "REPLACE_WITH_SUPPORT_CHAT_ID"
+      }
+    }
   },
   "listeners": {
     "http_bind": "0.0.0.0:7345",
@@ -77,6 +94,7 @@ and per-caller defaults:
   "agent_providers": {
     "example-agent": {
       "auth_token_file": "/run/secrets/feishu-botd-example-agent-token",
+      "allowed_apps": ["default", "support"],
       "allowed_commands": [],
       "allow_unmatched_messages": true,
       "allow_card_actions": true,
@@ -86,8 +104,8 @@ and per-caller defaults:
   },
   "commands": {
     "enabled": true,
-    "bot_open_id": "REPLACE_WITH_BOT_OPEN_ID",
-    "bot_names": ["Example Bot"]
+    "bot_open_id": "REPLACE_WITH_DEFAULT_BOT_OPEN_ID",
+    "bot_names": ["Default Bot"]
   },
   "channels": {
     "ci": "REPLACE_WITH_CI_CHAT_ID",
@@ -96,6 +114,30 @@ and per-caller defaults:
   "services": { "build-monitor": { "default_channel": "ci" } }
 }
 ```
+
+The top-level `feishu`, `commands`, and `channels` blocks are the legacy
+single-app shape. They remain valid without migration and form the reserved app
+alias `default`. They may coexist with `apps`; an explicit `apps.default`
+(case-insensitive) is rejected. `apps` may also be used without the legacy
+blocks, in which case no `default` app exists. Named aliases are trimmed,
+limited to 64 bytes, and must match `[A-Za-z0-9][A-Za-z0-9._-]*`. Every app
+needs a distinct `app_id`. Strict unknown-field rejection also applies inside
+each app and provider entry.
+
+Commands, bot identity, local scripts, and channel mappings belong to their
+app. Channel aliases still form one global namespace: they are trimmed,
+lowercased, and have `_` replaced with `-`; duplicates after that normalization,
+within or across apps, fail startup. The global `default_channel` and
+`services.*.default_channel` settings may point to any alias. Callers keep
+sending a bare channel alias; botd resolves it internally to the owning app and
+private chat id.
+
+At startup, botd checks every app's credentials, starts one long-connection
+receiver per app, and waits for every receiver's first connected state before
+opening HTTP or gRPC listeners. Readiness preserves the aggregate checks and
+adds `feishu_auth.<alias>` plus `feishu_connection.<alias>`; any app auth
+failure or any connection state other than `connected` makes the process
+unready. These keys contain public aliases only.
 
 Start with:
 
@@ -124,6 +166,12 @@ FEISHU_BOTD_DEDUPE_TTL_SECONDS=21600
 FEISHU_BOTD_SEND_TIMEOUT_SECONDS=15
 ```
 
+The existing credential, command, script, and channel environment variables
+apply only to the reserved `default` app; if necessary, credentials from the
+environment create that app alongside entries in `apps`. Named apps are
+configured only in JSON. This keeps existing single-app files and
+`FEISHU_APP_ID` / `FEISHU_APP_SECRET` deployments unchanged.
+
 `agent_providers` is configured in the JSON file because each provider maps to
 a separate token file. The general bearer and every provider token must contain
 at least 32 bytes. Provider tokens must be unique and must differ from the
@@ -142,13 +190,28 @@ Each subscription is limited by `allowed_commands`,
 `allow_unmatched_messages`, `allow_card_actions`, and
 `allow_legacy_commands`; `allow_follow_up_messages` separately permits sending a
 later message into a conversation the provider has already answered in.
+`allowed_apps` optionally limits that provider to configured app aliases. When
+the field is absent, all apps are allowed; an explicit empty list allows none,
+and `null` is rejected. botd applies the allowlist before event fan-out and
+again when a delivery, response, or conversation handle is mutated.
 Plaintext gRPC TCP is loopback-only even when the HTTP
 LAN opt-in is enabled.
+
+No HTTP or protobuf request gains an app field. Outbound sends route through
+the global channel-alias directory, while replies, CardKit mutations, and
+follow-ups route through opaque daemon-issued handles. `InboundAgentEvent`
+metadata may include the public `app_alias` key for providers that want to
+observe the source app; clients may ignore it and nothing requires it for
+routing. `app_id`, `app_secret`, raw chat ids, and SDK connection details remain
+inside the daemon and are excluded from provider events and logs.
 
 ### Local script execution
 
 Setting `commands.scripts.enabled` lets the daemon run a local script directly
-for one registered command word — no separate provider process needed. Given:
+for one registered command word — no separate provider process needed. For a
+named app, configure the same block under `apps.<alias>.commands.scripts`. Its
+`allowed_chats` entries must be channels owned by that app; a script executor is
+never shared across app routes. Given:
 
 ```json
 "scripts": {

@@ -1,9 +1,10 @@
 # Building a Feishu agent
 
-`feishu-botd` can be the Feishu-facing runtime for a local agent. The daemon
-owns the app credentials, long connection, chat routing, CardKit entities, and
-callback acknowledgement. The agent process sees only the protobuf contract
-over local gRPC:
+`feishu-botd` can be the Feishu-facing runtime for a local agent. One daemon can
+own several Feishu apps, each with independent credentials, bot identity,
+sender, and long connection. The daemon owns app selection, chat routing,
+CardKit entities, and callback acknowledgement. The agent process sees only the
+unchanged protobuf contract over local gRPC:
 
 ```text
 Feishu message -> feishu-botd -> SubscribeAgentEvents -> agent
@@ -12,13 +13,16 @@ Feishu action  -> feishu-botd -> SubscribeAgentEvents -> agent
 ```
 
 Raw chat IDs, message IDs, card IDs, callback tokens, app credentials, and
-tenant keys never cross the provider boundary. Treat `sender_id`, message text,
-form values, and action payloads as user data and avoid logging them by default.
+tenant keys never cross the provider boundary. App aliases are public and may
+appear in provider-safe metadata; `app_id` and `app_secret` values are not
+exposed to providers or logs. Treat `sender_id`, message text, form values, and
+action payloads as user data and avoid logging them by default.
 
-## Configure the Feishu app
+## Configure the Feishu apps
 
-In the [Feishu developer console](https://open.feishu.cn/app), use an enterprise
-custom app (long-connection delivery does not support store apps):
+For every app served by this process, use an enterprise custom app in the
+[Feishu developer console](https://open.feishu.cn/app) (long-connection
+delivery does not support store apps):
 
 1. Add the bot capability.
 2. Grant `im:message:send_as_bot` and `cardkit:card:write`.
@@ -46,9 +50,9 @@ Useful primary references:
 
 ## Configure and run the daemon
 
-Enable inbound commands and a Unix gRPC listener. Static channels are optional
-for a direct-message-only agent; group messages are accepted only from chat IDs
-that have a unique configured alias.
+Enable inbound commands for the app and configure a Unix gRPC listener. Static
+channels are optional for a direct-message-only agent; group messages are
+accepted only from chat IDs that have a globally unique configured alias.
 
 Generate one provider credential. Keep the token file outside version control
 and make it readable only by the daemon and that provider process:
@@ -70,6 +74,7 @@ openssl rand -base64 32 > /run/secrets/feishu-botd-example-agent-token
   "agent_providers": {
     "example-agent": {
       "auth_token_file": "/run/secrets/feishu-botd-example-agent-token",
+      "allowed_apps": ["default"],
       "allowed_commands": [],
       "allow_unmatched_messages": true,
       "allow_card_actions": true,
@@ -87,6 +92,37 @@ openssl rand -base64 32 > /run/secrets/feishu-botd-example-agent-token
   }
 }
 ```
+
+This is the unchanged legacy single-app shape. It becomes the reserved app
+alias `default`. To serve more apps, add a top-level `apps` map whose entries
+contain their own `app_id`, `app_secret`, `commands`, and `channels`; see the
+full coexistence example in
+[`config/feishu-botd.example.json`](../config/feishu-botd.example.json).
+The top-level `feishu`, `commands`, and `channels` blocks may coexist with
+`apps`, but `apps.default` is reserved and rejected. Existing Feishu credential,
+command, script, and channel environment variables affect only `default`; named
+apps come from JSON.
+
+Channel aliases are global, not per-provider or per-request. They are trimmed,
+lowercased, and have `_` replaced with `-`; each normalized alias must occur
+exactly once across all apps. That gives a bare alias one unambiguous internal
+route to an app and chat. Duplicate app ids and duplicate channel aliases fail
+startup. Per-app bot ids and names are used only for mentions received by that
+app.
+
+The process constructs one sender and one long-connection receiver for every
+configured app, including apps with inbound commands disabled. Before opening
+HTTP or gRPC listeners, it checks every credential set, starts every receiver,
+and waits for every long connection to reach its first connected state. A bad
+credential or initial connection failure therefore fails the whole daemon
+rather than leaving a partially serving app set.
+
+After startup, readiness keeps the aggregate `feishu_auth` check and adds
+`feishu_auth.<alias>` plus `feishu_connection.<alias>` for every app.
+Connection values are `starting`, `connected`, `reconnecting`, `disconnected`,
+or `unavailable`; any value other than `connected` makes the daemon unready.
+The check names contain only public aliases, never credential or SDK error
+text. `/healthz` and standard gRPC health remain static liveness.
 
 Keep the real config outside version control, restrict its permissions, and run
 the daemon with `FEISHU_BOTD_CONFIG` pointing to it. An agent does not need the
@@ -133,6 +169,16 @@ non-loopback address. For a cross-host agent, use a shared Unix socket where
 appropriate or an authenticated encrypted tunnel/TLS proxy that terminates
 onto the daemon's loopback listener.
 
+`allowed_apps` is an optional provider allowlist of public app aliases. An
+absent field preserves the existing permissive behavior and allows every app;
+an explicit `[]` allows none. `null` and unknown aliases fail strict config
+loading. The daemon filters disallowed apps before event fan-out, then resolves
+each opaque delivery, response, or conversation handle and checks its owning app
+again for every mutation. A denied foreign-app handle returns the same
+`unknown_delivery`, `unknown_response`, or `unknown_conversation` response as an
+unknown handle, so the allowlist cannot be used to enumerate another app's
+state.
+
 ## Message routing
 
 `SubscribeAgentEvents` has two independent message selectors:
@@ -159,16 +205,18 @@ Each provider can request only the selectors authorized in its config:
 `allow_legacy_commands` separately permits legacy `Subscribe`/`Respond`, using
 the same `allowed_commands` allowlist, and `allow_follow_up_messages` separately
 permits the follow-up send described below. Requests outside this scope fail
-before broker registration. Grant only the minimum selectors needed;
-unmatched-message access includes direct-message prompts. Card actions are
-additionally restricted to the provider that owns the response.
+before broker registration. Event selection also considers `allowed_apps`: a
+disallowed exact-command subscriber cannot suppress an allowed unmatched
+subscriber. Grant only the minimum selectors needed; unmatched-message access
+includes direct-message prompts. Card actions are additionally restricted to
+the provider that owns the response.
 
 Routing differs by chat type:
 
 | Chat type | Accepted input | Public route |
 | --- | --- | --- |
 | Direct (`p2p`) | Any non-empty text; no mention required | `chat_alias = "direct"` |
-| Group / topic group | Text from a uniquely configured channel alias that mentions this bot | Configured alias |
+| Group / topic group | Text from a globally unique channel alias that mentions this app's bot | Configured alias |
 
 Group routing also requires a configured bot identity (`bot_open_id`,
 `bot_user_id`, `bot_union_id`, or a bot name). Strong Feishu IDs are
@@ -178,8 +226,18 @@ is rejected. Direct-message routing does not require a mention identity.
 `InboundAgentMessage.text` is the complete mention-stripped prompt and preserves
 newlines. `command` is the normalized first word and `command_text` is its
 remainder. `conversation_id` is a stable, opaque hash of the chat and optional
-thread; raw routing IDs are retained only inside the daemon. Public metadata is
-limited to `chat_type` and `message_type`.
+thread; raw routing IDs are retained only inside the daemon. The reserved
+`default` app keeps the pre-multi-app conversation-id derivation byte-for-byte
+so durable provider state continues to resolve. Only additional apps are
+namespaced into the derivation.
+
+`InboundAgentEvent.metadata` may contain the provider-safe keys `chat_type`,
+`message_type`, and `app_alias`; daemon ingress supplies the source
+`app_alias`. The alias is informational: old clients may ignore the additive
+map entry, and no request or routing decision requires a provider to echo it.
+Legacy `InboundCommand.metadata` remains limited to `chat_type` and
+`message_type`. Raw event, message, thread, root, parent, card, and chat ids are
+still omitted from both public streams.
 
 ## Progressive response lifecycle
 
@@ -270,9 +328,11 @@ an optional `summary` used as the message title and notification preview. The
 response returns an opaque `follow_up_id` and a `duplicate` flag. There is no
 revision: a follow-up is an ordinary message and cannot be edited afterwards.
 
-botd records a reverse map from `conversation_id` to the concrete route each
-time it delivers an agent event, and resolves it privately at send time. Three
-checks run before any Feishu call:
+botd records an app-scoped reverse map from `conversation_id` to the concrete
+route each time it delivers an agent event, and resolves both the app and chat
+privately at send time. A follow-up for a conversation received through app A
+can therefore use only app A's sender, even when another app has colliding raw
+Feishu ids. Three checks run before any Feishu call:
 
 1. The provider bearer must match the request `provider`.
 2. That provider must have `allow_follow_up_messages` in its config. It defaults
@@ -334,12 +394,13 @@ degrade to finishing inside the original card.
   conversation speaks to the agent again. Restart does not disable streaming on
   the remote card; Feishu eventually auto-closes it. Finish active responses
   before planned restarts.
-- Run exactly one active `feishu-botd` long-connection client per Feishu app.
-  Feishu permits up to 50 connections but delivers each event to one random
-  client in cluster mode, not to every client. Because response/action
-  ownership is process-local, active-active replicas can split a message and
-  its later action across different state stores. Shared durable routing is
-  required before active-active operation is safe.
+- Run exactly one active `feishu-botd` process owning a given Feishu app. One
+  multi-app process opens one connection for each configured app. Feishu permits
+  up to 50 connections but delivers each event to one random client in cluster
+  mode, not to every client. Because response/action ownership is process-local,
+  active-active replicas can split a message and its later action across
+  different state stores. Shared durable routing is required before
+  active-active operation is safe.
 - Ingress is best-effort and process-local: botd acknowledges Feishu after a
   non-blocking provider enqueue and has no provider ACK/replay log. A provider
   disconnect, full queue, or process restart can lose an event; deduplication

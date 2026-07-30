@@ -33,6 +33,8 @@ type AgentSubscribeOptions struct {
 	Commands                 []string
 	IncludeUnmatchedMessages bool
 	IncludeCardActions       bool
+	AllowedApps              []string
+	AllowedAppsConfigured    bool
 }
 
 type AgentEvent struct {
@@ -144,6 +146,7 @@ type FinishAgentResponseInput struct {
 // AgentCardActionInput is the daemon-private callback handoff. MessageID is
 // used only to resolve the response owner and is never forwarded to a provider.
 type AgentCardActionInput struct {
+	AppAlias          string `json:"-"`
 	DeliveryID        string
 	MessageID         string `json:"-"`
 	SenderID          string
@@ -199,6 +202,7 @@ func (s *Service) DispatchInboundCardAction(ctx context.Context, in feishu.Inbou
 		return notify.NewAPIError(500, "internal", "could not encode card action", false)
 	}
 	return s.DispatchAgentCardAction(ctx, AgentCardActionInput{
+		AppAlias:          in.AppAlias,
 		DeliveryID:        in.DeliveryID,
 		MessageID:         in.MessageID,
 		SenderID:          in.SenderID,
@@ -215,16 +219,18 @@ type agentBroker struct {
 	subscribers          map[uint64]*agentSubscriber
 	deliveries           map[string]*agentDelivery
 	responses            map[string]*agentResponse
-	responsesByMessageID map[string]*agentResponse
+	responsesByMessageID map[appStateKey]*agentResponse
 	conversations        map[string]*agentConversationRoute
 	seenMessages         map[string]time.Time
-	seenActions          map[string]time.Time
+	seenActions          map[appStateKey]time.Time
 }
 
 type agentSubscriber struct {
 	id                       uint64
 	provider                 string
 	commands                 map[string]struct{}
+	allowedApps              map[string]struct{}
+	allowedAppsConfigured    bool
 	includeUnmatchedMessages bool
 	includeCardActions       bool
 	ch                       chan AgentEvent
@@ -242,6 +248,7 @@ const (
 type agentDelivery struct {
 	mu sync.Mutex
 
+	appAlias         string
 	input            CommandInput
 	allowedProviders map[string]struct{}
 	expiresAt        time.Time
@@ -287,6 +294,7 @@ type agentResponse struct {
 
 	responseID     string
 	provider       string
+	appAlias       string
 	deliveryID     string
 	conversationID string
 	chatAlias      string
@@ -303,6 +311,15 @@ type agentResponse struct {
 	expiresAt      time.Time
 }
 
+type appStateKey struct {
+	appAlias string
+	id       string
+}
+
+func newAppStateKey(appAlias, id string) appStateKey {
+	return appStateKey{appAlias: effectiveAppAlias(appAlias), id: strings.TrimSpace(id)}
+}
+
 func newAgentBroker(ttl time.Duration) *agentBroker {
 	if ttl <= 0 {
 		ttl = time.Hour
@@ -312,10 +329,10 @@ func newAgentBroker(ttl time.Duration) *agentBroker {
 		subscribers:          make(map[uint64]*agentSubscriber),
 		deliveries:           make(map[string]*agentDelivery),
 		responses:            make(map[string]*agentResponse),
-		responsesByMessageID: make(map[string]*agentResponse),
+		responsesByMessageID: make(map[appStateKey]*agentResponse),
 		conversations:        make(map[string]*agentConversationRoute),
 		seenMessages:         make(map[string]time.Time),
-		seenActions:          make(map[string]time.Time),
+		seenActions:          make(map[appStateKey]time.Time),
 	}
 }
 
@@ -363,6 +380,8 @@ func (b *agentBroker) subscribe(in AgentSubscribeOptions) (*agentSubscriber, *no
 		id:                       b.nextSubID,
 		provider:                 provider,
 		commands:                 commands,
+		allowedApps:              normalizedAppAllowlist(in.AllowedApps),
+		allowedAppsConfigured:    in.AllowedAppsConfigured,
 		includeUnmatchedMessages: in.IncludeUnmatchedMessages,
 		includeCardActions:       in.IncludeCardActions,
 		ch:                       make(chan AgentEvent, agentSubscriptionBuffer),
@@ -390,16 +409,29 @@ func (b *agentBroker) dispatchMessage(in CommandInput) (delivered int, handled b
 	if _, exists := b.deliveries[in.DeliveryID]; exists {
 		return 0, true
 	}
-	messageDedupeKey := agentMessageDedupeKey(in.Metadata["message_id"])
+	messageDedupeKey := agentMessageDedupeKey(in.AppAlias, in.Metadata["message_id"])
 	if messageDedupeKey != "" {
 		if _, seen := b.seenMessages[messageDedupeKey]; seen {
 			return 0, true
 		}
 	}
+	if b.conversationAppConflictLocked(in.ConversationID, in.AppAlias) {
+		// The wire handle carries no app field, so one opaque conversation id
+		// can never safely reverse-resolve to two applications. Fail closed
+		// before enqueueing an event that could later egress through the other
+		// app's route.
+		return 0, true
+	}
 
 	exact := make([]*agentSubscriber, 0)
 	fallback := make([]*agentSubscriber, 0)
 	for _, sub := range b.subscribers {
+		// Application authorization participates in candidate selection. A
+		// disallowed exact subscriber must not suppress an allowed unmatched
+		// subscriber for this app.
+		if !sub.allowsApp(in.AppAlias) {
+			continue
+		}
 		if _, ok := sub.commands[in.Command]; ok {
 			exact = append(exact, sub)
 			continue
@@ -418,7 +450,7 @@ func (b *agentBroker) dispatchMessage(in CommandInput) (delivered int, handled b
 		ConversationID: in.ConversationID,
 		ChatAlias:      in.ChatAlias,
 		SenderID:       in.SenderID,
-		Metadata:       agentPublicMetadata(in.Metadata),
+		Metadata:       agentPublicMetadata(in.Metadata, in.AppAlias),
 		Message: &AgentMessage{
 			Text:        in.Prompt,
 			Command:     in.Command,
@@ -441,6 +473,7 @@ func (b *agentBroker) dispatchMessage(in CommandInput) (delivered int, handled b
 	}
 	if delivered > 0 {
 		b.deliveries[in.DeliveryID] = &agentDelivery{
+			appAlias:         in.AppAlias,
 			input:            cloneCommandInput(in),
 			allowedProviders: allowed,
 			expiresAt:        now.Add(b.ttl),
@@ -456,7 +489,9 @@ func (b *agentBroker) dispatchMessage(in CommandInput) (delivered int, handled b
 }
 
 func (s *Service) StartAgentResponse(ctx context.Context, in StartAgentResponseInput) (AgentResponseReceipt, *notify.APIError) {
-	if s.dynamicCards == nil {
+	// Preserve the legacy single-sender capability check: an implementation
+	// with no CardKit backend reports Unimplemented before consulting handles.
+	if s.legacyCapabilityCheck && !s.hasDynamicCards() {
 		return AgentResponseReceipt{}, notify.NotImplemented("agent_streaming_unavailable", "agent streaming is unavailable for this sender")
 	}
 	provider, deliveryID, operationID, apiErr := validateAgentIdentity(in.Provider, in.DeliveryID, in.OperationID)
@@ -477,6 +512,7 @@ func (s *Service) StartAgentResponse(ctx context.Context, in StartAgentResponseI
 	b := s.agentBroker
 	now := time.Now()
 	delivery, ok := s.lookupAndPinAgentDelivery(
+		provider,
 		deliveryID,
 		now,
 		now.Add(messageUUIDDedupeWindow+s.cfg.SendTimeout),
@@ -487,9 +523,14 @@ func (s *Service) StartAgentResponse(ctx context.Context, in StartAgentResponseI
 
 	delivery.mu.Lock()
 	defer delivery.mu.Unlock()
-	if _, allowed := delivery.allowedProviders[provider]; !allowed {
+	if _, allowed := delivery.allowedProviders[provider]; !allowed || !s.appAllowed(provider, delivery.appAlias) {
 		return AgentResponseReceipt{}, notify.NewAPIError(404, "unknown_delivery", "unknown delivery", false)
 	}
+	backend, ok := s.backendForApp(delivery.appAlias)
+	if !ok || backend.dynamicCards == nil {
+		return AgentResponseReceipt{}, notify.NotImplemented("agent_streaming_unavailable", "agent streaming is unavailable for this sender")
+	}
+	dynamicCards := backend.dynamicCards
 	if delivery.operationID != "" {
 		if delivery.operationID != operationID {
 			return AgentResponseReceipt{}, notify.NewAPIError(409, "already_responded", "delivery already has a response", false)
@@ -532,7 +573,7 @@ func (s *Service) StartAgentResponse(ctx context.Context, in StartAgentResponseI
 	callCtx, cancel := context.WithTimeout(ctx, s.cfg.SendTimeout)
 	defer cancel()
 	if delivery.cardID == "" {
-		cardID, err := s.dynamicCards.CreateCard(callCtx, delivery.cardJSON)
+		cardID, err := dynamicCards.CreateCard(callCtx, delivery.cardJSON)
 		if err != nil {
 			s.logAgentCardFailure("create", delivery.responseID, err)
 			if isCardAPIRejection(err) && !isRetryableCardFailure(err) {
@@ -545,9 +586,16 @@ func (s *Service) StartAgentResponse(ctx context.Context, in StartAgentResponseI
 		delivery.cardID = cardID
 	}
 	if delivery.messageID == "" {
-		chatID := s.cfg.Channels[delivery.input.ChatAlias]
+		chatID := ""
 		if delivery.input.ChatAlias == "direct" {
 			chatID = delivery.input.ChatID
+		} else {
+			routeApp, routeChatID, exists := s.cfg.ResolveChannel(delivery.input.ChatAlias)
+			if !exists || routeApp != delivery.appAlias {
+				delivery.abortStartAttempt()
+				return AgentResponseReceipt{}, notify.NewAPIError(404, "unknown_delivery", "unknown delivery", false)
+			}
+			chatID = routeChatID
 		}
 		replyToMessageID := delivery.input.Metadata["message_id"]
 		sendRequest := feishu.CardSendRequest{
@@ -559,7 +607,7 @@ func (s *Service) StartAgentResponse(ctx context.Context, in StartAgentResponseI
 			sendRequest.ChatID = chatID
 		}
 		sendAttemptStartedAt := time.Now()
-		messageID, err := s.dynamicCards.SendCard(callCtx, sendRequest)
+		messageID, err := dynamicCards.SendCard(callCtx, sendRequest)
 		if err != nil {
 			s.logAgentCardFailure("send", delivery.responseID, err)
 			if isCardAPIRejection(err) && !isRetryableCardFailure(err) {
@@ -584,6 +632,7 @@ func (s *Service) StartAgentResponse(ctx context.Context, in StartAgentResponseI
 	response := &agentResponse{
 		responseID:     delivery.responseID,
 		provider:       provider,
+		appAlias:       delivery.appAlias,
 		deliveryID:     deliveryID,
 		conversationID: delivery.input.ConversationID,
 		chatAlias:      delivery.input.ChatAlias,
@@ -601,7 +650,7 @@ func (s *Service) StartAgentResponse(ctx context.Context, in StartAgentResponseI
 	delivery.compactAfterStart()
 	b.mu.Lock()
 	b.responses[response.responseID] = response
-	b.responsesByMessageID[response.messageID] = response
+	b.responsesByMessageID[newAppStateKey(response.appAlias, response.messageID)] = response
 	b.mu.Unlock()
 	return receiptFor(response, false), nil
 }
@@ -622,17 +671,28 @@ func (s *Service) UpdateAgentResponse(ctx context.Context, in UpdateAgentRespons
 		return AgentResponseReceipt{}, notify.BadRequest("field_too_large", "one or more fields are too large")
 	}
 	response := s.agentBroker.lookupResponse(provider, responseID)
-	if response == nil {
+	if response == nil || !s.appAllowed(provider, response.appAlias) {
 		return AgentResponseReceipt{}, notify.NewAPIError(404, "unknown_response", "unknown response", false)
+	}
+	backend, ok := s.backendForApp(response.appAlias)
+	if !ok || backend.dynamicCards == nil {
+		return AgentResponseReceipt{}, notify.NotImplemented("agent_streaming_unavailable", "agent streaming is unavailable for this sender")
 	}
 	fingerprint := hashJSON(struct {
 		Expected uint64
 		Markdown string
 	}{in.ExpectedRevision, in.Markdown})
-	return s.applyAgentUpdate(ctx, response, operationID, fingerprint, in.ExpectedRevision, in.Markdown)
+	return s.applyAgentUpdate(ctx, backend.dynamicCards, response, operationID, fingerprint, in.ExpectedRevision, in.Markdown)
 }
 
-func (s *Service) applyAgentUpdate(ctx context.Context, response *agentResponse, operationID, fingerprint string, expected uint64, markdown string) (AgentResponseReceipt, *notify.APIError) {
+func (s *Service) applyAgentUpdate(
+	ctx context.Context,
+	dynamicCards feishu.DynamicCards,
+	response *agentResponse,
+	operationID, fingerprint string,
+	expected uint64,
+	markdown string,
+) (AgentResponseReceipt, *notify.APIError) {
 	response.mu.Lock()
 	defer response.mu.Unlock()
 	op, apiErr := response.beginOperation(operationID, "update", fingerprint, expected)
@@ -652,7 +712,7 @@ func (s *Service) applyAgentUpdate(ctx context.Context, response *agentResponse,
 	if err := response.waitForMutation(callCtx); err != nil {
 		return AgentResponseReceipt{}, notify.NewAPIError(502, "feishu_unavailable", "Feishu card update was cancelled", true)
 	}
-	if err := s.dynamicCards.UpdateContent(callCtx, feishu.CardContentUpdate{
+	if err := dynamicCards.UpdateContent(callCtx, feishu.CardContentUpdate{
 		CardID: response.cardID, ElementID: agentContentElementID, Content: op.content,
 		UUID: op.contentUUID, Sequence: op.contentSeq,
 	}); err != nil {
@@ -701,8 +761,12 @@ func (s *Service) FinishAgentResponse(ctx context.Context, in FinishAgentRespons
 		return AgentResponseReceipt{}, notify.BadRequest("field_too_large", "one or more fields are too large")
 	}
 	response := s.agentBroker.lookupResponse(provider, responseID)
-	if response == nil {
+	if response == nil || !s.appAllowed(provider, response.appAlias) {
 		return AgentResponseReceipt{}, notify.NewAPIError(404, "unknown_response", "unknown response", false)
+	}
+	backend, ok := s.backendForApp(response.appAlias)
+	if !ok || backend.dynamicCards == nil {
+		return AgentResponseReceipt{}, notify.NotImplemented("agent_streaming_unavailable", "agent streaming is unavailable for this sender")
 	}
 	fingerprint := hashJSON(struct {
 		Expected uint64
@@ -710,10 +774,18 @@ func (s *Service) FinishAgentResponse(ctx context.Context, in FinishAgentRespons
 		Markdown string
 		Summary  string
 	}{in.ExpectedRevision, phase, in.Markdown, in.Summary})
-	return s.applyAgentFinish(ctx, response, operationID, fingerprint, in.ExpectedRevision, phase, in.Markdown, in.Summary)
+	return s.applyAgentFinish(ctx, backend.dynamicCards, response, operationID, fingerprint, in.ExpectedRevision, phase, in.Markdown, in.Summary)
 }
 
-func (s *Service) applyAgentFinish(ctx context.Context, response *agentResponse, operationID, fingerprint string, expected uint64, phase AgentResponsePhase, markdown, summary string) (AgentResponseReceipt, *notify.APIError) {
+func (s *Service) applyAgentFinish(
+	ctx context.Context,
+	dynamicCards feishu.DynamicCards,
+	response *agentResponse,
+	operationID, fingerprint string,
+	expected uint64,
+	phase AgentResponsePhase,
+	markdown, summary string,
+) (AgentResponseReceipt, *notify.APIError) {
 	response.mu.Lock()
 	defer response.mu.Unlock()
 	op, apiErr := response.beginOperation(operationID, "finish", fingerprint, expected)
@@ -744,7 +816,7 @@ func (s *Service) applyAgentFinish(ctx context.Context, response *agentResponse,
 		if err := response.waitForMutation(callCtx); err != nil {
 			return AgentResponseReceipt{}, notify.NewAPIError(502, "feishu_unavailable", "Feishu card update was cancelled", true)
 		}
-		if err := s.dynamicCards.UpdateContent(callCtx, feishu.CardContentUpdate{
+		if err := dynamicCards.UpdateContent(callCtx, feishu.CardContentUpdate{
 			CardID: response.cardID, ElementID: agentContentElementID, Content: op.content,
 			UUID: op.contentUUID, Sequence: op.contentSeq,
 		}); err != nil {
@@ -769,7 +841,7 @@ func (s *Service) applyAgentFinish(ctx context.Context, response *agentResponse,
 		if err := response.waitForMutation(callCtx); err != nil {
 			return AgentResponseReceipt{}, notify.NewAPIError(502, "feishu_unavailable", "Feishu card finalization was cancelled", true)
 		}
-		if err := s.dynamicCards.UpdateSettings(callCtx, feishu.CardSettingsUpdate{
+		if err := dynamicCards.UpdateSettings(callCtx, feishu.CardSettingsUpdate{
 			CardID: response.cardID, SettingsJSON: op.settingsJSON,
 			UUID: op.settingsUUID, Sequence: op.settingsSeq,
 		}); err != nil {
@@ -966,12 +1038,20 @@ func (b *agentBroker) lookupResponse(provider, responseID string) *agentResponse
 	return response
 }
 
-func (b *agentBroker) lookupAndPinDelivery(deliveryID string, now, expiresAt time.Time) (*agentDelivery, bool) {
+func (b *agentBroker) lookupAndPinDelivery(
+	provider, deliveryID string,
+	appAllowed func(string) bool,
+	now, expiresAt time.Time,
+) (*agentDelivery, bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.pruneLocked(now)
 	delivery, ok := b.deliveries[deliveryID]
 	if !ok {
+		return nil, false
+	}
+	if _, received := delivery.allowedProviders[provider]; !received ||
+		appAllowed != nil && !appAllowed(delivery.appAlias) {
 		return nil, false
 	}
 	if delivery.expiresAt.Before(expiresAt) {
@@ -983,12 +1063,18 @@ func (b *agentBroker) lookupAndPinDelivery(deliveryID string, now, expiresAt tim
 	return delivery, true
 }
 
-func (s *Service) lookupAndPinAgentDelivery(deliveryID string, now, expiresAt time.Time) (*agentDelivery, bool) {
+func (s *Service) lookupAndPinAgentDelivery(provider, deliveryID string, now, expiresAt time.Time) (*agentDelivery, bool) {
 	routes := s.inboundRoutes
 	routes.mu.Lock()
 	defer routes.mu.Unlock()
 	routes.pruneLocked(now)
-	delivery, ok := s.agentBroker.lookupAndPinDelivery(deliveryID, now, expiresAt)
+	delivery, ok := s.agentBroker.lookupAndPinDelivery(
+		provider,
+		deliveryID,
+		func(appAlias string) bool { return s.appAllowed(provider, appAlias) },
+		now,
+		expiresAt,
+	)
 	if !ok {
 		return nil, false
 	}
@@ -1001,6 +1087,7 @@ func (s *Service) lookupAndPinAgentDelivery(deliveryID string, now, expiresAt ti
 
 func (s *Service) DispatchAgentCardAction(ctx context.Context, in AgentCardActionInput) *notify.APIError {
 	_ = ctx
+	in.AppAlias = strings.TrimSpace(in.AppAlias)
 	in.DeliveryID = strings.TrimSpace(in.DeliveryID)
 	in.MessageID = strings.TrimSpace(in.MessageID)
 	in.SenderID = strings.TrimSpace(in.SenderID)
@@ -1035,10 +1122,11 @@ func (b *agentBroker) dispatchAction(in AgentCardActionInput) *notify.APIError {
 	defer b.mu.Unlock()
 	now := time.Now()
 	b.pruneLocked(now)
-	if _, duplicate := b.seenActions[in.DeliveryID]; duplicate {
+	actionKey := newAppStateKey(in.AppAlias, in.DeliveryID)
+	if _, duplicate := b.seenActions[actionKey]; duplicate {
 		return nil
 	}
-	response := b.responsesByMessageID[in.MessageID]
+	response := b.responsesByMessageID[newAppStateKey(in.AppAlias, in.MessageID)]
 	if response == nil {
 		return notify.NewAPIError(404, "unknown_response", "unknown response", false)
 	}
@@ -1048,7 +1136,7 @@ func (b *agentBroker) dispatchAction(in AgentCardActionInput) *notify.APIError {
 	}
 	var target *agentSubscriber
 	for _, sub := range b.subscribers {
-		if sub.provider != response.provider || !sub.includeCardActions {
+		if sub.provider != response.provider || !sub.includeCardActions || !sub.allowsApp(response.appAlias) {
 			continue
 		}
 		if target == nil || sub.id < target.id {
@@ -1063,6 +1151,7 @@ func (b *agentBroker) dispatchAction(in AgentCardActionInput) *notify.APIError {
 		ConversationID: response.conversationID,
 		ChatAlias:      response.chatAlias,
 		SenderID:       in.SenderID,
+		Metadata:       appAliasMetadata(in.AppAlias),
 		CardAction: &AgentCardAction{
 			ResponseID:  response.responseID,
 			ActionID:    in.ActionID,
@@ -1071,7 +1160,7 @@ func (b *agentBroker) dispatchAction(in AgentCardActionInput) *notify.APIError {
 	}
 	select {
 	case target.ch <- event:
-		b.seenActions[in.DeliveryID] = now.Add(b.ttl)
+		b.seenActions[actionKey] = now.Add(b.ttl)
 		b.refreshConversationLocked(response.conversationID, response.provider, now)
 		return nil
 	default:
@@ -1088,7 +1177,7 @@ func (b *agentBroker) pruneLocked(now time.Time) {
 	for responseID, response := range b.responses {
 		if now.After(response.expiresAt) {
 			delete(b.responses, responseID)
-			delete(b.responsesByMessageID, response.messageID)
+			delete(b.responsesByMessageID, newAppStateKey(response.appAlias, response.messageID))
 		}
 	}
 	for deliveryID, expiresAt := range b.seenActions {
@@ -1321,7 +1410,12 @@ func fallbackConversationID(in CommandInput) string {
 	if thread == "" {
 		thread = in.Metadata["root_id"]
 	}
-	sum := sha256.Sum256([]byte(route + "\x00" + thread))
+	seed := route + "\x00" + thread
+	if !isDefaultAppAlias(in.AppAlias) {
+		seed = "feishu-botd/fallback-conversation/v2\x00" +
+			effectiveAppAlias(in.AppAlias) + "\x00" + seed
+	}
+	sum := sha256.Sum256([]byte(seed))
 	return "conv_" + hex.EncodeToString(sum[:16])
 }
 
@@ -1342,17 +1436,34 @@ func cloneStringMap(in map[string]string) map[string]string {
 	return out
 }
 
-func agentPublicMetadata(in map[string]string) map[string]string {
-	out := make(map[string]string, 2)
+func agentPublicMetadata(in map[string]string, appAlias string) map[string]string {
+	out := make(map[string]string, 3)
 	for _, key := range []string{"chat_type", "message_type"} {
 		if value := strings.TrimSpace(in[key]); value != "" {
 			out[key] = value
 		}
 	}
+	if strings.TrimSpace(in["app_alias"]) != "" {
+		// The private route tag, not metadata supplied by a provider, is the
+		// authority. Metadata only records that ingress explicitly identified an
+		// app and therefore opts into this additive public key.
+		out["app_alias"] = effectiveAppAlias(appAlias)
+	}
 	if len(out) == 0 {
 		return nil
 	}
 	return out
+}
+
+func appAliasMetadata(appAlias string) map[string]string {
+	if strings.TrimSpace(appAlias) == "" {
+		return nil
+	}
+	return map[string]string{"app_alias": effectiveAppAlias(appAlias)}
+}
+
+func (s *agentSubscriber) allowsApp(appAlias string) bool {
+	return appAllowedByList(appAlias, s.allowedApps, s.allowedAppsConfigured)
 }
 
 func normalizedInitialMarkdown(markdown string) string {
@@ -1413,11 +1524,16 @@ func opaqueLogCorrelationID(kind, value string) string {
 	return kind + "_" + hex.EncodeToString(sum[:8])
 }
 
-func agentMessageDedupeKey(messageID string) string {
+func agentMessageDedupeKey(appAlias, messageID string) string {
 	messageID = strings.TrimSpace(messageID)
 	if messageID == "" {
 		return ""
 	}
-	sum := sha256.Sum256([]byte("feishu-botd/agent-message-dedupe/v1\x00" + messageID))
+	seed := "feishu-botd/agent-message-dedupe/v1\x00" + messageID
+	if !isDefaultAppAlias(appAlias) {
+		seed = "feishu-botd/agent-message-dedupe/v2\x00" +
+			effectiveAppAlias(appAlias) + "\x00" + messageID
+	}
+	sum := sha256.Sum256([]byte(seed))
 	return hex.EncodeToString(sum[:])
 }

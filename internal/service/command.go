@@ -15,6 +15,9 @@ const commandSubscriptionBuffer = 32
 // ChatAlias must already be resolved from daemon configuration; raw Feishu chat
 // ids never enter the public command stream.
 type CommandInput struct {
+	// AppAlias is daemon-private ingress routing state. An empty value is the
+	// legacy default app and preserves all existing direct service callers.
+	AppAlias       string `json:"-"`
 	DeliveryID     string
 	Command        string
 	Text           string
@@ -79,16 +82,27 @@ type commandBroker struct {
 }
 
 type commandSubscriber struct {
-	id       uint64
+	id                    uint64
+	principal             commandPrincipal
+	commands              map[string]struct{}
+	allowedApps           map[string]struct{}
+	allowedAppsConfigured bool
+	ch                    chan CommandInput
+}
+
+// commandPrincipal separates process-internal consumers from authenticated
+// wire providers even when they intentionally use the same display name. The
+// internal bit never crosses a transport or enters a provider-visible event.
+type commandPrincipal struct {
 	provider string
-	commands map[string]struct{}
-	ch       chan CommandInput
+	internal bool
 }
 
 type commandDelivery struct {
+	appAlias         string
 	chatAlias        string
 	messageID        string
-	allowedProviders map[string]struct{}
+	allowedProviders map[commandPrincipal]struct{}
 	expiresAt        time.Time
 	state            commandDeliveryState
 }
@@ -113,8 +127,43 @@ func newCommandBroker(ttl time.Duration) *commandBroker {
 }
 
 func (s *Service) SubscribeCommands(ctx context.Context, provider string, commands []string) (*CommandSubscription, *notify.APIError) {
+	return s.SubscribeCommandsForApps(ctx, CommandSubscribeOptions{
+		Provider: provider,
+		Commands: commands,
+	})
+}
+
+// CommandSubscribeOptions adds daemon-private application authorization to the
+// unchanged legacy command stream. Absent allowed_apps means all apps; an
+// explicitly configured empty list means none.
+type CommandSubscribeOptions struct {
+	Provider              string
+	Commands              []string
+	AllowedApps           []string
+	AllowedAppsConfigured bool
+}
+
+// SubscribeCommandsForApps registers an app-filtered legacy command consumer.
+// External callers still use the unchanged protobuf Subscribe request; the
+// authenticated transport supplies this internal scope from configuration.
+func (s *Service) SubscribeCommandsForApps(ctx context.Context, in CommandSubscribeOptions) (*CommandSubscription, *notify.APIError) {
+	return s.subscribeCommandsForApps(ctx, in, false)
+}
+
+// SubscribeInternalCommandsForApps registers a trusted in-process consumer.
+// Its broker identity is distinct from any authenticated wire provider with the
+// same name, while its explicit application allowlist is enforced normally.
+func (s *Service) SubscribeInternalCommandsForApps(ctx context.Context, in CommandSubscribeOptions) (*CommandSubscription, *notify.APIError) {
+	return s.subscribeCommandsForApps(ctx, in, true)
+}
+
+func (s *Service) subscribeCommandsForApps(
+	ctx context.Context,
+	in CommandSubscribeOptions,
+	internal bool,
+) (*CommandSubscription, *notify.APIError) {
 	_ = ctx
-	sub, apiErr := s.commandBroker.subscribe(provider, commands)
+	sub, apiErr := s.commandBroker.subscribe(in, internal)
 	if apiErr != nil {
 		return nil, apiErr
 	}
@@ -131,6 +180,18 @@ func (s *Service) SubscribeCommands(ctx context.Context, provider string, comman
 // not coupled to local provider health.
 func (s *Service) DispatchCommand(ctx context.Context, in CommandInput) (int, *notify.APIError) {
 	_ = ctx
+	explicitAppAlias := strings.TrimSpace(in.AppAlias)
+	in.AppAlias = effectiveAppAlias(in.AppAlias)
+	if explicitAppAlias != "" {
+		in.Metadata = cloneStringMap(in.Metadata)
+		if in.Metadata == nil {
+			in.Metadata = make(map[string]string)
+		}
+		in.Metadata["app_alias"] = in.AppAlias
+	} else if _, supplied := in.Metadata["app_alias"]; supplied {
+		in.Metadata = cloneStringMap(in.Metadata)
+		delete(in.Metadata, "app_alias")
+	}
 	in.DeliveryID = strings.TrimSpace(in.DeliveryID)
 	in.Command = normalizeCommand(in.Command)
 	in.Text = strings.TrimSpace(in.Text)
@@ -150,11 +211,14 @@ func (s *Service) DispatchCommand(ctx context.Context, in CommandInput) (int, *n
 	}
 	isDirect := in.ChatAlias == "direct" && in.Metadata["chat_type"] == "p2p"
 	if !isDirect {
-		if _, ok := s.cfg.Channels[in.ChatAlias]; !ok {
+		appAlias, _, ok := s.cfg.ResolveChannel(in.ChatAlias)
+		if !ok || appAlias != in.AppAlias {
 			return 0, notify.NewAPIError(404, "unknown_channel", "unknown channel", false)
 		}
 	} else if in.ChatID == "" {
 		return 0, notify.BadRequest("missing_direct_route", "direct message route is required")
+	} else if _, ok := s.backendForApp(in.AppAlias); !ok {
+		return 0, notify.NewAPIError(404, "unknown_channel", "unknown channel", false)
 	}
 	if in.Prompt == "" {
 		in.Prompt = strings.TrimSpace(strings.Join([]string{in.Command, in.Text}, " "))
@@ -181,7 +245,7 @@ func (s *Service) dispatchInboundRoute(in CommandInput, isDirect bool) (legacyDe
 	defer routes.mu.Unlock()
 	now := time.Now()
 	routes.pruneLocked(now)
-	messageKey := agentMessageDedupeKey(in.Metadata["message_id"])
+	messageKey := agentMessageDedupeKey(in.AppAlias, in.Metadata["message_id"])
 	if _, duplicate := routes.deliveries[in.DeliveryID]; duplicate {
 		return 0, 0
 	}
@@ -222,6 +286,18 @@ func (r *inboundRouteRegistry) pruneLocked(now time.Time) {
 }
 
 func (s *Service) RespondCommand(ctx context.Context, in CommandResponse) *notify.APIError {
+	return s.respondCommand(ctx, in, false)
+}
+
+// RespondInternalCommand replies as a trusted in-process consumer registered
+// through SubscribeInternalCommandsForApps. Configured provider ACLs do not
+// apply to this separate principal; delivery ownership and the subscription's
+// explicit application allowlist still do.
+func (s *Service) RespondInternalCommand(ctx context.Context, in CommandResponse) *notify.APIError {
+	return s.respondCommand(ctx, in, true)
+}
+
+func (s *Service) respondCommand(ctx context.Context, in CommandResponse, internal bool) *notify.APIError {
 	in.Provider = strings.TrimSpace(in.Provider)
 	in.DeliveryID = strings.TrimSpace(in.DeliveryID)
 	if len(s.cfg.AgentProviders) > 0 && in.Provider == "" {
@@ -230,9 +306,20 @@ func (s *Service) RespondCommand(ctx context.Context, in CommandResponse) *notif
 	if in.DeliveryID == "" {
 		return notify.BadRequest("missing_delivery_id", "delivery_id is required")
 	}
-	chatAlias, messageID, apiErr := s.commandBroker.beginResponse(in.DeliveryID, in.Provider)
+	chatAlias, messageID, appAlias, apiErr := s.commandBroker.beginResponse(
+		in.DeliveryID,
+		commandPrincipal{provider: in.Provider, internal: internal},
+		func(resolvedApp string) bool {
+			return internal || s.appAllowed(in.Provider, resolvedApp)
+		},
+	)
 	if apiErr != nil {
 		return apiErr
+	}
+	resolvedApp, _, ok := s.cfg.ResolveChannel(chatAlias)
+	if !ok || resolvedApp != appAlias {
+		s.commandBroker.finishResponse(in.DeliveryID, false)
+		return notify.NewAPIError(404, "unknown_delivery", "unknown delivery", false)
 	}
 
 	_, apiErr = s.SendMessage(ctx, MessageInput{
@@ -252,8 +339,8 @@ func (s *Service) RespondCommand(ctx context.Context, in CommandResponse) *notif
 	return nil
 }
 
-func (b *commandBroker) subscribe(provider string, commands []string) (*commandSubscriber, *notify.APIError) {
-	provider = strings.TrimSpace(provider)
+func (b *commandBroker) subscribe(in CommandSubscribeOptions, internal bool) (*commandSubscriber, *notify.APIError) {
+	provider := strings.TrimSpace(in.Provider)
 	if provider == "" {
 		return nil, notify.BadRequest("missing_provider", "provider is required")
 	}
@@ -261,8 +348,8 @@ func (b *commandBroker) subscribe(provider string, commands []string) (*commandS
 		return nil, notify.BadRequest("field_too_large", "one or more fields are too large")
 	}
 
-	commandSet := make(map[string]struct{}, len(commands))
-	for _, command := range commands {
+	commandSet := make(map[string]struct{}, len(in.Commands))
+	for _, command := range in.Commands {
 		command = normalizeCommand(command)
 		if command == "" {
 			continue
@@ -280,10 +367,12 @@ func (b *commandBroker) subscribe(provider string, commands []string) (*commandS
 	defer b.mu.Unlock()
 	b.nextSubID++
 	sub := &commandSubscriber{
-		id:       b.nextSubID,
-		provider: provider,
-		commands: commandSet,
-		ch:       make(chan CommandInput, commandSubscriptionBuffer),
+		id:                    b.nextSubID,
+		principal:             commandPrincipal{provider: provider, internal: internal},
+		commands:              commandSet,
+		allowedApps:           normalizedAppAllowlist(in.AllowedApps),
+		allowedAppsConfigured: in.AllowedAppsConfigured,
+		ch:                    make(chan CommandInput, commandSubscriptionBuffer),
 	}
 	b.subscribers[sub.id] = sub
 	return sub, nil
@@ -309,25 +398,29 @@ func (b *commandBroker) dispatch(in CommandInput) (delivered int, handled bool) 
 	}
 
 	publicInput := publicCommandInput(in)
-	allowedProviders := make(map[string]struct{})
-	providerSent := make(map[string]struct{})
+	allowedProviders := make(map[commandPrincipal]struct{})
+	providerSent := make(map[commandPrincipal]struct{})
 	for _, sub := range b.subscribers {
+		if !sub.allowsApp(in.AppAlias) {
+			continue
+		}
 		if _, ok := sub.commands[in.Command]; !ok {
 			continue
 		}
-		if _, duplicateProvider := providerSent[sub.provider]; duplicateProvider {
+		if _, duplicateProvider := providerSent[sub.principal]; duplicateProvider {
 			continue
 		}
 		select {
 		case sub.ch <- cloneCommandInput(publicInput):
 			delivered++
-			providerSent[sub.provider] = struct{}{}
-			allowedProviders[sub.provider] = struct{}{}
+			providerSent[sub.principal] = struct{}{}
+			allowedProviders[sub.principal] = struct{}{}
 		default:
 		}
 	}
 	if delivered > 0 {
 		b.deliveries[in.DeliveryID] = &commandDelivery{
+			appAlias:         in.AppAlias,
 			chatAlias:        in.ChatAlias,
 			messageID:        in.Metadata["message_id"],
 			allowedProviders: allowedProviders,
@@ -338,27 +431,32 @@ func (b *commandBroker) dispatch(in CommandInput) (delivered int, handled bool) 
 	return delivered, delivered > 0
 }
 
-func (b *commandBroker) beginResponse(deliveryID, provider string) (chatAlias, messageID string, apiErr *notify.APIError) {
+func (b *commandBroker) beginResponse(
+	deliveryID string,
+	principal commandPrincipal,
+	appAllowed func(string) bool,
+) (chatAlias, messageID, appAlias string, apiErr *notify.APIError) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.pruneLocked(time.Now())
 	delivery, ok := b.deliveries[deliveryID]
 	if !ok {
-		return "", "", notify.NewAPIError(404, "unknown_delivery", "unknown delivery", false)
+		return "", "", "", notify.NewAPIError(404, "unknown_delivery", "unknown delivery", false)
 	}
-	if provider != "" {
-		if _, allowed := delivery.allowedProviders[provider]; !allowed {
-			return "", "", notify.NewAPIError(404, "unknown_delivery", "unknown delivery", false)
+	if principal.provider != "" {
+		_, received := delivery.allowedProviders[principal]
+		if !received || appAllowed != nil && !appAllowed(delivery.appAlias) {
+			return "", "", "", notify.NewAPIError(404, "unknown_delivery", "unknown delivery", false)
 		}
 	}
 	switch delivery.state {
 	case commandDeliveryResponded:
-		return "", "", notify.NewAPIError(409, "already_responded", "delivery already has a response", false)
+		return "", "", "", notify.NewAPIError(409, "already_responded", "delivery already has a response", false)
 	case commandDeliveryResponding:
-		return "", "", notify.NewAPIError(409, "response_in_flight", "delivery response is already being sent", true)
+		return "", "", "", notify.NewAPIError(409, "response_in_flight", "delivery response is already being sent", true)
 	}
 	delivery.state = commandDeliveryResponding
-	return delivery.chatAlias, delivery.messageID, nil
+	return delivery.chatAlias, delivery.messageID, delivery.appAlias, nil
 }
 
 func (b *commandBroker) finishResponse(deliveryID string, sent bool) {
@@ -402,7 +500,45 @@ func cloneCommandInput(in CommandInput) CommandInput {
 
 func publicCommandInput(in CommandInput) CommandInput {
 	out := cloneCommandInput(in)
-	out.Metadata = agentPublicMetadata(in.Metadata)
+	out.Metadata = legacyPublicMetadata(in.Metadata)
+	out.AppAlias = ""
 	out.ChatID = ""
 	return out
+}
+
+func legacyPublicMetadata(in map[string]string) map[string]string {
+	out := make(map[string]string, 2)
+	for _, key := range []string{"chat_type", "message_type"} {
+		if value := strings.TrimSpace(in[key]); value != "" {
+			out[key] = value
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func normalizedAppAllowlist(apps []string) map[string]struct{} {
+	if len(apps) == 0 {
+		return nil
+	}
+	out := make(map[string]struct{}, len(apps))
+	for _, alias := range apps {
+		alias = effectiveAppAlias(alias)
+		out[alias] = struct{}{}
+	}
+	return out
+}
+
+func appAllowedByList(appAlias string, allowed map[string]struct{}, configured bool) bool {
+	if !configured {
+		return true
+	}
+	_, ok := allowed[effectiveAppAlias(appAlias)]
+	return ok
+}
+
+func (s *commandSubscriber) allowsApp(appAlias string) bool {
+	return appAllowedByList(appAlias, s.allowedApps, s.allowedAppsConfigured)
 }

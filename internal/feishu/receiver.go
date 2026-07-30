@@ -15,9 +15,12 @@ import (
 	larkcallback "github.com/larksuite/oapi-sdk-go/v3/event/dispatcher/callback"
 	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
 	larkws "github.com/larksuite/oapi-sdk-go/v3/ws"
+
+	"feishu-botd/internal/config"
 )
 
 type CommandReceiverConfig struct {
+	AppAlias  string
 	AppID     string
 	AppSecret string
 	Channels  map[string]string
@@ -26,9 +29,15 @@ type CommandReceiverConfig struct {
 	BotUserID  string
 	BotUnionID string
 	BotNames   []string
+
+	// ConnectionStateChanged receives only a public app alias and a fixed state.
+	// Raw SDK errors can contain credentials, connection URLs, or tenant data and
+	// must never cross this callback boundary.
+	ConnectionStateChanged func(appAlias string, state ConnectionState)
 }
 
 type InboundCommand struct {
+	AppAlias       string `json:"-"`
 	DeliveryID     string
 	Command        string
 	Text           string
@@ -50,6 +59,7 @@ type CommandHandler func(context.Context, InboundCommand) error
 // appear here. ValueJSON and FormValueJSON preserve JSON types such as booleans,
 // arrays, and nested objects for downstream agent providers.
 type InboundCardAction struct {
+	AppAlias       string `json:"-"`
 	DeliveryID     string
 	ConversationID string
 	MessageID      string `json:"-"`
@@ -71,6 +81,18 @@ type CardActionHandler func(context.Context, InboundCardAction) error
 
 var errCommandReceiverUnavailable = errors.New("feishu command receiver unavailable")
 
+// ConnectionState is the privacy-safe lifecycle state of one app's long
+// connection. It deliberately carries no SDK error text.
+type ConnectionState string
+
+const (
+	ConnectionStateStarting     ConnectionState = "starting"
+	ConnectionStateConnected    ConnectionState = "connected"
+	ConnectionStateReconnecting ConnectionState = "reconnecting"
+	ConnectionStateDisconnected ConnectionState = "disconnected"
+	ConnectionStateUnavailable  ConnectionState = "unavailable"
+)
+
 // CommandReceiver owns the Feishu long connection used for inbound bot command
 // events. The public command contract deals only in configured channel aliases.
 type CommandReceiver struct {
@@ -83,18 +105,26 @@ type CommandReceiver struct {
 
 	actionMu      sync.RWMutex
 	actionHandler CardActionHandler
+
+	stateMu      sync.RWMutex
+	state        ConnectionState
+	initialReady chan struct{}
+	readyOnce    sync.Once
 }
 
 func NewCommandReceiver(cfg CommandReceiverConfig, handler CommandHandler, logger *slog.Logger) *CommandReceiver {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	cfg.AppAlias = effectiveAppAlias(cfg.AppAlias)
 	r := &CommandReceiver{
-		cfg:         cfg,
-		logger:      logger,
-		handler:     handler,
-		chatAliases: uniqueChatAliases(cfg.Channels),
-		botNames:    normalizedNameSet(cfg.BotNames),
+		cfg:          cfg,
+		logger:       logger,
+		handler:      handler,
+		chatAliases:  uniqueChatAliases(cfg.Channels),
+		botNames:     normalizedNameSet(cfg.BotNames),
+		state:        ConnectionStateDisconnected,
+		initialReady: make(chan struct{}),
 	}
 	d := dispatcher.NewEventDispatcher("", "").
 		OnP2MessageReceiveV1(r.handleMessage).
@@ -108,6 +138,21 @@ func NewCommandReceiver(cfg CommandReceiverConfig, handler CommandHandler, logge
 		cfg.AppSecret,
 		larkws.WithEventHandler(d),
 		larkws.WithLogger(safeSDKLogger{logger: logger}),
+		larkws.WithOnReady(func() {
+			r.setConnectionState(ConnectionStateConnected)
+		}),
+		larkws.WithOnReconnecting(func() {
+			r.setConnectionState(ConnectionStateReconnecting)
+		}),
+		larkws.WithOnReconnected(func() {
+			r.setConnectionState(ConnectionStateConnected)
+		}),
+		larkws.WithOnDisconnected(func() {
+			r.setConnectionState(ConnectionStateDisconnected)
+		}),
+		larkws.WithOnError(func(error) {
+			r.setConnectionState(ConnectionStateUnavailable)
+		}),
 	)
 	return r
 }
@@ -122,12 +167,52 @@ func (r *CommandReceiver) SetCardActionHandler(handler CardActionHandler) {
 }
 
 func (r *CommandReceiver) Start(ctx context.Context) error {
-	return safeWebSocketStartError(r.client.Start(ctx))
+	r.setConnectionState(ConnectionStateStarting)
+	err := safeWebSocketStartError(r.client.Start(ctx))
+	if err != nil {
+		r.setConnectionState(ConnectionStateUnavailable)
+	}
+	return err
 }
 
 func (r *CommandReceiver) Close() {
 	if r.client != nil {
 		r.client.Close()
+	}
+}
+
+// InitialReady is closed the first time this receiver establishes a long
+// connection. It lets process startup wait for every configured app without
+// treating later reconnects as a new startup event.
+func (r *CommandReceiver) InitialReady() <-chan struct{} {
+	return r.initialReady
+}
+
+// ConnectionState returns the current fixed-vocabulary connection state.
+func (r *CommandReceiver) ConnectionState() ConnectionState {
+	r.stateMu.RLock()
+	defer r.stateMu.RUnlock()
+	return r.state
+}
+
+func (r *CommandReceiver) setConnectionState(state ConnectionState) {
+	r.stateMu.Lock()
+	if r.state == state {
+		r.stateMu.Unlock()
+		return
+	}
+	r.state = state
+	handler := r.cfg.ConnectionStateChanged
+	appAlias := r.cfg.AppAlias
+	r.stateMu.Unlock()
+
+	if handler != nil {
+		handler(appAlias, state)
+	}
+	if state == ConnectionStateConnected {
+		r.readyOnce.Do(func() {
+			close(r.initialReady)
+		})
 	}
 }
 
@@ -274,15 +359,16 @@ func (r *CommandReceiver) CommandFromEvent(event *larkim.P2MessageReceiveV1) (In
 		return InboundCommand{}, false
 	}
 	return InboundCommand{
+		AppAlias:       r.cfg.AppAlias,
 		DeliveryID:     deliveryID,
 		Command:        strings.ToLower(command),
 		Text:           args,
 		Prompt:         prompt,
 		ChatAlias:      chatAlias,
-		ConversationID: conversationID(chatID, messageConversationKey(msg)),
+		ConversationID: conversationIDForApp(r.cfg.AppAlias, chatID, messageConversationKey(msg)),
 		ChatID:         chatID,
 		SenderID:       senderID(event.Event.Sender),
-		Metadata:       commandMetadata(event, msg, chatType),
+		Metadata:       commandMetadataForApp(r.cfg.AppAlias, event, msg, chatType),
 	}, true
 }
 
@@ -295,7 +381,7 @@ func (r *CommandReceiver) CardActionFromEvent(event *larkcallback.CardActionTrig
 
 	deliveryID := ""
 	if event.EventV2Base != nil && event.EventV2Base.Header != nil {
-		deliveryID = cardActionDeliveryID(event.EventV2Base.Header.EventID)
+		deliveryID = cardActionDeliveryIDForApp(r.cfg.AppAlias, event.EventV2Base.Header.EventID)
 	}
 	if deliveryID == "" {
 		return InboundCardAction{}, false
@@ -318,8 +404,9 @@ func (r *CommandReceiver) CardActionFromEvent(event *larkcallback.CardActionTrig
 	}
 	action := event.Event.Action
 	return InboundCardAction{
+		AppAlias:       r.cfg.AppAlias,
 		DeliveryID:     deliveryID,
-		ConversationID: conversationID(chatID),
+		ConversationID: conversationIDForApp(r.cfg.AppAlias, chatID),
 		MessageID:      messageID,
 		SenderID:       cardActionSenderID(event.Event.Operator),
 		Tag:            strings.TrimSpace(action.Tag),
@@ -406,10 +493,10 @@ func trimCaseInsensitivePrefix(text, prefix string) (string, bool) {
 func (r *CommandReceiver) deliveryID(event *larkim.P2MessageReceiveV1, msg *larkim.EventMessage) string {
 	if event.EventV2Base != nil && event.EventV2Base.Header != nil {
 		if event.EventV2Base.Header.EventID != "" {
-			return messageEventDeliveryID(event.EventV2Base.Header.EventID)
+			return messageEventDeliveryIDForApp(r.cfg.AppAlias, event.EventV2Base.Header.EventID)
 		}
 	}
-	return messageDeliveryID(deref(msg.MessageId))
+	return messageDeliveryIDForApp(r.cfg.AppAlias, deref(msg.MessageId))
 }
 
 // Feishu event ids are retry keys as well as provider-side correlation values.
@@ -419,8 +506,30 @@ func messageEventDeliveryID(eventID string) string {
 	return opaqueDeliveryID("delivery_event_", "feishu-botd/message-event-delivery/v1\x00", eventID)
 }
 
+func messageEventDeliveryIDForApp(appAlias, eventID string) string {
+	if isDefaultAppAlias(appAlias) {
+		return messageEventDeliveryID(eventID)
+	}
+	return opaqueDeliveryID(
+		"delivery_event_",
+		"feishu-botd/message-event-delivery/v2\x00"+effectiveAppAlias(appAlias)+"\x00",
+		eventID,
+	)
+}
+
 func cardActionDeliveryID(eventID string) string {
 	return opaqueDeliveryID("delivery_action_", "feishu-botd/card-action-delivery/v1\x00", eventID)
+}
+
+func cardActionDeliveryIDForApp(appAlias, eventID string) string {
+	if isDefaultAppAlias(appAlias) {
+		return cardActionDeliveryID(eventID)
+	}
+	return opaqueDeliveryID(
+		"delivery_action_",
+		"feishu-botd/card-action-delivery/v2\x00"+effectiveAppAlias(appAlias)+"\x00",
+		eventID,
+	)
 }
 
 // messageDeliveryID provides a stable retry key without exposing Feishu's raw
@@ -428,6 +537,17 @@ func cardActionDeliveryID(eventID string) string {
 // separator keeps this digest distinct from conversation and future id types.
 func messageDeliveryID(messageID string) string {
 	return opaqueDeliveryID("delivery_msg_", "feishu-botd/message-delivery/v1\x00", messageID)
+}
+
+func messageDeliveryIDForApp(appAlias, messageID string) string {
+	if isDefaultAppAlias(appAlias) {
+		return messageDeliveryID(messageID)
+	}
+	return opaqueDeliveryID(
+		"delivery_msg_",
+		"feishu-botd/message-delivery/v2\x00"+effectiveAppAlias(appAlias)+"\x00",
+		messageID,
+	)
 }
 
 func opaqueDeliveryID(prefix, domain, value string) string {
@@ -464,6 +584,12 @@ func commandMetadata(event *larkim.P2MessageReceiveV1, msg *larkim.EventMessage,
 	return metadata
 }
 
+func commandMetadataForApp(appAlias string, event *larkim.P2MessageReceiveV1, msg *larkim.EventMessage, chatType string) map[string]string {
+	metadata := commandMetadata(event, msg, chatType)
+	metadata["app_alias"] = effectiveAppAlias(appAlias)
+	return metadata
+}
+
 func messageConversationKey(msg *larkim.EventMessage) string {
 	if msg == nil {
 		return ""
@@ -489,6 +615,38 @@ func conversationID(chatID string, threadKey ...string) string {
 	}
 	sum := sha256.Sum256([]byte(seed))
 	return "conv_" + hex.EncodeToString(sum[:])
+}
+
+func conversationIDForApp(appAlias, chatID string, threadKey ...string) string {
+	if isDefaultAppAlias(appAlias) {
+		return conversationID(chatID, threadKey...)
+	}
+	chatID = strings.TrimSpace(chatID)
+	if chatID == "" {
+		return ""
+	}
+	thread := ""
+	if len(threadKey) > 0 {
+		thread = strings.TrimSpace(threadKey[0])
+	}
+	seed := "feishu-botd/conversation/v2\x00" + effectiveAppAlias(appAlias) + "\x00" + chatID
+	if thread != "" {
+		seed += "\x00" + thread
+	}
+	sum := sha256.Sum256([]byte(seed))
+	return "conv_" + hex.EncodeToString(sum[:])
+}
+
+func effectiveAppAlias(appAlias string) string {
+	appAlias = strings.TrimSpace(appAlias)
+	if appAlias == "" {
+		return config.DefaultAppAlias
+	}
+	return appAlias
+}
+
+func isDefaultAppAlias(appAlias string) bool {
+	return effectiveAppAlias(appAlias) == config.DefaultAppAlias
 }
 
 func normalizedObjectJSON(value map[string]interface{}) (string, bool) {

@@ -2,6 +2,7 @@ package service
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"feishu-botd/internal/config"
@@ -16,20 +17,36 @@ type redactor struct {
 }
 
 func newRedactor(cfg config.Config) *redactor {
-	candidates := []string{cfg.AppSecret, cfg.AuthToken}
+	candidates := []string{cfg.AppID, cfg.AppSecret, cfg.AuthToken}
+	for _, app := range cfg.EffectiveApps() {
+		candidates = append(candidates, app.AppID, app.AppSecret)
+		for _, chatID := range app.Channels {
+			candidates = append(candidates, chatID)
+		}
+	}
 	for _, provider := range cfg.AgentProviders {
 		candidates = append(candidates, provider.AuthToken)
 	}
 	for _, chatID := range cfg.Channels {
 		candidates = append(candidates, chatID)
 	}
-	values := make([]string, 0, len(candidates))
+	unique := make(map[string]struct{}, len(candidates))
 	for _, value := range candidates {
 		value = strings.TrimSpace(value)
-		if len(value) >= 4 {
-			values = append(values, value)
+		if value != "" {
+			unique[value] = struct{}{}
 		}
 	}
+	values := make([]string, 0, len(unique))
+	for value := range unique {
+		values = append(values, value)
+	}
+	sort.Slice(values, func(i, j int) bool {
+		if len(values[i]) != len(values[j]) {
+			return len(values[i]) > len(values[j])
+		}
+		return values[i] < values[j]
+	})
 	return &redactor{values: values}
 }
 
