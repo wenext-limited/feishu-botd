@@ -25,6 +25,12 @@ service CommandService {
   rpc StartAgentResponse(StartAgentResponseRequest) returns (StartAgentResponseResponse);
   rpc UpdateAgentResponse(UpdateAgentResponseRequest) returns (UpdateAgentResponseResponse);
   rpc FinishAgentResponse(FinishAgentResponseRequest) returns (FinishAgentResponseResponse);
+
+  // SendAgentFollowUp posts one later message into a conversation that already
+  // delivered an agent event to this provider. A finished CardKit entity cannot
+  // carry a new answer, so a detached run reports back through this path rather
+  // than by reopening a closed response.
+  rpc SendAgentFollowUp(SendAgentFollowUpRequest) returns (SendAgentFollowUpResponse);
 }
 
 // ProviderService is the FUTURE pull path (botd asks a registered client to
@@ -206,6 +212,32 @@ message UpdateAgentResponseResponse {
 
 message FinishAgentResponseResponse {
   AgentResponseReceipt response = 1;
+}
+
+// SendAgentFollowUpRequest delivers a standalone message into an existing
+// conversation. It is an ordinary message rather than a CardKit streaming
+// entity, so it has no revision and cannot be updated after delivery.
+message SendAgentFollowUpRequest {
+  string provider = 1; // must match the bearer-authenticated principal
+  // Opaque conversation identity taken from a previously delivered
+  // InboundAgentEvent. botd resolves the concrete route privately.
+  string conversation_id = 2;
+  // Provider-generated idempotency key. Reusing it with different content is
+  // rejected; retrying the same operation returns duplicate=true.
+  string operation_id = 3;
+  string markdown = 10; // complete follow-up body
+  string summary = 11; // compact notification/preview text
+  reserved 4 to 9, 12 to 31;
+}
+
+message AgentFollowUpReceipt {
+  // Opaque delivery handle. Feishu message, thread, and chat ids stay private.
+  string follow_up_id = 1;
+  bool duplicate = 2;
+}
+
+message SendAgentFollowUpResponse {
+  AgentFollowUpReceipt follow_up = 1;
 }
 
 message RegisterProviderRequest {

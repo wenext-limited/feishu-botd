@@ -25,6 +25,7 @@ const (
 	CommandService_StartAgentResponse_FullMethodName   = "/feishubotd.v1.CommandService/StartAgentResponse"
 	CommandService_UpdateAgentResponse_FullMethodName  = "/feishubotd.v1.CommandService/UpdateAgentResponse"
 	CommandService_FinishAgentResponse_FullMethodName  = "/feishubotd.v1.CommandService/FinishAgentResponse"
+	CommandService_SendAgentFollowUp_FullMethodName    = "/feishubotd.v1.CommandService/SendAgentFollowUp"
 )
 
 // CommandServiceClient is the client API for CommandService service.
@@ -49,6 +50,11 @@ type CommandServiceClient interface {
 	StartAgentResponse(ctx context.Context, in *StartAgentResponseRequest, opts ...grpc.CallOption) (*StartAgentResponseResponse, error)
 	UpdateAgentResponse(ctx context.Context, in *UpdateAgentResponseRequest, opts ...grpc.CallOption) (*UpdateAgentResponseResponse, error)
 	FinishAgentResponse(ctx context.Context, in *FinishAgentResponseRequest, opts ...grpc.CallOption) (*FinishAgentResponseResponse, error)
+	// SendAgentFollowUp posts one later message into a conversation that already
+	// delivered an agent event to this provider. A finished CardKit entity cannot
+	// carry a new answer, so a detached run reports back through this path rather
+	// than by reopening a closed response.
+	SendAgentFollowUp(ctx context.Context, in *SendAgentFollowUpRequest, opts ...grpc.CallOption) (*SendAgentFollowUpResponse, error)
 }
 
 type commandServiceClient struct {
@@ -137,6 +143,16 @@ func (c *commandServiceClient) FinishAgentResponse(ctx context.Context, in *Fini
 	return out, nil
 }
 
+func (c *commandServiceClient) SendAgentFollowUp(ctx context.Context, in *SendAgentFollowUpRequest, opts ...grpc.CallOption) (*SendAgentFollowUpResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SendAgentFollowUpResponse)
+	err := c.cc.Invoke(ctx, CommandService_SendAgentFollowUp_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // CommandServiceServer is the server API for CommandService service.
 // All implementations must embed UnimplementedCommandServiceServer
 // for forward compatibility.
@@ -159,6 +175,11 @@ type CommandServiceServer interface {
 	StartAgentResponse(context.Context, *StartAgentResponseRequest) (*StartAgentResponseResponse, error)
 	UpdateAgentResponse(context.Context, *UpdateAgentResponseRequest) (*UpdateAgentResponseResponse, error)
 	FinishAgentResponse(context.Context, *FinishAgentResponseRequest) (*FinishAgentResponseResponse, error)
+	// SendAgentFollowUp posts one later message into a conversation that already
+	// delivered an agent event to this provider. A finished CardKit entity cannot
+	// carry a new answer, so a detached run reports back through this path rather
+	// than by reopening a closed response.
+	SendAgentFollowUp(context.Context, *SendAgentFollowUpRequest) (*SendAgentFollowUpResponse, error)
 	mustEmbedUnimplementedCommandServiceServer()
 }
 
@@ -186,6 +207,9 @@ func (UnimplementedCommandServiceServer) UpdateAgentResponse(context.Context, *U
 }
 func (UnimplementedCommandServiceServer) FinishAgentResponse(context.Context, *FinishAgentResponseRequest) (*FinishAgentResponseResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method FinishAgentResponse not implemented")
+}
+func (UnimplementedCommandServiceServer) SendAgentFollowUp(context.Context, *SendAgentFollowUpRequest) (*SendAgentFollowUpResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SendAgentFollowUp not implemented")
 }
 func (UnimplementedCommandServiceServer) mustEmbedUnimplementedCommandServiceServer() {}
 func (UnimplementedCommandServiceServer) testEmbeddedByValue()                        {}
@@ -302,6 +326,24 @@ func _CommandService_FinishAgentResponse_Handler(srv interface{}, ctx context.Co
 	return interceptor(ctx, in, info, handler)
 }
 
+func _CommandService_SendAgentFollowUp_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SendAgentFollowUpRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CommandServiceServer).SendAgentFollowUp(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CommandService_SendAgentFollowUp_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CommandServiceServer).SendAgentFollowUp(ctx, req.(*SendAgentFollowUpRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // CommandService_ServiceDesc is the grpc.ServiceDesc for CommandService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -324,6 +366,10 @@ var CommandService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "FinishAgentResponse",
 			Handler:    _CommandService_FinishAgentResponse_Handler,
+		},
+		{
+			MethodName: "SendAgentFollowUp",
+			Handler:    _CommandService_SendAgentFollowUp_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{
