@@ -103,6 +103,7 @@ is supplied.
 | `StartAgentResponse` | Creates a streaming CardKit 2.0 reply for one inbound delivery and returns an opaque response handle at revision 1. |
 | `UpdateAgentResponse` | Applies a complete accumulated markdown snapshot at the expected revision. |
 | `FinishAgentResponse` | Applies final content, records the outcome, and disables CardKit streaming mode. |
+| `SendAgentFollowUp` | Posts one later, standalone message into a conversation the provider has already received an agent event from. |
 
 Inbound Feishu events are enabled only when `commands.enabled` or
 `FEISHU_BOTD_COMMANDS_ENABLED=true` is set. Users invoke commands as
@@ -156,8 +157,9 @@ The `provider` must match the identity authenticated by the provider bearer;
 the general notification bearer cannot use an agent RPC. The daemon also checks
 requested selectors against that provider's `allowed_commands`,
 `allow_unmatched_messages`, and `allow_card_actions` before registering the
-stream. Legacy streams additionally require `allow_legacy_commands`. Grant
-unmatched-message access carefully because it includes direct-message prompts.
+stream. Legacy streams additionally require `allow_legacy_commands`, and
+follow-up sends require `allow_follow_up_messages`. Grant unmatched-message
+access carefully because it includes direct-message prompts.
 
 Exact command subscribers win over unmatched subscribers. A successfully
 delivered legacy group command wins before either agent selector. For a single
@@ -248,8 +250,42 @@ The claim and original operation identity remain retained. After an ambiguous
 Start, botd also stops before Feishu's one-hour message-UUID dedupe window can
 expire and returns `send_retry_expired` without another Feishu call.
 
-#### Agent card actions
+#### Agent follow-up sends
 
+`SendAgentFollowUp` is the one path that writes into a conversation without an
+inbound delivery to answer. It accepts `provider`, a `conversation_id` from a
+previously delivered `InboundAgentEvent`, an `operation_id`, the complete
+`markdown`, and an optional `summary` used as the title and notification
+preview. It returns an opaque `follow_up_id` and a `duplicate` flag. There is no
+revision and no later edit: this is an ordinary message, not a CardKit entity.
+
+botd records a private reverse map from `conversation_id` to the concrete chat
+and optional thread each time it delivers an agent event, and keeps it for the
+dedupe TTL. Three checks run before any Feishu call: the provider bearer must
+match the request `provider`, that provider must have
+`allow_follow_up_messages` in its config (default false, granted separately from
+the ingress selectors because it lets an agent speak unprompted), and it must
+have received an agent event for that exact conversation inside the TTL. A
+conversation botd cannot route and a conversation the caller was never spoken to
+in both return `unknown_conversation`, so the RPC cannot enumerate chats.
+
+A thread-scoped conversation is answered inside its thread; a flat chat or
+direct message receives a new top-level message. `markdown` is capped at 30 KiB
+and `summary` at 200 bytes, and a group conversation routes through its
+configured channel alias.
+
+Idempotency follows the Update/Finish rules: a completed retry of the same
+`operation_id` returns `duplicate = true` without sending again, reuse with
+different content is an `operation_conflict`, and a concurrent second attempt is
+a retryable `operation_in_flight`. The follow-up handle seeds the Feishu message
+UUID, so retrying an ambiguous attempt reuses that UUID and cannot post the
+message twice; botd returns non-retryable `send_retry_expired` rather than retry
+outside Feishu's one-hour UUID window. A definitive rejection with no earlier
+ambiguous attempt releases the operation id for corrected content.
+
+Older daemons do not implement this RPC and return `UNIMPLEMENTED`.
+
+#### Agent card actions
 Each `AgentResponseAction` carries a provider-defined `action_id`, label,
 optional JSON-object `payload_json`, and default/primary/danger style. A
 `card.action.trigger` callback is acknowledged by botd and routed only to an
@@ -292,7 +328,7 @@ stable machine `code`, a redacted `message`, a `retryable` flag, and a
 | 400 (`missing_*`, `invalid_severity`, `invalid_json`, `field_too_large`, ...) | `INVALID_ARGUMENT` |
 | 401 `unauthorized` | `UNAUTHENTICATED` |
 | 403 `provider_identity_mismatch`, `provider_scope_denied` | `PERMISSION_DENIED` |
-| 404 `unknown_channel`, `unknown_delivery`, `unknown_response`, `unknown_action`, `not_found` | `NOT_FOUND` |
+| 404 `unknown_channel`, `unknown_delivery`, `unknown_response`, `unknown_action`, `unknown_conversation`, `not_found` | `NOT_FOUND` |
 | 409 `dedupe_conflict`, `already_responded` | `ALREADY_EXISTS` |
 | 409 `operation_conflict` | `ALREADY_EXISTS` |
 | 409 `dedupe_in_flight`, `response_in_flight`, `operation_in_flight`, `revision_conflict` | `ABORTED` |

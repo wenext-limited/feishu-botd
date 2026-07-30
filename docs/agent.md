@@ -73,6 +73,7 @@ openssl rand -base64 32 > /run/secrets/feishu-botd-example-agent-token
       "allowed_commands": [],
       "allow_unmatched_messages": true,
       "allow_card_actions": true,
+      "allow_follow_up_messages": false,
       "allow_legacy_commands": false
     }
   },
@@ -156,10 +157,11 @@ another, or from an agent back to legacy after subscriber churn.
 Each provider can request only the selectors authorized in its config:
 `allowed_commands`, `allow_unmatched_messages`, and `allow_card_actions`.
 `allow_legacy_commands` separately permits legacy `Subscribe`/`Respond`, using
-the same `allowed_commands` allowlist. Requests outside this scope fail before
-broker registration. Grant only the minimum selectors needed; unmatched-message
-access includes direct-message prompts. Card actions are additionally restricted
-to the provider that owns the response.
+the same `allowed_commands` allowlist, and `allow_follow_up_messages` separately
+permits the follow-up send described below. Requests outside this scope fail
+before broker registration. Grant only the minimum selectors needed;
+unmatched-message access includes direct-message prompts. Card actions are
+additionally restricted to the provider that owns the response.
 
 Routing differs by chat type:
 
@@ -255,6 +257,61 @@ omitted. Do not place secrets or raw routing identifiers in a button's
 provider-defined payload: Feishu sends that value back to the callback and the
 agent receives it unchanged inside `value.payload`.
 
+## Follow-up sends
+
+A CardKit response is closed by `FinishAgentResponse` and Feishu auto-closes
+streaming mode after about ten minutes, so a long or detached run cannot report
+back through the card it started. `SendAgentFollowUp` posts one later,
+standalone message into the same conversation instead.
+
+The request carries `provider`, the `conversation_id` from any previously
+delivered `InboundAgentEvent`, an `operation_id`, the complete `markdown`, and
+an optional `summary` used as the message title and notification preview. The
+response returns an opaque `follow_up_id` and a `duplicate` flag. There is no
+revision: a follow-up is an ordinary message and cannot be edited afterwards.
+
+botd records a reverse map from `conversation_id` to the concrete route each
+time it delivers an agent event, and resolves it privately at send time. Three
+checks run before any Feishu call:
+
+1. The provider bearer must match the request `provider`.
+2. That provider must have `allow_follow_up_messages` in its config. It defaults
+   to false; granting it lets the agent start a message the user did not
+   prompt, so it is deliberately separate from the ingress selectors.
+3. That provider must have received an agent event for that exact conversation
+   within the dedupe TTL. Scope follows the conversation, not the daemon: an
+   agent can only follow up where it was spoken to.
+
+A conversation botd has no route for and a conversation the caller was never
+spoken to in both return `unknown_conversation`, so the RPC cannot be used to
+probe which chats exist.
+
+Message shape and limits:
+
+- A thread-scoped conversation is answered inside its thread. A flat chat or
+  direct message gets a new top-level message rather than a reply threaded under
+  a prompt the user scrolled past hours ago.
+- `markdown` is capped at 30 KiB and `summary` at 200 bytes. Long bodies are
+  split across several Feishu messages by the ordinary send path.
+- A group conversation routes through its configured channel alias. Removing
+  that alias from config makes the conversation unaddressable.
+
+Retries follow the same rules as `UpdateAgentResponse` and
+`FinishAgentResponse`. Reuse the `operation_id` for the byte-equivalent request:
+a completed retry returns `duplicate = true` without sending again, and reuse
+with different content returns `operation_conflict`. A second attempt while the
+first is still in flight returns retryable `operation_in_flight`. The follow-up
+handle seeds the Feishu message UUID, so an ambiguous attempt that Feishu
+silently accepted cannot be posted twice by its retry; botd refuses a retry that
+would fall outside Feishu's one-hour UUID deduplication window and returns
+non-retryable `send_retry_expired`. A definitive rejection with nothing in doubt
+releases the operation id so corrected content can reuse it.
+
+Conversation routes, grants, and follow-up receipts are in memory alongside the
+rest of the agent state and are lost on restart. A daemon built before this RPC
+returns `UNIMPLEMENTED`; treat that as "no follow-up channel available" and
+degrade to finishing inside the original card.
+
 ## Limits and persistence
 
 - Feishu permits at most 10 CardKit card/component operations per second per
@@ -269,12 +326,14 @@ agent receives it unchanged inside `value.payload`.
   failure can leave an unused entity that botd cannot recover. Once botd has a
   `card_id`, a send retry reuses that card and the same message UUID.
 - Agent deliveries, response handles, operation receipts, action ownership,
-  and callback deduplication are in memory. They expire after the configured
-  dedupe TTL (six hours by default) and are lost when the daemon restarts.
+  conversation routes, follow-up grants, and callback deduplication are in
+  memory. They expire after the configured dedupe TTL (six hours by default) and
+  are lost when the daemon restarts.
   After restart, an old `response_id` cannot be resumed even if Feishu still
-  retains the card. Restart does not disable streaming on the remote card;
-  Feishu eventually auto-closes it. Finish active responses before planned
-  restarts.
+  retains the card, and a `conversation_id` cannot be followed up until that
+  conversation speaks to the agent again. Restart does not disable streaming on
+  the remote card; Feishu eventually auto-closes it. Finish active responses
+  before planned restarts.
 - Run exactly one active `feishu-botd` long-connection client per Feishu app.
   Feishu permits up to 50 connections but delivers each event to one random
   client in cluster mode, not to every client. Because response/action

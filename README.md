@@ -80,6 +80,7 @@ and per-caller defaults:
       "allowed_commands": [],
       "allow_unmatched_messages": true,
       "allow_card_actions": true,
+      "allow_follow_up_messages": false,
       "allow_legacy_commands": false
     }
   },
@@ -128,7 +129,7 @@ a separate token file. The general bearer and every provider token must contain
 at least 32 bytes. Provider tokens must be unique and must differ from the
 general bearer. Token loading trims and uses only the first line of each file.
 Existing deployments with a shorter general bearer must rotate it before
-upgrading because the daemon now fails closed at startup. The four agent RPCs
+upgrading because the daemon now fails closed at startup. The five agent RPCs
 require the matching provider token on both Unix and loopback TCP. When this map
 is non-empty, legacy command `Subscribe`/`Respond` is scoped the same way; existing
 legacy deployments without the map keep their current local/global-token mode.
@@ -139,7 +140,9 @@ closed. A provider credential never grants outbound notification authority.
 HTTP health/readiness and gRPC health remain public.
 Each subscription is limited by `allowed_commands`,
 `allow_unmatched_messages`, `allow_card_actions`, and
-`allow_legacy_commands`. Plaintext gRPC TCP is loopback-only even when the HTTP
+`allow_legacy_commands`; `allow_follow_up_messages` separately permits sending a
+later message into a conversation the provider has already answered in.
+Plaintext gRPC TCP is loopback-only even when the HTTP
 LAN opt-in is enabled.
 
 ### Local script execution
