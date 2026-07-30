@@ -148,6 +148,23 @@ func (c *commandServer) FinishAgentResponse(ctx context.Context, in *pb.FinishAg
 	return &pb.FinishAgentResponseResponse{Response: agentReceiptToProto(receipt)}, nil
 }
 
+func (c *commandServer) SendAgentFollowUp(ctx context.Context, in *pb.SendAgentFollowUpRequest) (*pb.SendAgentFollowUpResponse, error) {
+	if err := authorizeAgentFollowUp(ctx, in.GetProvider()); err != nil {
+		return nil, err
+	}
+	receipt, apiErr := c.svc.SendAgentFollowUp(ctx, service.SendAgentFollowUpInput{
+		Provider:       in.GetProvider(),
+		ConversationID: in.GetConversationId(),
+		OperationID:    in.GetOperationId(),
+		Markdown:       in.GetMarkdown(),
+		Summary:        in.GetSummary(),
+	})
+	if apiErr != nil {
+		return nil, grpcError(apiErr, requestIDFromContext(ctx))
+	}
+	return &pb.SendAgentFollowUpResponse{FollowUp: agentFollowUpReceiptToProto(receipt)}, nil
+}
+
 func commandToProto(cmd service.CommandInput) *pb.SubscribeResponse {
 	return &pb.SubscribeResponse{
 		Command: &pb.InboundCommand{
@@ -229,6 +246,10 @@ func agentReceiptToProto(in service.AgentResponseReceipt) *pb.AgentResponseRecei
 		Phase:      agentPhaseToProto(in.Phase),
 		Duplicate:  in.Duplicate,
 	}
+}
+
+func agentFollowUpReceiptToProto(in service.AgentFollowUpReceipt) *pb.AgentFollowUpReceipt {
+	return &pb.AgentFollowUpReceipt{FollowUpId: in.FollowUpID, Duplicate: in.Duplicate}
 }
 
 func agentPhaseToProto(in service.AgentResponsePhase) pb.AgentResponsePhase {

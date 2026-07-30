@@ -21,6 +21,7 @@ type providerPrincipal struct {
 	allowedCommands        map[string]struct{}
 	allowUnmatchedMessages bool
 	allowCardActions       bool
+	allowFollowUpMessages  bool
 	allowLegacyCommands    bool
 }
 
@@ -51,6 +52,7 @@ func newProviderAuthenticator(providers map[string]config.AgentProviderConfig) p
 				allowedCommands:        allowedCommands,
 				allowUnmatchedMessages: providerCfg.AllowUnmatchedMessages,
 				allowCardActions:       providerCfg.AllowCardActions,
+				allowFollowUpMessages:  providerCfg.AllowFollowUpMessages,
 				allowLegacyCommands:    providerCfg.AllowLegacyCommands,
 			},
 			digest: sha256.Sum256([]byte(providerCfg.AuthToken)),
@@ -74,7 +76,8 @@ func isAgentMethod(fullMethod string) bool {
 	case pb.CommandService_SubscribeAgentEvents_FullMethodName,
 		pb.CommandService_StartAgentResponse_FullMethodName,
 		pb.CommandService_UpdateAgentResponse_FullMethodName,
-		pb.CommandService_FinishAgentResponse_FullMethodName:
+		pb.CommandService_FinishAgentResponse_FullMethodName,
+		pb.CommandService_SendAgentFollowUp_FullMethodName:
 		return true
 	default:
 		return false
@@ -208,6 +211,20 @@ func authorizeAgentSubscription(ctx context.Context, requested string, commands 
 	}
 	principal, _ := authenticatedProvider(ctx)
 	if !commandsAllowed(principal, commands) || unmatched && !principal.allowUnmatchedMessages || actions && !principal.allowCardActions {
+		return providerScopeDenied(ctx)
+	}
+	return nil
+}
+
+// authorizeAgentFollowUp gates the capability itself. Which conversations the
+// provider may address is a separate, narrower check the service applies against
+// the events it actually received.
+func authorizeAgentFollowUp(ctx context.Context, requested string) error {
+	if err := requireProviderIdentity(ctx, requested); err != nil {
+		return err
+	}
+	principal, _ := authenticatedProvider(ctx)
+	if !principal.allowFollowUpMessages {
 		return providerScopeDenied(ctx)
 	}
 	return nil

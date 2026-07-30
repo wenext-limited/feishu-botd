@@ -300,6 +300,55 @@ func TestLoadFromConfigFileLoadsScopedAgentProviderToken(t *testing.T) {
 	}
 }
 
+// TestLoadFromConfigFileAgentProviderFollowUpScope pins the explicit-allowlist
+// posture: sending a later, unprompted message into a conversation is off until
+// the operator turns it on for that provider.
+func TestLoadFromConfigFileAgentProviderFollowUpScope(t *testing.T) {
+	for _, testCase := range []struct {
+		name  string
+		entry string
+		want  bool
+	}{
+		{name: "omitted defaults to off", entry: "", want: false},
+		{name: "explicitly disabled", entry: `,"allow_follow_up_messages":false`, want: false},
+		{name: "explicitly enabled", entry: `,"allow_follow_up_messages":true`, want: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			clearConfigEnv(t)
+			dir := t.TempDir()
+			tokenPath := filepath.Join(dir, "agent-token")
+			const token = "fixture-agent-token-0123456789abcdef0123456789"
+			if err := os.WriteFile(tokenPath, []byte(token+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			configPath := filepath.Join(dir, "feishu-botd.json")
+			configJSON := `{
+  "feishu": {"app_id":"app_fixture","app_secret":"secret_fixture"},
+  "listeners": {"grpc_socket":"/tmp/feishu-botd.fixture.sock"},
+  "commands": {"enabled":true},
+  "agent_providers": {
+    "fixture-agent": {
+      "auth_token_file":"` + tokenPath + `",
+      "allow_unmatched_messages":true` + testCase.entry + `
+    }
+  }
+}`
+			if err := os.WriteFile(configPath, []byte(configJSON), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("FEISHU_BOTD_CONFIG", configPath)
+
+			cfg, err := LoadFromEnv()
+			if err != nil {
+				t.Fatalf("load provider config: %v", err)
+			}
+			if got := cfg.AgentProviders["fixture-agent"].AllowFollowUpMessages; got != testCase.want {
+				t.Fatalf("allow_follow_up_messages = %t, want %t", got, testCase.want)
+			}
+		})
+	}
+}
+
 func TestLoadFromConfigFileLoadsGeneralTokenForScopedUnixHTTP(t *testing.T) {
 	clearConfigEnv(t)
 	dir := t.TempDir()

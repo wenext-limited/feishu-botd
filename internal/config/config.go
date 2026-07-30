@@ -46,6 +46,7 @@ type AgentProviderConfig struct {
 	AllowedCommands        []string
 	AllowUnmatchedMessages bool
 	AllowCardActions       bool
+	AllowFollowUpMessages  bool
 	AllowLegacyCommands    bool
 }
 
@@ -128,6 +129,7 @@ func LoadFromEnv() (Config, error) {
 			AllowedCommands:        append([]string(nil), providerCfg.AllowedCommands...),
 			AllowUnmatchedMessages: providerCfg.AllowUnmatchedMessages,
 			AllowCardActions:       providerCfg.AllowCardActions,
+			AllowFollowUpMessages:  providerCfg.AllowFollowUpMessages,
 			AllowLegacyCommands:    providerCfg.AllowLegacyCommands,
 		}
 	}
@@ -213,6 +215,7 @@ type fileAgentProviderConfig struct {
 	AllowedCommands        []string `json:"allowed_commands"`
 	AllowUnmatchedMessages bool     `json:"allow_unmatched_messages"`
 	AllowCardActions       bool     `json:"allow_card_actions"`
+	AllowFollowUpMessages  bool     `json:"allow_follow_up_messages"`
 	AllowLegacyCommands    bool     `json:"allow_legacy_commands"`
 }
 
@@ -600,6 +603,7 @@ func normalizeAgentProviderConfigs(in map[string]fileAgentProviderConfig) (map[s
 			AllowedCommands:        commands,
 			AllowUnmatchedMessages: providerCfg.AllowUnmatchedMessages,
 			AllowCardActions:       providerCfg.AllowCardActions,
+			AllowFollowUpMessages:  providerCfg.AllowFollowUpMessages,
 			AllowLegacyCommands:    providerCfg.AllowLegacyCommands,
 		}
 	}

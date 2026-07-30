@@ -216,6 +216,7 @@ type agentBroker struct {
 	deliveries           map[string]*agentDelivery
 	responses            map[string]*agentResponse
 	responsesByMessageID map[string]*agentResponse
+	conversations        map[string]*agentConversationRoute
 	seenMessages         map[string]time.Time
 	seenActions          map[string]time.Time
 }
@@ -312,6 +313,7 @@ func newAgentBroker(ttl time.Duration) *agentBroker {
 		deliveries:           make(map[string]*agentDelivery),
 		responses:            make(map[string]*agentResponse),
 		responsesByMessageID: make(map[string]*agentResponse),
+		conversations:        make(map[string]*agentConversationRoute),
 		seenMessages:         make(map[string]time.Time),
 		seenActions:          make(map[string]time.Time),
 	}
@@ -445,6 +447,7 @@ func (b *agentBroker) dispatchMessage(in CommandInput) (delivered int, handled b
 			state:            agentDeliveryOpen,
 			messageDedupeKey: messageDedupeKey,
 		}
+		b.recordConversationLocked(in, allowed, now)
 		if messageDedupeKey != "" {
 			b.seenMessages[messageDedupeKey] = now.Add(b.ttl)
 		}
@@ -1069,6 +1072,7 @@ func (b *agentBroker) dispatchAction(in AgentCardActionInput) *notify.APIError {
 	select {
 	case target.ch <- event:
 		b.seenActions[in.DeliveryID] = now.Add(b.ttl)
+		b.refreshConversationLocked(response.conversationID, response.provider, now)
 		return nil
 	default:
 		return notify.NewAPIError(429, "agent_queue_full", "agent provider queue is full", true)
@@ -1095,6 +1099,11 @@ func (b *agentBroker) pruneLocked(now time.Time) {
 	for messageID, expiresAt := range b.seenMessages {
 		if now.After(expiresAt) {
 			delete(b.seenMessages, messageID)
+		}
+	}
+	for conversationID, route := range b.conversations {
+		if route.expired(now) {
+			delete(b.conversations, conversationID)
 		}
 	}
 }
