@@ -468,6 +468,33 @@ func TestAgentTimelineUpdateReplayRepeatsOnlyTheFailedCall(t *testing.T) {
 	assertCompactedTimelineOperations(t, response.operations)
 }
 
+// TestAgentTimelineCardScaffoldingNeedsHeadroom pins the gap between the field
+// budget and the card budget. A provider that splits exactly 30 KiB between the
+// answer and the timeline is rejected before its card is created, so the
+// documented advice to clip nearer 29 KiB has to keep holding.
+func TestAgentTimelineCardScaffoldingNeedsHeadroom(t *testing.T) {
+	panelContent := func(total int) AgentResponseContent {
+		timeline := 8 * 1024
+		return AgentResponseContent{
+			Title: "回答", Markdown: strings.Repeat("a", total-timeline),
+			TimelineMarkdown: strings.Repeat("b", timeline), TimelineTitle: "任务进行中 · 第 2 轮",
+		}
+	}
+
+	if _, apiErr := buildAgentCard(panelContent(maxAgentCardBytes)); apiErr == nil ||
+		apiErr.Code != "field_too_large" {
+		t.Fatalf("content filling the whole field budget was accepted: %v", apiErr)
+	}
+	card, apiErr := buildAgentCard(panelContent(29 * 1024))
+	if apiErr != nil {
+		t.Fatalf("29 KiB of content with a panel: %v", apiErr)
+	}
+	if len(card.json) > maxAgentCardBytes {
+		t.Fatalf("29 KiB of content rendered a %d byte card, over the %d limit",
+			len(card.json), maxAgentCardBytes)
+	}
+}
+
 func assertCompactedTimelineOperations(t *testing.T, operations map[string]*agentOperation) {
 	t.Helper()
 	for operationID, op := range operations {

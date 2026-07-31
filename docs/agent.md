@@ -328,6 +328,22 @@ than to any one element: the answer `markdown` and the panel's
 against whatever the request leaves unchanged. `timeline_title` is capped at
 200 bytes like `title` and `summary`. Both overruns return `field_too_large`.
 
+Budget for the card, not for the fields. `StartAgentResponse` additionally
+rejects a card whose **serialized JSON** exceeds 30 KiB, and that JSON carries
+scaffolding the field lengths do not: measured at roughly 150 bytes for a
+plain card, 750 with a timeline panel and a title, and 1200 with two action
+buttons as well. A provider that fills the field budget exactly is therefore
+rejected before its first card is ever created — this predates the panel, but
+a panel widens the gap. Keep total content near 29 KiB and clip toward
+whichever part matters less. Note too that Go's JSON encoder escapes `<` and
+`>`, so an `<br>` costs 14 bytes inside the card JSON while counting as 4
+against the field gate.
+
+Line breaks are the panel author's problem, not botd's: Feishu renders a
+single `\n` as a *soft* break that the client may collapse, so step lines
+joined by one newline can run together into a paragraph. Use `<br>`, a
+markdown list, or a blank line between entries.
+
 Applying a timeline costs extra CardKit operations. The panel body streams
 through the same content API as the answer, which is what preserves the
 typewriter effect, while the header moves through a `batch_update`
