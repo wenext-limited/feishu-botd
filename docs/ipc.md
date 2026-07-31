@@ -134,7 +134,7 @@ is supplied.
 | `Respond` | Provider sends a markdown or card reply for a previously delivered `delivery_id`. |
 | `SubscribeAgentEvents` | Agent opens a server stream for exact commands, unmatched conversational messages, card actions, or any combination. |
 | `StartAgentResponse` | Creates a streaming CardKit 2.0 reply for one inbound delivery and returns an opaque response handle at revision 1. |
-| `UpdateAgentResponse` | Applies a complete accumulated markdown snapshot at the expected revision. |
+| `UpdateAgentResponse` | Applies a complete accumulated markdown snapshot, and any timeline part it carries, at the expected revision. |
 | `FinishAgentResponse` | Applies final content, records the outcome, and disables CardKit streaming mode. |
 | `SendAgentFollowUp` | Posts one later, standalone message into a conversation the provider has already received an agent event from. |
 
@@ -233,10 +233,11 @@ domain-separated opaque handles derived by botd.
 #### Agent response state machine
 
 `StartAgentResponse` accepts `provider`, `delivery_id`, `operation_id`, and an
-`AgentResponseContent`. The content contains a title, initial markdown, and up
-to eight unique actions. botd builds a CardKit JSON 2.0 entity with streaming
-mode enabled, replies to the inbound message, and returns an opaque
-`response_id`, revision `1`, phase `STREAMING`, and a `duplicate` flag.
+`AgentResponseContent`. The content contains a title, initial markdown, up
+to eight unique actions, and the optional timeline pair below. botd builds a
+CardKit JSON 2.0 entity with streaming mode enabled, replies to the inbound
+message, and returns an opaque `response_id`, revision `1`, phase `STREAMING`,
+and a `duplicate` flag.
 
 `UpdateAgentResponse` accepts that handle, a new `operation_id`, the current
 receipt's revision in `expected_revision`, and the complete accumulated
@@ -250,6 +251,42 @@ markdown, and an optional preview `summary`. Outcome must be `COMPLETED`,
 `FAILED`, or `CANCELLED`. The daemon applies changed final content, disables
 streaming mode, and increments the semantic revision once even when finalizing
 requires two CardKit operations.
+
+#### Agent response timeline panel
+
+`AgentResponseContent`, `UpdateAgentResponseRequest`, and
+`FinishAgentResponseRequest` each carry an optional `timeline_markdown` and
+`timeline_title`. They are additive fields on new numbers; a daemon built
+before them ignores them as proto3 unknowns and answers with its ordinary
+receipt.
+
+| Field | Semantics |
+| --- | --- |
+| `timeline_markdown` | The expanded panel body. A complete accumulated snapshot on every request, exactly like `markdown`. |
+| `timeline_title` | The collapsed panel header, rendered as plain text. Normally the step currently running; a completed-state line on Finish. |
+
+A response has a collapsible timeline panel if and only if `StartAgentResponse`
+carried a non-empty value for either field. That decision is fixed for the
+handle's lifetime. On Update and Finish an empty field means "leave that part
+unchanged" and a non-empty field replaces it; a value equal to what the card
+already shows makes no Feishu call. Both fields are ignored, not rejected, on a
+response with no panel.
+
+Sizes: `markdown` and `timeline_markdown` share the single 30 KiB card budget —
+Feishu's limit is per card, not per element — measured against whichever part
+the request leaves unchanged. `timeline_title` is capped at 200 bytes like
+`title` and `summary`. Either overrun returns `field_too_large`.
+
+The panel body is written with the same streaming content API as the answer;
+the panel header is written with a `batch_update` `partial_update_element`,
+because the content API only writes text elements. One Update can therefore
+make up to three Feishu calls and one Finish up to four, all behind the same
+125 ms serializer and all yielding exactly one revision. An operation reserves
+every call's sequence and UUID on its first attempt and records each as Feishu
+accepts it, so a retry with the same `operation_id` repeats only the call still
+in doubt. Calls run answer, timeline body, timeline header, settings, so a
+partially applied operation never advertises a step the body does not list and
+never closes streaming mode early.
 
 Every operation is idempotent within botd's app-scoped process state. A
 transport retry must reuse the same `operation_id` and semantic request. A

@@ -252,7 +252,8 @@ The agent response RPCs form a strict state machine:
 The provider must carry the returned `response_id` and `revision` forward. Send
 the complete accumulated markdown on every update—never a token delta. Feishu's
 typewriter behavior depends on the previous text being a prefix of the next
-snapshot.
+snapshot. Update and Finish also carry the optional timeline fields described
+in [the run timeline panel](#the-run-timeline-panel).
 
 Every mutation needs a provider-generated `operation_id`. On an ambiguous
 transport failure, retry the same semantic request with the same ID. A
@@ -293,6 +294,62 @@ sets the final preview summary.
 Each has an `action_id`, label, optional JSON-object payload, and default,
 primary, or danger style. Set `include_card_actions = true` on the provider's
 subscription to receive them.
+
+## The run timeline panel
+
+An answer and the steps that produced it do not belong in the same markdown
+snapshot: the step log pushes the answer down the card and keeps moving while
+the user is trying to read it. A response can instead carry its timeline in a
+collapsible panel above the answer. Collapsed — the default — the panel header
+is the step currently running; expanded, it shows the timeline markdown.
+
+The panel is optional and decided once. It exists for the response's whole
+lifetime if and only if `StartAgentResponse.content` carried a non-empty
+`timeline_markdown` or `timeline_title`. A provider that sends neither gets the
+byte-identical card it got before this feature existed.
+
+| Field | Where | Meaning |
+| --- | --- | --- |
+| `timeline_markdown` | Start, Update, Finish | The expanded panel body. Like `markdown`, always the complete accumulated snapshot, never a delta. |
+| `timeline_title` | Start, Update, Finish | The collapsed panel header. Rendered as plain text, so step text cannot inject card markup. |
+
+On Update and Finish each field is independent and **empty means "leave that
+part unchanged"**, so a provider can advance the header without resending the
+body, or the reverse. A non-empty value replaces that part; a value that
+already matches the card is not sent to Feishu again. A panel-less response
+ignores both fields rather than rejecting them, so one provider implementation
+can talk to both card shapes. `FinishAgentResponse` keeps the last streaming
+header unless `timeline_title` carries the completed-state line the run should
+settle on, such as `Completed in 12 steps`.
+
+Sizes are shared, because Feishu's ceiling applies to the rendered card rather
+than to any one element: the answer `markdown` and the panel's
+`timeline_markdown` together must stay within the 30 KiB card limit, measured
+against whatever the request leaves unchanged. `timeline_title` is capped at
+200 bytes like `title` and `summary`. Both overruns return `field_too_large`.
+
+Applying a timeline costs extra CardKit operations. The panel body streams
+through the same content API as the answer, which is what preserves the
+typewriter effect, while the header moves through a `batch_update`
+`partial_update_element`. One Update can therefore make up to three Feishu
+calls and one Finish up to four; they stay behind the same 125 ms serializer
+and still produce exactly one revision. Coalesce accordingly — an agent that
+advances both the answer and the timeline on every tick should aim nearer
+2–3 Hz than 8 Hz.
+
+Retries are unchanged in shape. An operation reserves the sequence numbers and
+idempotency UUIDs for all of its calls on its first attempt and records each
+call as Feishu accepts it, so retrying an ambiguous failure with the same
+`operation_id` repeats only the call that is still in doubt. The calls run in
+the order answer, timeline body, timeline header, then settings: a partially
+applied operation can leave the header lagging the steps it summarizes but
+never leading them, and streaming mode is disabled only after every content
+call has landed.
+
+A daemon built before this feature ignores the fields as proto3 unknowns and
+returns its ordinary receipt, so a provider cannot tell a panel was dropped.
+Treat the panel as presentation, not as a channel for anything the answer does
+not also say.
 
 ## Card actions
 
@@ -409,7 +466,8 @@ degrade to finishing inside the original card.
   at least one hour plus `send_timeout`. This retains an ambiguous Start claim
   through Feishu's one-hour IM message-UUID retry window.
 - Generated cards are limited to 30 KiB by the daemon. Keep final answers below
-  that bound and summarize or link to larger artifacts.
+  that bound and summarize or link to larger artifacts. A timeline panel shares
+  that one budget with the answer rather than adding to it.
 
 ## Verification boundary
 
