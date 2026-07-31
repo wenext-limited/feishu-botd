@@ -137,16 +137,21 @@ curl http://192.0.2.10:7345/v1/message \
 
 ## Sharing a Unix socket with another container
 
-The repo's own `docker-compose.yml` shares both daemon sockets with the host
-by default: it bind-mounts `FEISHU_BOTD_RUN_DIR` (default `./run`) at
-`/run/feishu-botd`, with a one-shot init service fixing the directory to
-`10001:10001` mode `750` before the daemon starts. An agent provider on the
-same host — in another Compose project or as a bare process — reaches
-`<run dir>/feishu-botd.grpc.sock` directly; it needs membership of gid
-`10001` to pass the socket's `0o660` group bits. The compose file also
-mounts the whole `./secrets` directory read-only at `/run/secrets`, so
-adding a per-provider token (see `agent_providers` in [agent.md](./agent.md))
-is one new file plus a config entry — no compose edit.
+The repo's own `docker-compose.yml` keeps both daemon sockets in a NAMED
+volume with the fixed name `feishu-botd-run` (it inherits the image's
+`10001:10001` ownership on first use). A consumer in another Compose
+project on the same engine declares it `external: true` under that name,
+mounts it at any path, and connects to `feishu-botd.grpc.sock` inside it —
+with membership of gid `10001` to pass the socket's `0o660` group bits. A
+named volume rather than a host bind is deliberate: unix sockets cannot
+bind on macOS host-shared paths (Docker Desktop's file sharing), so a bind
+would crash-loop the daemon on Mac hosts. On a Linux host where a NATIVE
+(non-container) process must reach the socket, replace the named volume
+with a host-directory bind owned by `10001:10001` — that platform supports
+it. The compose file also mounts the whole `./secrets` directory read-only
+at `/run/secrets`, so adding a per-provider token (see `agent_providers` in
+[agent.md](./agent.md)) is one new file plus a config entry — no compose
+edit.
 
 When a caller and `feishu-botd` run in the same Compose project instead,
 mount one named volume at `/run/feishu-botd` in both services. Configure the
