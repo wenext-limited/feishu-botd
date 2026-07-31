@@ -866,10 +866,18 @@ type AgentResponseContent struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	Title string                 `protobuf:"bytes,1,opt,name=title,proto3" json:"title,omitempty"`
 	// Always the complete accumulated answer, never a token delta.
-	Markdown      string                 `protobuf:"bytes,2,opt,name=markdown,proto3" json:"markdown,omitempty"`
-	Actions       []*AgentResponseAction `protobuf:"bytes,3,rep,name=actions,proto3" json:"actions,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Markdown string                 `protobuf:"bytes,2,opt,name=markdown,proto3" json:"markdown,omitempty"`
+	Actions  []*AgentResponseAction `protobuf:"bytes,3,rep,name=actions,proto3" json:"actions,omitempty"`
+	// The optional run timeline. A collapsible panel exists for the whole
+	// response iff Start carries a non-empty timeline_markdown or
+	// timeline_title; a provider that sends neither gets the unchanged card.
+	// timeline_markdown is the expanded body and, like markdown, is always the
+	// complete accumulated snapshot. timeline_title is the collapsed header and
+	// normally reads as the step currently running.
+	TimelineMarkdown string `protobuf:"bytes,16,opt,name=timeline_markdown,json=timelineMarkdown,proto3" json:"timeline_markdown,omitempty"`
+	TimelineTitle    string `protobuf:"bytes,17,opt,name=timeline_title,json=timelineTitle,proto3" json:"timeline_title,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *AgentResponseContent) Reset() {
@@ -921,6 +929,20 @@ func (x *AgentResponseContent) GetActions() []*AgentResponseAction {
 		return x.Actions
 	}
 	return nil
+}
+
+func (x *AgentResponseContent) GetTimelineMarkdown() string {
+	if x != nil {
+		return x.TimelineMarkdown
+	}
+	return ""
+}
+
+func (x *AgentResponseContent) GetTimelineTitle() string {
+	if x != nil {
+		return x.TimelineTitle
+	}
+	return ""
 }
 
 type AgentResponseAction struct {
@@ -1069,9 +1091,15 @@ type UpdateAgentResponseRequest struct {
 	OperationId      string                 `protobuf:"bytes,3,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
 	ExpectedRevision uint64                 `protobuf:"varint,4,opt,name=expected_revision,json=expectedRevision,proto3" json:"expected_revision,omitempty"`
 	// Complete accumulated answer. The initial successful Start has revision 1.
-	Markdown      string `protobuf:"bytes,10,opt,name=markdown,proto3" json:"markdown,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Markdown string `protobuf:"bytes,10,opt,name=markdown,proto3" json:"markdown,omitempty"`
+	// Timeline parts for a response whose Start created a panel. Each field is
+	// independent and empty means "leave that part unchanged"; a non-empty value
+	// replaces it, so timeline_markdown is a cumulative snapshot exactly like
+	// markdown. Both are ignored on a response with no panel.
+	TimelineMarkdown string `protobuf:"bytes,32,opt,name=timeline_markdown,json=timelineMarkdown,proto3" json:"timeline_markdown,omitempty"`
+	TimelineTitle    string `protobuf:"bytes,33,opt,name=timeline_title,json=timelineTitle,proto3" json:"timeline_title,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *UpdateAgentResponseRequest) Reset() {
@@ -1139,6 +1167,20 @@ func (x *UpdateAgentResponseRequest) GetMarkdown() string {
 	return ""
 }
 
+func (x *UpdateAgentResponseRequest) GetTimelineMarkdown() string {
+	if x != nil {
+		return x.TimelineMarkdown
+	}
+	return ""
+}
+
+func (x *UpdateAgentResponseRequest) GetTimelineTitle() string {
+	if x != nil {
+		return x.TimelineTitle
+	}
+	return ""
+}
+
 type FinishAgentResponseRequest struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`
 	Provider         string                 `protobuf:"bytes,1,opt,name=provider,proto3" json:"provider,omitempty"` // must match the bearer-authenticated principal
@@ -1148,6 +1190,11 @@ type FinishAgentResponseRequest struct {
 	Outcome          AgentResponseOutcome   `protobuf:"varint,5,opt,name=outcome,proto3,enum=feishubotd.v1.AgentResponseOutcome" json:"outcome,omitempty"`
 	Markdown         string                 `protobuf:"bytes,10,opt,name=markdown,proto3" json:"markdown,omitempty"` // complete final answer
 	Summary          string                 `protobuf:"bytes,11,opt,name=summary,proto3" json:"summary,omitempty"`   // compact fallback/notification text for the final card
+	// Final timeline parts, with the same empty-means-unchanged rule as Update.
+	// A finished panel keeps its last streaming header unless timeline_title
+	// carries the completed-state line the run should settle on.
+	TimelineMarkdown string `protobuf:"bytes,32,opt,name=timeline_markdown,json=timelineMarkdown,proto3" json:"timeline_markdown,omitempty"`
+	TimelineTitle    string `protobuf:"bytes,33,opt,name=timeline_title,json=timelineTitle,proto3" json:"timeline_title,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -1227,6 +1274,20 @@ func (x *FinishAgentResponseRequest) GetMarkdown() string {
 func (x *FinishAgentResponseRequest) GetSummary() string {
 	if x != nil {
 		return x.Summary
+	}
+	return ""
+}
+
+func (x *FinishAgentResponseRequest) GetTimelineMarkdown() string {
+	if x != nil {
+		return x.TimelineMarkdown
+	}
+	return ""
+}
+
+func (x *FinishAgentResponseRequest) GetTimelineTitle() string {
+	if x != nil {
+		return x.TimelineTitle
 	}
 	return ""
 }
@@ -1771,11 +1832,13 @@ const file_feishubotd_v1_command_proto_rawDesc = "" +
 	"\vresponse_id\x18\x01 \x01(\tR\n" +
 	"responseId\x12\x1b\n" +
 	"\taction_id\x18\x02 \x01(\tR\bactionId\x12!\n" +
-	"\fpayload_json\x18\x03 \x01(\tR\vpayloadJson\"\x8c\x01\n" +
+	"\fpayload_json\x18\x03 \x01(\tR\vpayloadJson\"\xe0\x01\n" +
 	"\x14AgentResponseContent\x12\x14\n" +
 	"\x05title\x18\x01 \x01(\tR\x05title\x12\x1a\n" +
 	"\bmarkdown\x18\x02 \x01(\tR\bmarkdown\x12<\n" +
-	"\aactions\x18\x03 \x03(\v2\".feishubotd.v1.AgentResponseActionR\aactionsJ\x04\b\x04\x10\x10\"\xaa\x01\n" +
+	"\aactions\x18\x03 \x03(\v2\".feishubotd.v1.AgentResponseActionR\aactions\x12+\n" +
+	"\x11timeline_markdown\x18\x10 \x01(\tR\x10timelineMarkdown\x12%\n" +
+	"\x0etimeline_title\x18\x11 \x01(\tR\rtimelineTitleJ\x04\b\x04\x10\x10\"\xaa\x01\n" +
 	"\x13AgentResponseAction\x12\x1b\n" +
 	"\taction_id\x18\x01 \x01(\tR\bactionId\x12\x14\n" +
 	"\x05label\x18\x02 \x01(\tR\x05label\x12!\n" +
@@ -1788,7 +1851,7 @@ const file_feishubotd_v1_command_proto_rawDesc = "" +
 	"\foperation_id\x18\x03 \x01(\tR\voperationId\x12=\n" +
 	"\acontent\x18\n" +
 	" \x01(\v2#.feishubotd.v1.AgentResponseContentR\acontentJ\x04\b\x04\x10\n" +
-	"J\x04\b\v\x10 \"\xd1\x01\n" +
+	"J\x04\b\v\x10 \"\xa5\x02\n" +
 	"\x1aUpdateAgentResponseRequest\x12\x1a\n" +
 	"\bprovider\x18\x01 \x01(\tR\bprovider\x12\x1f\n" +
 	"\vresponse_id\x18\x02 \x01(\tR\n" +
@@ -1796,8 +1859,10 @@ const file_feishubotd_v1_command_proto_rawDesc = "" +
 	"\foperation_id\x18\x03 \x01(\tR\voperationId\x12+\n" +
 	"\x11expected_revision\x18\x04 \x01(\x04R\x10expectedRevision\x12\x1a\n" +
 	"\bmarkdown\x18\n" +
-	" \x01(\tR\bmarkdownJ\x04\b\x05\x10\n" +
-	"J\x04\b\v\x10 \"\xaa\x02\n" +
+	" \x01(\tR\bmarkdown\x12+\n" +
+	"\x11timeline_markdown\x18  \x01(\tR\x10timelineMarkdown\x12%\n" +
+	"\x0etimeline_title\x18! \x01(\tR\rtimelineTitleJ\x04\b\x05\x10\n" +
+	"J\x04\b\v\x10 \"\xfe\x02\n" +
 	"\x1aFinishAgentResponseRequest\x12\x1a\n" +
 	"\bprovider\x18\x01 \x01(\tR\bprovider\x12\x1f\n" +
 	"\vresponse_id\x18\x02 \x01(\tR\n" +
@@ -1807,7 +1872,9 @@ const file_feishubotd_v1_command_proto_rawDesc = "" +
 	"\aoutcome\x18\x05 \x01(\x0e2#.feishubotd.v1.AgentResponseOutcomeR\aoutcome\x12\x1a\n" +
 	"\bmarkdown\x18\n" +
 	" \x01(\tR\bmarkdown\x12\x18\n" +
-	"\asummary\x18\v \x01(\tR\asummaryJ\x04\b\x06\x10\n" +
+	"\asummary\x18\v \x01(\tR\asummary\x12+\n" +
+	"\x11timeline_markdown\x18  \x01(\tR\x10timelineMarkdown\x12%\n" +
+	"\x0etimeline_title\x18! \x01(\tR\rtimelineTitleJ\x04\b\x06\x10\n" +
 	"J\x04\b\f\x10 \"\xaa\x01\n" +
 	"\x14AgentResponseReceipt\x12\x1f\n" +
 	"\vresponse_id\x18\x01 \x01(\tR\n" +

@@ -132,6 +132,15 @@ message AgentResponseContent {
   string markdown = 2;
   repeated AgentResponseAction actions = 3;
   reserved 4 to 15;
+
+  // The optional run timeline. A collapsible panel exists for the whole
+  // response iff Start carries a non-empty timeline_markdown or
+  // timeline_title; a provider that sends neither gets the unchanged card.
+  // timeline_markdown is the expanded body and, like markdown, is always the
+  // complete accumulated snapshot. timeline_title is the collapsed header and
+  // normally reads as the step currently running.
+  string timeline_markdown = 16;
+  string timeline_title = 17;
 }
 
 message AgentResponseAction {
@@ -167,6 +176,13 @@ message UpdateAgentResponseRequest {
   // Complete accumulated answer. The initial successful Start has revision 1.
   string markdown = 10;
   reserved 5 to 9, 11 to 31;
+
+  // Timeline parts for a response whose Start created a panel. Each field is
+  // independent and empty means "leave that part unchanged"; a non-empty value
+  // replaces it, so timeline_markdown is a cumulative snapshot exactly like
+  // markdown. Both are ignored on a response with no panel.
+  string timeline_markdown = 32;
+  string timeline_title = 33;
 }
 
 message FinishAgentResponseRequest {
@@ -178,6 +194,12 @@ message FinishAgentResponseRequest {
   string markdown = 10; // complete final answer
   string summary = 11; // compact fallback/notification text for the final card
   reserved 6 to 9, 12 to 31;
+
+  // Final timeline parts, with the same empty-means-unchanged rule as Update.
+  // A finished panel keeps its last streaming header unless timeline_title
+  // carries the completed-state line the run should settle on.
+  string timeline_markdown = 32;
+  string timeline_title = 33;
 }
 
 enum AgentResponseOutcome {
