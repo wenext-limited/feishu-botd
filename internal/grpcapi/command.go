@@ -131,6 +131,8 @@ func (c *commandServer) UpdateAgentResponse(ctx context.Context, in *pb.UpdateAg
 		OperationID:      in.GetOperationId(),
 		ExpectedRevision: in.GetExpectedRevision(),
 		Markdown:         in.GetMarkdown(),
+		TimelineMarkdown: in.GetTimelineMarkdown(),
+		TimelineTitle:    in.GetTimelineTitle(),
 	})
 	if apiErr != nil {
 		return nil, grpcError(apiErr, requestIDFromContext(ctx))
@@ -150,6 +152,8 @@ func (c *commandServer) FinishAgentResponse(ctx context.Context, in *pb.FinishAg
 		Outcome:          agentOutcomeFromProto(in.GetOutcome()),
 		Markdown:         in.GetMarkdown(),
 		Summary:          in.GetSummary(),
+		TimelineMarkdown: in.GetTimelineMarkdown(),
+		TimelineTitle:    in.GetTimelineTitle(),
 	})
 	if apiErr != nil {
 		return nil, grpcError(apiErr, requestIDFromContext(ctx))
@@ -210,7 +214,12 @@ func agentEventToProto(event service.AgentEvent) *pb.SubscribeAgentEventsRespons
 }
 
 func agentContentFromProto(in *pb.AgentResponseContent) service.AgentResponseContent {
-	out := service.AgentResponseContent{Title: in.GetTitle(), Markdown: in.GetMarkdown()}
+	out := service.AgentResponseContent{
+		Title:            in.GetTitle(),
+		Markdown:         in.GetMarkdown(),
+		TimelineMarkdown: in.GetTimelineMarkdown(),
+		TimelineTitle:    in.GetTimelineTitle(),
+	}
 	for _, action := range in.GetActions() {
 		out.Actions = append(out.Actions, service.AgentResponseAction{
 			ActionID: action.GetActionId(), PayloadJSON: action.GetPayloadJson(), Label: action.GetLabel(),

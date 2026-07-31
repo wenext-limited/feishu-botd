@@ -8,7 +8,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -20,9 +19,15 @@ import (
 const (
 	agentSubscriptionBuffer = 64
 	agentContentElementID   = "agent_answer"
-	maxAgentCardBytes       = 30 * 1024
-	minCardMutationInterval = 125 * time.Millisecond
-	messageUUIDDedupeWindow = time.Hour
+	// The timeline panel and the markdown element nested inside it. Feishu caps
+	// a developer-defined element_id at 20 characters.
+	agentTimelinePanelElementID = "agent_timeline"
+	agentTimelineElementID      = "agent_timeline_body"
+	agentPlaceholderMarkdown    = "Thinking…"
+	maxAgentCardBytes           = 30 * 1024
+	maxAgentTitleBytes          = 200
+	minCardMutationInterval     = 125 * time.Millisecond
+	messageUUIDDedupeWindow     = time.Hour
 )
 
 // AgentSubscribeOptions selects a full-fidelity agent event stream. Exact
@@ -90,6 +95,19 @@ type AgentResponseContent struct {
 	Title    string
 	Markdown string
 	Actions  []AgentResponseAction
+	// TimelineMarkdown and TimelineTitle are optional. Either one makes the
+	// response carry a collapsible timeline panel for its whole lifetime; a
+	// provider that sends neither gets exactly the card it got before.
+	TimelineMarkdown string
+	TimelineTitle    string
+}
+
+// agentTimelineParts are the timeline halves of an Update or Finish request.
+// An empty field means "leave that part of the panel unchanged", so a provider
+// can advance the collapsed header without resending the body, or the reverse.
+type agentTimelineParts struct {
+	Markdown string
+	Title    string
 }
 
 type AgentResponsePhase int
@@ -131,6 +149,8 @@ type UpdateAgentResponseInput struct {
 	OperationID      string
 	ExpectedRevision uint64
 	Markdown         string
+	TimelineMarkdown string
+	TimelineTitle    string
 }
 
 type FinishAgentResponseInput struct {
@@ -141,6 +161,8 @@ type FinishAgentResponseInput struct {
 	Outcome          AgentResponseOutcome
 	Markdown         string
 	Summary          string
+	TimelineMarkdown string
+	TimelineTitle    string
 }
 
 // AgentCardActionInput is the daemon-private callback handoff. MessageID is
@@ -280,6 +302,19 @@ type agentOperation struct {
 	contentDone       bool
 	contentAmbiguous  bool
 	contentClosed     bool
+	timeline          string
+	timelineUUID      string
+	timelineSeq       int32
+	timelineDone      bool
+	timelineAmbiguous bool
+	timelineClosed    bool
+	panelTitle        string
+	panelJSON         string
+	panelUUID         string
+	panelSeq          int32
+	panelDone         bool
+	panelAmbiguous    bool
+	panelClosed       bool
 	settingsJSON      string
 	settingsUUID      string
 	settingsSeq       int32
@@ -304,6 +339,7 @@ type agentResponse struct {
 	revision       uint64
 	phase          AgentResponsePhase
 	markdown       string
+	timeline       agentTimelineState
 	nextSequence   int32
 	lastMutationAt time.Time
 	pendingOp      string
@@ -499,7 +535,7 @@ func (s *Service) StartAgentResponse(ctx context.Context, in StartAgentResponseI
 		return AgentResponseReceipt{}, apiErr
 	}
 	in.Provider, in.DeliveryID, in.OperationID = provider, deliveryID, operationID
-	cardJSON, actionDigests, apiErr := buildAgentCard(in.Content)
+	card, apiErr := buildAgentCard(in.Content)
 	if apiErr != nil {
 		return AgentResponseReceipt{}, apiErr
 	}
@@ -507,7 +543,7 @@ func (s *Service) StartAgentResponse(ctx context.Context, in StartAgentResponseI
 		Provider   string
 		DeliveryID string
 		CardJSON   string
-	}{provider, deliveryID, cardJSON})
+	}{provider, deliveryID, card.json})
 
 	b := s.agentBroker
 	now := time.Now()
@@ -557,8 +593,8 @@ func (s *Service) StartAgentResponse(ctx context.Context, in StartAgentResponseI
 		delivery.fingerprint = fingerprint
 		delivery.responseID = responseID
 		delivery.messageUUID = operationUUID("msg", responseID, operationID, 50)
-		delivery.cardJSON = cardJSON
-		delivery.actionDigests = cloneStringMap(actionDigests)
+		delivery.cardJSON = card.json
+		delivery.actionDigests = cloneStringMap(card.actionDigests)
 	}
 	if delivery.sendRetryClosed {
 		return AgentResponseReceipt{}, closedAgentSendError(delivery.sendRetryCode)
@@ -642,6 +678,7 @@ func (s *Service) StartAgentResponse(ctx context.Context, in StartAgentResponseI
 		revision:       1,
 		phase:          AgentResponsePhaseStreaming,
 		markdown:       normalizedInitialMarkdown(in.Content.Markdown),
+		timeline:       card.timeline,
 		operations:     make(map[string]*agentOperation),
 		expiresAt:      time.Now().Add(b.ttl),
 	}
@@ -667,6 +704,10 @@ func (s *Service) UpdateAgentResponse(ctx context.Context, in UpdateAgentRespons
 	if in.Markdown == "" {
 		return AgentResponseReceipt{}, notify.BadRequest("missing_markdown", "markdown is required")
 	}
+	timeline, apiErr := normalizedTimelineParts(in.TimelineMarkdown, in.TimelineTitle)
+	if apiErr != nil {
+		return AgentResponseReceipt{}, apiErr
+	}
 	if len(in.Markdown) > maxAgentCardBytes {
 		return AgentResponseReceipt{}, notify.BadRequest("field_too_large", "one or more fields are too large")
 	}
@@ -681,8 +722,9 @@ func (s *Service) UpdateAgentResponse(ctx context.Context, in UpdateAgentRespons
 	fingerprint := hashJSON(struct {
 		Expected uint64
 		Markdown string
-	}{in.ExpectedRevision, in.Markdown})
-	return s.applyAgentUpdate(ctx, backend.dynamicCards, response, operationID, fingerprint, in.ExpectedRevision, in.Markdown)
+		Timeline agentTimelineParts
+	}{in.ExpectedRevision, in.Markdown, timeline})
+	return s.applyAgentUpdate(ctx, backend.dynamicCards, response, operationID, fingerprint, in.ExpectedRevision, in.Markdown, timeline)
 }
 
 func (s *Service) applyAgentUpdate(
@@ -692,9 +734,13 @@ func (s *Service) applyAgentUpdate(
 	operationID, fingerprint string,
 	expected uint64,
 	markdown string,
+	timeline agentTimelineParts,
 ) (AgentResponseReceipt, *notify.APIError) {
 	response.mu.Lock()
 	defer response.mu.Unlock()
+	if apiErr := response.checkCardBudget(markdown, timeline); apiErr != nil {
+		return AgentResponseReceipt{}, apiErr
+	}
 	op, apiErr := response.beginOperation(operationID, "update", fingerprint, expected)
 	if apiErr != nil {
 		return AgentResponseReceipt{}, apiErr
@@ -706,38 +752,187 @@ func (s *Service) applyAgentUpdate(
 		op.content = markdown
 		op.contentSeq = response.nextSequence + 1
 		op.contentUUID = operationUUID("content", response.responseID, operationID, 64)
+		response.planTimelineCalls(op, operationID, op.contentSeq, timeline)
 	}
 	callCtx, cancel := context.WithTimeout(ctx, s.cfg.SendTimeout)
 	defer cancel()
-	if err := response.waitForMutation(callCtx); err != nil {
-		return AgentResponseReceipt{}, notify.NewAPIError(502, "feishu_unavailable", "Feishu card update was cancelled", true)
-	}
-	if err := dynamicCards.UpdateContent(callCtx, feishu.CardContentUpdate{
-		CardID: response.cardID, ElementID: agentContentElementID, Content: op.content,
-		UUID: op.contentUUID, Sequence: op.contentSeq,
-	}); err != nil {
-		s.logAgentCardFailure("update", response.responseID, err)
-		if isCardAPIRejection(err) && !isRetryableCardFailure(err) {
-			if op.contentAmbiguous {
-				op.contentClosed = true
-				return AgentResponseReceipt{}, operationStateUnknownError()
-			}
-			response.abortOperation(operationID)
-		} else if isAmbiguousCardFailure(err) {
-			op.contentAmbiguous = true
+	if !op.contentDone {
+		if apiErr := s.applyAgentContent(callCtx, dynamicCards, response, op, operationID, "update"); apiErr != nil {
+			return AgentResponseReceipt{}, apiErr
 		}
-		return AgentResponseReceipt{}, agentCardCallError(err, "Feishu card update failed")
 	}
-	op.contentDone = true
+	if apiErr := s.applyAgentTimeline(callCtx, dynamicCards, response, op, operationID); apiErr != nil {
+		return AgentResponseReceipt{}, apiErr
+	}
 	op.complete = true
-	response.nextSequence = op.contentSeq
-	response.markdown = markdown
 	response.revision++
 	op.revision = response.revision
 	op.phase = response.phase
 	response.pendingOp = ""
 	op.compact()
 	return operationReceipt(response, op, false), nil
+}
+
+// applyAgentContent writes the accumulated answer snapshot to the card's
+// markdown element and commits it to the response before returning, so a retry
+// of a multi-call operation never repeats a call Feishu already accepted.
+func (s *Service) applyAgentContent(
+	ctx context.Context,
+	dynamicCards feishu.DynamicCards,
+	response *agentResponse,
+	op *agentOperation,
+	operationID, logOperation string,
+) *notify.APIError {
+	if err := response.waitForMutation(ctx); err != nil {
+		return notify.NewAPIError(502, "feishu_unavailable", "Feishu card update was cancelled", true)
+	}
+	if err := dynamicCards.UpdateContent(ctx, feishu.CardContentUpdate{
+		CardID: response.cardID, ElementID: agentContentElementID, Content: op.content,
+		UUID: op.contentUUID, Sequence: op.contentSeq,
+	}); err != nil {
+		s.logAgentCardFailure(logOperation, response.responseID, err)
+		if isCardAPIRejection(err) && !isRetryableCardFailure(err) {
+			if op.contentAmbiguous {
+				op.contentClosed = true
+				return operationStateUnknownError()
+			}
+			response.abortOperation(operationID)
+		} else if isAmbiguousCardFailure(err) {
+			op.contentAmbiguous = true
+		}
+		return agentCardCallError(err, "Feishu card update failed")
+	}
+	op.contentDone = true
+	response.nextSequence = op.contentSeq
+	response.markdown = op.content
+	return nil
+}
+
+// applyAgentTimeline runs the timeline half of an operation: the panel body
+// first, then its collapsed header. That order keeps a partially applied
+// operation readable — a header may lag the steps it summarizes, but a step
+// never appears in the header before it exists in the body.
+func (s *Service) applyAgentTimeline(
+	ctx context.Context,
+	dynamicCards feishu.DynamicCards,
+	response *agentResponse,
+	op *agentOperation,
+	operationID string,
+) *notify.APIError {
+	if op.timelineSeq != 0 && !op.timelineDone {
+		if err := response.waitForMutation(ctx); err != nil {
+			return notify.NewAPIError(502, "feishu_unavailable", "Feishu card timeline update was cancelled", true)
+		}
+		if err := dynamicCards.UpdateContent(ctx, feishu.CardContentUpdate{
+			CardID: response.cardID, ElementID: agentTimelineElementID, Content: op.timeline,
+			UUID: op.timelineUUID, Sequence: op.timelineSeq,
+		}); err != nil {
+			s.logAgentCardFailure("timeline content", response.responseID, err)
+			if isCardAPIRejection(err) && !isRetryableCardFailure(err) {
+				if op.timelineAmbiguous {
+					op.timelineClosed = true
+					return operationStateUnknownError()
+				}
+				response.abortOperation(operationID)
+			} else if isAmbiguousCardFailure(err) {
+				op.timelineAmbiguous = true
+			}
+			return agentCardCallError(err, "Feishu card timeline update failed")
+		}
+		op.timelineDone = true
+		response.nextSequence = op.timelineSeq
+		response.timeline.markdown = op.timeline
+	}
+	if op.panelSeq != 0 && !op.panelDone {
+		if err := response.waitForMutation(ctx); err != nil {
+			return notify.NewAPIError(502, "feishu_unavailable", "Feishu card timeline update was cancelled", true)
+		}
+		if err := dynamicCards.BatchUpdate(ctx, feishu.CardBatchUpdate{
+			CardID: response.cardID, ActionsJSON: op.panelJSON,
+			UUID: op.panelUUID, Sequence: op.panelSeq,
+		}); err != nil {
+			s.logAgentCardFailure("timeline header", response.responseID, err)
+			if isCardAPIRejection(err) && !isRetryableCardFailure(err) {
+				if op.panelAmbiguous {
+					op.panelClosed = true
+					return operationStateUnknownError()
+				}
+				response.abortOperation(operationID)
+			} else if isAmbiguousCardFailure(err) {
+				op.panelAmbiguous = true
+			}
+			return agentCardCallError(err, "Feishu card timeline update failed")
+		}
+		op.panelDone = true
+		response.nextSequence = op.panelSeq
+		response.timeline.title = op.panelTitle
+	}
+	return nil
+}
+
+// planTimelineCalls reserves the sequence numbers and idempotency UUIDs for an
+// operation's timeline calls exactly once, on its first attempt. Freezing the
+// plan is what makes a retry replay the same Feishu operations rather than
+// recomputing them against state the earlier attempt already advanced.
+//
+// after is the last sequence the caller has reserved so far, or 0 when it is
+// making no earlier call. The last reserved sequence is returned so a caller
+// with a trailing call of its own can continue the card's one sequence domain.
+func (r *agentResponse) planTimelineCalls(
+	op *agentOperation, operationID string, after int32, timeline agentTimelineParts,
+) int32 {
+	next := after
+	if next == 0 {
+		next = r.nextSequence
+	}
+	if !r.timeline.present {
+		// A response whose Start carried no timeline has no panel to address.
+		// Timeline fields on it are ignored rather than rejected, so a provider
+		// can send them unconditionally across both card shapes.
+		return next
+	}
+	if timeline.Markdown != "" && timeline.Markdown != r.timeline.markdown {
+		next++
+		op.timeline = timeline.Markdown
+		op.timelineSeq = next
+		op.timelineUUID = operationUUID("timeline", r.responseID, operationID, 64)
+	}
+	if timeline.Title != "" && timeline.Title != r.timeline.title {
+		next++
+		op.panelTitle = timeline.Title
+		op.panelSeq = next
+		op.panelUUID = operationUUID("panel", r.responseID, operationID, 64)
+		op.panelJSON = agentTimelineHeaderPatch(timeline.Title)
+	}
+	return next
+}
+
+// checkCardBudget holds the answer and the timeline to one shared ceiling,
+// because Feishu's size limit applies to the rendered card rather than to any
+// single element. Parts the request leaves empty keep their current value.
+func (r *agentResponse) checkCardBudget(markdown string, timeline agentTimelineParts) *notify.APIError {
+	if !r.timeline.present {
+		return nil
+	}
+	effective := r.timeline.markdown
+	if timeline.Markdown != "" {
+		effective = timeline.Markdown
+	}
+	if len(markdown)+len(effective) > maxAgentCardBytes {
+		return notify.BadRequest("field_too_large", "one or more fields are too large")
+	}
+	return nil
+}
+
+func normalizedTimelineParts(markdown, title string) (agentTimelineParts, *notify.APIError) {
+	parts := agentTimelineParts{
+		Markdown: strings.TrimSpace(markdown),
+		Title:    strings.TrimSpace(title),
+	}
+	if len(parts.Markdown) > maxAgentCardBytes || len(parts.Title) > maxAgentTitleBytes {
+		return agentTimelineParts{}, notify.BadRequest("field_too_large", "one or more fields are too large")
+	}
+	return parts, nil
 }
 
 func (s *Service) FinishAgentResponse(ctx context.Context, in FinishAgentResponseInput) (AgentResponseReceipt, *notify.APIError) {
@@ -757,8 +952,12 @@ func (s *Service) FinishAgentResponse(ctx context.Context, in FinishAgentRespons
 		return AgentResponseReceipt{}, notify.BadRequest("missing_markdown", "markdown is required")
 	}
 	in.Summary = strings.TrimSpace(in.Summary)
-	if len(in.Markdown) > maxAgentCardBytes || len(in.Summary) > 200 {
+	if len(in.Markdown) > maxAgentCardBytes || len(in.Summary) > maxAgentTitleBytes {
 		return AgentResponseReceipt{}, notify.BadRequest("field_too_large", "one or more fields are too large")
+	}
+	timeline, apiErr := normalizedTimelineParts(in.TimelineMarkdown, in.TimelineTitle)
+	if apiErr != nil {
+		return AgentResponseReceipt{}, apiErr
 	}
 	response := s.agentBroker.lookupResponse(provider, responseID)
 	if response == nil || !s.appAllowed(provider, response.appAlias) {
@@ -773,8 +972,9 @@ func (s *Service) FinishAgentResponse(ctx context.Context, in FinishAgentRespons
 		Phase    AgentResponsePhase
 		Markdown string
 		Summary  string
-	}{in.ExpectedRevision, phase, in.Markdown, in.Summary})
-	return s.applyAgentFinish(ctx, backend.dynamicCards, response, operationID, fingerprint, in.ExpectedRevision, phase, in.Markdown, in.Summary)
+		Timeline agentTimelineParts
+	}{in.ExpectedRevision, phase, in.Markdown, in.Summary, timeline})
+	return s.applyAgentFinish(ctx, backend.dynamicCards, response, operationID, fingerprint, in.ExpectedRevision, phase, in.Markdown, in.Summary, timeline)
 }
 
 func (s *Service) applyAgentFinish(
@@ -785,9 +985,13 @@ func (s *Service) applyAgentFinish(
 	expected uint64,
 	phase AgentResponsePhase,
 	markdown, summary string,
+	timeline agentTimelineParts,
 ) (AgentResponseReceipt, *notify.APIError) {
 	response.mu.Lock()
 	defer response.mu.Unlock()
+	if apiErr := response.checkCardBudget(markdown, timeline); apiErr != nil {
+		return AgentResponseReceipt{}, apiErr
+	}
 	op, apiErr := response.beginOperation(operationID, "finish", fingerprint, expected)
 	if apiErr != nil {
 		return AgentResponseReceipt{}, apiErr
@@ -801,11 +1005,9 @@ func (s *Service) applyAgentFinish(
 			op.contentSeq = response.nextSequence + 1
 			op.contentUUID = operationUUID("content", response.responseID, operationID, 64)
 		}
-		next := response.nextSequence + 1
-		if op.contentSeq != 0 {
-			next = op.contentSeq + 1
-		}
-		op.settingsSeq = next
+		// Streaming mode is disabled last, after every content call this
+		// operation plans, so nothing is written to a card already closed.
+		op.settingsSeq = response.planTimelineCalls(op, operationID, op.contentSeq, timeline) + 1
 		op.settingsUUID = operationUUID("finish", response.responseID, operationID, 64)
 		op.settingsJSON = agentFinishSettings(summary)
 		op.phase = phase
@@ -813,29 +1015,12 @@ func (s *Service) applyAgentFinish(
 	callCtx, cancel := context.WithTimeout(ctx, s.cfg.SendTimeout)
 	defer cancel()
 	if op.contentSeq != 0 && !op.contentDone {
-		if err := response.waitForMutation(callCtx); err != nil {
-			return AgentResponseReceipt{}, notify.NewAPIError(502, "feishu_unavailable", "Feishu card update was cancelled", true)
+		if apiErr := s.applyAgentContent(callCtx, dynamicCards, response, op, operationID, "finish content"); apiErr != nil {
+			return AgentResponseReceipt{}, apiErr
 		}
-		if err := dynamicCards.UpdateContent(callCtx, feishu.CardContentUpdate{
-			CardID: response.cardID, ElementID: agentContentElementID, Content: op.content,
-			UUID: op.contentUUID, Sequence: op.contentSeq,
-		}); err != nil {
-			s.logAgentCardFailure("finish content", response.responseID, err)
-			if isCardAPIRejection(err) && !isRetryableCardFailure(err) {
-				if op.contentAmbiguous {
-					op.contentClosed = true
-					return AgentResponseReceipt{}, operationStateUnknownError()
-				}
-				response.abortOperation(operationID)
-			} else if isAmbiguousCardFailure(err) {
-				op.contentAmbiguous = true
-			}
-			return AgentResponseReceipt{}, agentCardCallError(err, "Feishu card update failed")
-		}
-		op.contentDone = true
-		response.nextSequence = op.contentSeq
-		response.markdown = op.content
-		op.compactContent()
+	}
+	if apiErr := s.applyAgentTimeline(callCtx, dynamicCards, response, op, operationID); apiErr != nil {
+		return AgentResponseReceipt{}, apiErr
 	}
 	if !op.settingsDone {
 		if err := response.waitForMutation(callCtx); err != nil {
@@ -934,6 +1119,19 @@ func (op *agentOperation) compactContent() {
 
 func (op *agentOperation) compact() {
 	op.compactContent()
+	op.timeline = ""
+	op.timelineUUID = ""
+	op.timelineSeq = 0
+	op.timelineDone = false
+	op.timelineAmbiguous = false
+	op.timelineClosed = false
+	op.panelTitle = ""
+	op.panelJSON = ""
+	op.panelUUID = ""
+	op.panelSeq = 0
+	op.panelDone = false
+	op.panelAmbiguous = false
+	op.panelClosed = false
 	op.settingsJSON = ""
 	op.settingsUUID = ""
 	op.settingsSeq = 0
@@ -943,7 +1141,7 @@ func (op *agentOperation) compact() {
 }
 
 func (op *agentOperation) outcomeUnknown() bool {
-	return op.contentClosed || op.settingsClosed
+	return op.contentClosed || op.timelineClosed || op.panelClosed || op.settingsClosed
 }
 
 func (d *agentDelivery) abortStartAttempt() {
@@ -1197,115 +1395,6 @@ func (b *agentBroker) pruneLocked(now time.Time) {
 	}
 }
 
-func buildAgentCard(content AgentResponseContent) (string, map[string]string, *notify.APIError) {
-	content.Title = strings.TrimSpace(content.Title)
-	content.Markdown = strings.TrimSpace(content.Markdown)
-	if len(content.Title) > 200 || len(content.Markdown) > maxAgentCardBytes || len(content.Actions) > 8 {
-		return "", nil, notify.BadRequest("field_too_large", "one or more fields are too large")
-	}
-	if content.Markdown == "" {
-		content.Markdown = "Thinking…"
-	}
-
-	type text struct {
-		Tag     string `json:"tag"`
-		Content string `json:"content"`
-	}
-	type callbackBehavior struct {
-		Type  string         `json:"type"`
-		Value map[string]any `json:"value"`
-	}
-	type button struct {
-		Tag       string             `json:"tag"`
-		ElementID string             `json:"element_id"`
-		Text      text               `json:"text"`
-		Type      string             `json:"type,omitempty"`
-		Behaviors []callbackBehavior `json:"behaviors"`
-	}
-	type element struct {
-		Tag       string             `json:"tag"`
-		ElementID string             `json:"element_id,omitempty"`
-		Content   string             `json:"content,omitempty"`
-		Text      *text              `json:"text,omitempty"`
-		Type      string             `json:"type,omitempty"`
-		Behaviors []callbackBehavior `json:"behaviors,omitempty"`
-	}
-	elements := []element{{Tag: "markdown", ElementID: agentContentElementID, Content: content.Markdown}}
-	actionDigests := make(map[string]string, len(content.Actions))
-	if len(content.Actions) > 0 {
-		seen := make(map[string]struct{}, len(content.Actions))
-		for index, action := range content.Actions {
-			action.ActionID = strings.TrimSpace(action.ActionID)
-			action.Label = strings.TrimSpace(action.Label)
-			if action.ActionID == "" || action.Label == "" {
-				return "", nil, notify.BadRequest("invalid_action", "action_id and label are required")
-			}
-			if len(action.ActionID) > 64 || len(action.Label) > 100 || len(action.PayloadJSON) > 8*1024 {
-				return "", nil, notify.BadRequest("field_too_large", "one or more fields are too large")
-			}
-			if _, duplicate := seen[action.ActionID]; duplicate {
-				return "", nil, notify.BadRequest("duplicate_action", "action ids must be unique")
-			}
-			switch action.Style {
-			case AgentResponseActionStyleUnspecified, AgentResponseActionStyleDefault,
-				AgentResponseActionStylePrimary, AgentResponseActionStyleDanger:
-			default:
-				return "", nil, notify.BadRequest("invalid_action_style", "action style is not supported")
-			}
-			seen[action.ActionID] = struct{}{}
-			payloadJSON := strings.TrimSpace(action.PayloadJSON)
-			if payloadJSON == "" {
-				payloadJSON = "{}"
-			}
-			var apiErr *notify.APIError
-			payloadJSON, apiErr = normalizeJSONObjectRaw(payloadJSON, "invalid_action_payload")
-			if apiErr != nil {
-				return "", nil, apiErr
-			}
-			actionDigests[action.ActionID] = actionPayloadDigest(payloadJSON)
-			// The pinned Feishu SDK decodes callback values through interface{},
-			// which would round large JSON integers to float64. Carry the provider
-			// payload as a JSON string across Feishu and reconstruct it losslessly
-			// when normalizing the callback for the provider.
-			value := map[string]any{"action_id": action.ActionID, "payload_json": payloadJSON}
-			button := button{
-				Tag:       "button",
-				ElementID: fmt.Sprintf("agent_action_%d", index+1),
-				Text:      text{Tag: "plain_text", Content: action.Label},
-				Type:      cardButtonStyle(action.Style),
-				Behaviors: []callbackBehavior{{Type: "callback", Value: value}},
-			}
-			elements = append(elements, element{
-				Tag: button.Tag, ElementID: button.ElementID, Text: &button.Text,
-				Type: button.Type, Behaviors: button.Behaviors,
-			})
-		}
-	}
-	cardConfig := map[string]any{
-		"streaming_mode": true,
-		"update_multi":   true,
-	}
-	if content.Title != "" {
-		cardConfig["summary"] = map[string]any{"content": content.Title}
-	}
-	card := map[string]any{
-		"schema": "2.0",
-		"config": cardConfig,
-		"body":   map[string]any{"elements": elements},
-	}
-	if content.Title != "" {
-		card["header"] = map[string]any{"title": map[string]any{"tag": "plain_text", "content": content.Title}}
-	}
-	data, err := json.Marshal(card)
-	if err != nil {
-		return "", nil, notify.NewAPIError(500, "internal", "could not encode agent card", false)
-	}
-	if len(data) > maxAgentCardBytes {
-		return "", nil, notify.BadRequest("field_too_large", "agent card exceeds the daemon size limit")
-	}
-	return string(data), actionDigests, nil
-}
-
 func validateAgentIdentity(provider, target, operationID string) (string, string, string, *notify.APIError) {
 	provider = strings.TrimSpace(provider)
 	target = strings.TrimSpace(target)
@@ -1341,26 +1430,6 @@ func normalizeJSONObjectRaw(raw, code string) (string, *notify.APIError) {
 func actionPayloadDigest(raw string) string {
 	sum := sha256.Sum256([]byte(raw))
 	return hex.EncodeToString(sum[:])
-}
-
-func cardButtonStyle(style AgentResponseActionStyle) string {
-	switch style {
-	case AgentResponseActionStylePrimary:
-		return "primary"
-	case AgentResponseActionStyleDanger:
-		return "danger"
-	default:
-		return "default"
-	}
-}
-
-func agentFinishSettings(summary string) string {
-	config := map[string]any{"streaming_mode": false}
-	if summary != "" {
-		config["summary"] = map[string]any{"content": summary}
-	}
-	data, _ := json.Marshal(map[string]any{"config": config})
-	return string(data)
 }
 
 func phaseForOutcome(outcome AgentResponseOutcome) AgentResponsePhase {
@@ -1469,7 +1538,7 @@ func (s *agentSubscriber) allowsApp(appAlias string) bool {
 func normalizedInitialMarkdown(markdown string) string {
 	markdown = strings.TrimSpace(markdown)
 	if markdown == "" {
-		return "Thinking…"
+		return agentPlaceholderMarkdown
 	}
 	return markdown
 }
