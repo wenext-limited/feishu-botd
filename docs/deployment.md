@@ -137,11 +137,23 @@ curl http://192.0.2.10:7345/v1/message \
 
 ## Sharing a Unix socket with another container
 
-When a caller and `feishu-botd` run in the same Compose project, mount one named
-volume at `/run/feishu-botd` in both services. Configure the daemon with
-`FEISHU_BOTD_GRPC_SOCKET=/run/feishu-botd/feishu-botd.grpc.sock` and give the
-caller permission to connect to the socket's group (`0o660`). Keep the caller's
-startup independent unless bot delivery is a hard availability requirement.
+The repo's own `docker-compose.yml` shares both daemon sockets with the host
+by default: it bind-mounts `FEISHU_BOTD_RUN_DIR` (default `./run`) at
+`/run/feishu-botd`, with a one-shot init service fixing the directory to
+`10001:10001` mode `750` before the daemon starts. An agent provider on the
+same host — in another Compose project or as a bare process — reaches
+`<run dir>/feishu-botd.grpc.sock` directly; it needs membership of gid
+`10001` to pass the socket's `0o660` group bits. The compose file also
+mounts the whole `./secrets` directory read-only at `/run/secrets`, so
+adding a per-provider token (see `agent_providers` in [agent.md](./agent.md))
+is one new file plus a config entry — no compose edit.
+
+When a caller and `feishu-botd` run in the same Compose project instead,
+mount one named volume at `/run/feishu-botd` in both services. Configure the
+daemon with `FEISHU_BOTD_GRPC_SOCKET=/run/feishu-botd/feishu-botd.grpc.sock`
+and give the caller permission to connect to the socket's group (`0o660`).
+Keep the caller's startup independent unless bot delivery is a hard
+availability requirement.
 
 [`deploy/docker-compose.consumer.example.yml`](../deploy/docker-compose.consumer.example.yml)
 is a generic overlay template. Rename its `consumer` service key to the caller's

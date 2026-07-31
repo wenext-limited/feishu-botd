@@ -10,7 +10,37 @@ services:
       FEISHU_BOTD_CONFIG: /etc/feishu-botd/config.json
     volumes:
       - ./config/feishu-botd.json:/etc/feishu-botd/config.json:ro
-      - ./secrets/feishu-botd-token:/run/secrets/feishu-botd-token:ro
+      # The whole secrets folder, so adding a provider token (see
+      # `agent_providers` in docs/agent.md) is just a new file here —
+      # no compose edit. Config paths reference /run/secrets/<file>.
+      - ./secrets:/run/secrets:ro
       - ./scripts:/etc/feishu-botd/scripts:ro
+      # Host-shared socket directory: agent providers on this host (or an
+      # ssh-forwarded socket from another host) connect to the gRPC socket
+      # configured at `listeners.grpc_socket`. Sockets are chmod 0o660 by
+      # the daemon (uid/gid 10001); grant a provider process membership of
+      # gid 10001 to connect. Override the host path with
+      # FEISHU_BOTD_RUN_DIR in `.env`.
+      - ${FEISHU_BOTD_RUN_DIR:-./run}:/run/feishu-botd
     ports:
       - "${FEISHU_BOTD_HOST_IP:-0.0.0.0}:7345:7345"
+    depends_on:
+      feishu-botd-run-init:
+        condition: service_completed_successfully
+
+  # One-shot: a bind-mounted host directory is created root-owned by the
+  # engine, but the daemon runs as uid 10001 and must create its sockets in
+  # it. Reuses the daemon image (debian-slim, has a shell) as root to fix
+  # ownership, then exits. Mode 750: group 10001 can traverse to the
+  # sockets, others cannot.
+  feishu-botd-run-init:
+    image: feishu-botd:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    user: "0:0"
+    entrypoint:
+      ["/bin/sh", "-c", "chown 10001:10001 /run/feishu-botd && chmod 750 /run/feishu-botd"]
+    volumes:
+      - ${FEISHU_BOTD_RUN_DIR:-./run}:/run/feishu-botd
+    restart: "no"
