@@ -182,6 +182,87 @@ func TestAgentUnmatchedMessageDeliversCompletePrompt(t *testing.T) {
 	}
 }
 
+func TestAgentAcceptsAllowedUnconfiguredGroupWithoutReachingLegacyCommands(t *testing.T) {
+	backend := newFakeAgentBackend()
+	svc := newAgentTestService(backend)
+	agent := mustSubscribeAgent(t, svc, AgentSubscribeOptions{
+		Provider:                 "chat-agent",
+		IncludeUnmatchedMessages: true,
+	})
+	legacy, apiErr := svc.SubscribeInternalCommandsForApps(context.Background(), CommandSubscribeOptions{
+		Provider: "script",
+		Commands: []string{"ask"},
+	})
+	if apiErr != nil {
+		t.Fatalf("subscribe legacy command: %v", apiErr)
+	}
+	defer legacy.Close()
+
+	in := CommandInput{
+		DeliveryID:        "evt_unconfigured_group",
+		Command:           "ask",
+		Prompt:            "ask what changed?",
+		ConversationID:    "conv_unconfigured_group",
+		ChatAlias:         "unconfigured-group-opaque",
+		ChatID:            "oc_private_unconfigured",
+		UnconfiguredGroup: true,
+		SenderID:          "ou_sender",
+		Metadata:          map[string]string{"chat_type": "group"},
+	}
+	if _, apiErr := svc.DispatchCommand(context.Background(), in); apiErr == nil || apiErr.Code != "unknown_channel" {
+		t.Fatalf("disabled unconfigured group policy error = %v", apiErr)
+	}
+
+	svc.cfg.Commands.AllowUnconfiguredGroupChats = true
+	if _, apiErr := svc.DispatchCommand(context.Background(), in); apiErr != nil {
+		t.Fatalf("dispatch allowed unconfigured group: %v", apiErr)
+	}
+	event := receiveAgentEvent(t, agent)
+	if event.ChatAlias != in.ChatAlias || event.Message == nil || event.Message.Text != in.Prompt {
+		t.Fatalf("unconfigured group event = %#v", event)
+	}
+	select {
+	case command := <-legacy.C:
+		t.Fatalf("unconfigured group reached legacy command subscriber: %#v", command)
+	case <-time.After(40 * time.Millisecond):
+	}
+
+	startAgentResponse(t, svc, "chat-agent", in.DeliveryID, AgentResponseContent{Markdown: "Answer"})
+	if len(backend.sentCards) != 1 || backend.sentCards[0].ChatID != in.ChatID || backend.sentCards[0].ReplyToMessageID != "" {
+		t.Fatalf("unconfigured group card route = %#v", backend.sentCards)
+	}
+}
+
+func TestAgentRejectsMalformedUnconfiguredGroupRoutes(t *testing.T) {
+	svc := newAgentTestService(newFakeAgentBackend())
+	svc.cfg.Commands.AllowUnconfiguredGroupChats = true
+	tests := []struct {
+		name     string
+		chatID   string
+		chatType string
+	}{
+		{name: "missing private route", chatType: "group"},
+		{name: "direct chat type", chatID: "oc_private", chatType: "p2p"},
+		{name: "unknown chat type", chatID: "oc_private", chatType: "other"},
+	}
+	for index, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, apiErr := svc.DispatchCommand(context.Background(), CommandInput{
+				DeliveryID:        fmt.Sprintf("evt_malformed_%d", index),
+				Command:           "ask",
+				Prompt:            "ask",
+				ChatAlias:         "unconfigured-group-opaque",
+				ChatID:            testCase.chatID,
+				UnconfiguredGroup: true,
+				Metadata:          map[string]string{"chat_type": testCase.chatType},
+			})
+			if apiErr == nil || apiErr.Code != "unknown_channel" {
+				t.Fatalf("malformed route error = %v", apiErr)
+			}
+		})
+	}
+}
+
 func TestAgentExactCommandWinsOverFallback(t *testing.T) {
 	svc := newAgentTestService(newFakeAgentBackend())
 	exact := mustSubscribeAgent(t, svc, AgentSubscribeOptions{Provider: "exact", Commands: []string{"ask"}})

@@ -77,6 +77,7 @@ and per-caller defaults. This example keeps the existing top-level app as
       "app_secret": "REPLACE_WITH_SUPPORT_APP_SECRET",
       "commands": {
         "enabled": true,
+        "allow_unconfigured_group_chats": false,
         "bot_open_id": "REPLACE_WITH_SUPPORT_BOT_OPEN_ID",
         "bot_names": ["Support Bot"]
       },
@@ -104,6 +105,7 @@ and per-caller defaults. This example keeps the existing top-level app as
   },
   "commands": {
     "enabled": true,
+    "allow_unconfigured_group_chats": false,
     "bot_open_id": "REPLACE_WITH_DEFAULT_BOT_OPEN_ID",
     "bot_names": ["Default Bot"]
   },
@@ -132,6 +134,17 @@ within or across apps, fail startup. The global `default_channel` and
 sending a bare channel alias; botd resolves it internally to the owning app and
 private chat id.
 
+By default, those channel maps are also group-ingress allowlists. Setting
+`commands.allow_unconfigured_group_chats` to `true` for one app additionally
+accepts mentioned messages from any group or topic group that Feishu delivers
+to that app, even when its chat id has no configured alias. Configured aliases
+still take precedence. Unconfigured groups are agent-only: they never reach
+legacy command subscribers or local script executors, and they do not become
+targets for `SendNotification` or `SendMessage`. Providers receive a stable
+opaque `chat_alias`; the raw chat id remains daemon-private for replies and
+follow-ups. Keep the default `false` unless everyone who can mention the bot in
+an invited group may use the connected agent.
+
 At startup, botd checks every app's credentials, starts one long-connection
 receiver per app, and waits for every receiver's first connected state before
 opening HTTP or gRPC listeners. Readiness preserves the aggregate checks and
@@ -155,6 +168,7 @@ FEISHU_BOTD_BIND=127.0.0.1:7345
 FEISHU_BOTD_GRPC_SOCKET=/run/feishu-botd/feishu-botd.grpc.sock
 FEISHU_BOTD_AUTH_TOKEN_FILE=/run/secrets/feishu-botd-token
 FEISHU_BOTD_COMMANDS_ENABLED=false
+FEISHU_BOTD_ALLOW_UNCONFIGURED_GROUP_CHATS=false
 FEISHU_BOTD_BOT_OPEN_ID=REPLACE_WITH_BOT_OPEN_ID
 FEISHU_BOTD_BOT_NAMES=Example Bot
 FEISHU_BOTD_SCRIPTS_ENABLED=false

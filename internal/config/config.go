@@ -82,12 +82,13 @@ type AgentProviderConfig struct {
 }
 
 type CommandConfig struct {
-	Enabled    bool             `json:"enabled"`
-	BotOpenID  string           `json:"bot_open_id"`
-	BotUserID  string           `json:"bot_user_id"`
-	BotUnionID string           `json:"bot_union_id"`
-	BotNames   []string         `json:"bot_names"`
-	Scripts    ScriptExecConfig `json:"scripts"`
+	Enabled                     bool             `json:"enabled"`
+	AllowUnconfiguredGroupChats bool             `json:"allow_unconfigured_group_chats"`
+	BotOpenID                   string           `json:"bot_open_id"`
+	BotUserID                   string           `json:"bot_user_id"`
+	BotUnionID                  string           `json:"bot_union_id"`
+	BotNames                    []string         `json:"bot_names"`
+	Scripts                     ScriptExecConfig `json:"scripts"`
 }
 
 // ScriptExecConfig enables running a local script for a registered inbound
@@ -166,6 +167,21 @@ func (c Config) AppAliases() []string {
 	}
 	sort.Strings(aliases)
 	return aliases
+}
+
+// AllowsUnconfiguredGroupChats reports whether an app accepts mentioned group
+// messages whose raw chat id has no static channel alias. This policy affects
+// inbound agent routing only; configured outbound notification routes remain
+// unchanged.
+func (c Config) AllowsUnconfiguredGroupChats(appAlias string) bool {
+	appAlias = strings.TrimSpace(appAlias)
+	if appAlias == "" {
+		appAlias = DefaultAppAlias
+	}
+	if app, ok := c.Apps[appAlias]; ok {
+		return app.Commands.AllowUnconfiguredGroupChats
+	}
+	return appAlias == DefaultAppAlias && c.Commands.AllowUnconfiguredGroupChats
 }
 
 // ProviderAllowsApp reports whether a configured provider may observe or mutate
@@ -463,6 +479,10 @@ func loadFileConfig(path string) (fileConfig, error) {
 func commandConfigFromEnv(base CommandConfig) CommandConfig {
 	cfg := normalizeCommandConfig(base)
 	cfg.Enabled = boolFromEnvDefault("FEISHU_BOTD_COMMANDS_ENABLED", cfg.Enabled)
+	cfg.AllowUnconfiguredGroupChats = boolFromEnvDefault(
+		"FEISHU_BOTD_ALLOW_UNCONFIGURED_GROUP_CHATS",
+		cfg.AllowUnconfiguredGroupChats,
+	)
 	cfg.BotOpenID = firstNonEmpty(os.Getenv("FEISHU_BOTD_BOT_OPEN_ID"), cfg.BotOpenID)
 	cfg.BotUserID = firstNonEmpty(os.Getenv("FEISHU_BOTD_BOT_USER_ID"), cfg.BotUserID)
 	cfg.BotUnionID = firstNonEmpty(os.Getenv("FEISHU_BOTD_BOT_UNION_ID"), cfg.BotUnionID)
@@ -485,22 +505,24 @@ func commandConfigFromEnv(base CommandConfig) CommandConfig {
 
 func normalizeCommandConfig(in CommandConfig) CommandConfig {
 	return CommandConfig{
-		Enabled:    in.Enabled,
-		BotOpenID:  strings.TrimSpace(in.BotOpenID),
-		BotUserID:  strings.TrimSpace(in.BotUserID),
-		BotUnionID: strings.TrimSpace(in.BotUnionID),
-		BotNames:   normalizeList(in.BotNames),
-		Scripts:    normalizeScriptExecConfig(in.Scripts),
+		Enabled:                     in.Enabled,
+		AllowUnconfiguredGroupChats: in.AllowUnconfiguredGroupChats,
+		BotOpenID:                   strings.TrimSpace(in.BotOpenID),
+		BotUserID:                   strings.TrimSpace(in.BotUserID),
+		BotUnionID:                  strings.TrimSpace(in.BotUnionID),
+		BotNames:                    normalizeList(in.BotNames),
+		Scripts:                     normalizeScriptExecConfig(in.Scripts),
 	}
 }
 
 func cloneCommandConfig(in CommandConfig) CommandConfig {
 	return CommandConfig{
-		Enabled:    in.Enabled,
-		BotOpenID:  in.BotOpenID,
-		BotUserID:  in.BotUserID,
-		BotUnionID: in.BotUnionID,
-		BotNames:   cloneStrings(in.BotNames),
+		Enabled:                     in.Enabled,
+		AllowUnconfiguredGroupChats: in.AllowUnconfiguredGroupChats,
+		BotOpenID:                   in.BotOpenID,
+		BotUserID:                   in.BotUserID,
+		BotUnionID:                  in.BotUnionID,
+		BotNames:                    cloneStrings(in.BotNames),
 		Scripts: ScriptExecConfig{
 			Enabled:        in.Scripts.Enabled,
 			Command:        in.Scripts.Command,
@@ -756,6 +778,7 @@ func firstNonEmpty(values ...string) string {
 func hasLegacyAppSettings(commands CommandConfig, channels map[string]string) bool {
 	return len(channels) > 0 ||
 		commands.Enabled ||
+		commands.AllowUnconfiguredGroupChats ||
 		commands.BotOpenID != "" ||
 		commands.BotUserID != "" ||
 		commands.BotUnionID != "" ||

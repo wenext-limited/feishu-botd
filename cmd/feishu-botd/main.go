@@ -97,16 +97,17 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		if app.Commands.Enabled {
 			commandHandler = func(ctx context.Context, cmd feishu.InboundCommand) error {
 				_, apiErr := svc.DispatchCommand(ctx, service.CommandInput{
-					AppAlias:       cmd.AppAlias,
-					DeliveryID:     cmd.DeliveryID,
-					Command:        cmd.Command,
-					Text:           cmd.Text,
-					Prompt:         cmd.Prompt,
-					ConversationID: cmd.ConversationID,
-					ChatAlias:      cmd.ChatAlias,
-					SenderID:       cmd.SenderID,
-					Metadata:       cmd.Metadata,
-					ChatID:         cmd.ChatID,
+					AppAlias:          cmd.AppAlias,
+					DeliveryID:        cmd.DeliveryID,
+					Command:           cmd.Command,
+					Text:              cmd.Text,
+					Prompt:            cmd.Prompt,
+					ConversationID:    cmd.ConversationID,
+					ChatAlias:         cmd.ChatAlias,
+					SenderID:          cmd.SenderID,
+					Metadata:          cmd.Metadata,
+					ChatID:            cmd.ChatID,
+					UnconfiguredGroup: cmd.UnconfiguredGroup,
 				})
 				if apiErr != nil {
 					return apiErr
@@ -115,14 +116,15 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 			}
 		}
 		receiver := feishu.NewCommandReceiver(feishu.CommandReceiverConfig{
-			AppAlias:   appAlias,
-			AppID:      app.AppID,
-			AppSecret:  app.AppSecret,
-			Channels:   app.Channels,
-			BotOpenID:  app.Commands.BotOpenID,
-			BotUserID:  app.Commands.BotUserID,
-			BotUnionID: app.Commands.BotUnionID,
-			BotNames:   app.Commands.BotNames,
+			AppAlias:                    appAlias,
+			AppID:                       app.AppID,
+			AppSecret:                   app.AppSecret,
+			Channels:                    app.Channels,
+			AllowUnconfiguredGroupChats: app.Commands.AllowUnconfiguredGroupChats,
+			BotOpenID:                   app.Commands.BotOpenID,
+			BotUserID:                   app.Commands.BotUserID,
+			BotUnionID:                  app.Commands.BotUnionID,
+			BotNames:                    app.Commands.BotNames,
 			ConnectionStateChanged: func(alias string, state feishu.ConnectionState) {
 				svc.SetAppConnectionState(alias, string(state))
 			},

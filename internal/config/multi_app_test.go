@@ -70,7 +70,7 @@ func TestLoadFromConfigFileMultiAppShapes(t *testing.T) {
 					"alpha":{
 						"app_id":"app_alpha",
 						"app_secret":"secret_alpha",
-						"commands":{"enabled":true,"bot_names":["Alpha Bot"]},
+						"commands":{"enabled":true,"allow_unconfigured_group_chats":true,"bot_names":["Alpha Bot"]},
 						"channels":{}
 					},
 					"beta":{
@@ -90,8 +90,12 @@ func TestLoadFromConfigFileMultiAppShapes(t *testing.T) {
 					t.Fatalf("app aliases = %q", got)
 				}
 				apps := cfg.EffectiveApps()
-				if !apps["alpha"].Commands.Enabled || apps["beta"].Commands.Enabled {
+				if !apps["alpha"].Commands.Enabled || !apps["alpha"].Commands.AllowUnconfiguredGroupChats ||
+					apps["beta"].Commands.Enabled || apps["beta"].Commands.AllowUnconfiguredGroupChats {
 					t.Fatalf("per-app commands were not retained: %#v", apps)
+				}
+				if !cfg.AllowsUnconfiguredGroupChats("alpha") || cfg.AllowsUnconfiguredGroupChats("beta") || cfg.AllowsUnconfiguredGroupChats("missing") {
+					t.Fatalf("per-app unconfigured group policy was not retained: %#v", apps)
 				}
 				if !reflect.DeepEqual(cfg.Channels, map[string]string{"ops": "oc_beta"}) {
 					t.Fatalf("global channel projection = %#v", cfg.Channels)

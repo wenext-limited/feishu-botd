@@ -187,6 +187,27 @@ func TestAgentFollowUpUsesThePrivateDirectMessageRoute(t *testing.T) {
 	}
 }
 
+func TestAgentFollowUpUsesThePrivateUnconfiguredGroupRoute(t *testing.T) {
+	backend := newFakeFollowUpBackend()
+	svc := newFollowUpTestService(backend)
+	svc.cfg.Commands.AllowUnconfiguredGroupChats = true
+	prompt := groupFollowUpPrompt()
+	prompt.DeliveryID = "evt_unconfigured_follow_up"
+	prompt.ConversationID = "conv_unconfigured_follow_up"
+	prompt.ChatAlias = "unconfigured-group-opaque"
+	prompt.ChatID = "oc_private_unconfigured"
+	prompt.UnconfiguredGroup = true
+	seedFollowUpConversation(t, svc, "agent", prompt)
+
+	if _, apiErr := sendFollowUp(t, svc, "agent", prompt.ConversationID, "op-1", "Done."); apiErr != nil {
+		t.Fatalf("send unconfigured group follow-up: %v", apiErr)
+	}
+	sends := backend.snapshot()
+	if len(sends) != 1 || sends[0].chatID != prompt.ChatID {
+		t.Fatalf("unconfigured group follow-up route = %#v", sends)
+	}
+}
+
 func TestAgentFollowUpRejectsUnknownConversation(t *testing.T) {
 	backend := newFakeFollowUpBackend()
 	svc := newFollowUpTestService(backend)

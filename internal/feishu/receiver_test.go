@@ -362,6 +362,65 @@ func TestCommandFromEventSkipsUnknownAndAmbiguousChats(t *testing.T) {
 	}
 }
 
+func TestCommandFromEventAllowsMentionedUnconfiguredGroupWhenEnabled(t *testing.T) {
+	r := NewCommandReceiver(CommandReceiverConfig{
+		AppAlias:                    "nous",
+		AppID:                       "cli_test",
+		AppSecret:                   "secret",
+		Channels:                    map[string]string{"ops": "oc_ops"},
+		AllowUnconfiguredGroupChats: true,
+		BotOpenID:                   "ou_bot",
+	}, nil, nil)
+
+	event := messageEvent("evt_1", "om_1", "oc_unconfigured", "@_bot explain this", &larkim.MentionEvent{
+		Key:           ptr("@_bot"),
+		MentionedType: ptr("app"),
+	})
+	cmd, ok := r.CommandFromEvent(event)
+	if !ok {
+		t.Fatal("mentioned unconfigured group was not accepted")
+	}
+	if !cmd.UnconfiguredGroup || cmd.ChatID != "oc_unconfigured" || cmd.Command != "explain" || cmd.Text != "this" {
+		t.Fatalf("unconfigured group command = %#v", cmd)
+	}
+	if cmd.ChatAlias == "" || strings.Contains(cmd.ChatAlias, "oc_unconfigured") {
+		t.Fatalf("unconfigured group alias exposed or omitted the raw route: %q", cmd.ChatAlias)
+	}
+	retry, ok := r.CommandFromEvent(event)
+	if !ok || retry.ChatAlias != cmd.ChatAlias {
+		t.Fatalf("unconfigured group alias is unstable: first=%q retry=%q", cmd.ChatAlias, retry.ChatAlias)
+	}
+	if cmd.ChatAlias == unconfiguredGroupAlias("other-app", "oc_unconfigured") ||
+		cmd.ChatAlias == unconfiguredGroupAlias("nous", "oc_other") {
+		t.Fatal("unconfigured group alias is not scoped by both app and chat")
+	}
+	body, err := json.Marshal(cmd)
+	if err != nil {
+		t.Fatalf("marshal command: %v", err)
+	}
+	if strings.Contains(string(body), "oc_unconfigured") || strings.Contains(string(body), "UnconfiguredGroup") {
+		t.Fatalf("serialized command leaked daemon-private routing state: %s", body)
+	}
+
+	configured, ok := r.CommandFromEvent(messageEvent("evt_2", "om_2", "oc_ops", "@_bot status", &larkim.MentionEvent{
+		Key:           ptr("@_bot"),
+		MentionedType: ptr("app"),
+	}))
+	if !ok || configured.ChatAlias != "ops" || configured.UnconfiguredGroup {
+		t.Fatalf("configured channel did not retain precedence: %#v, ok=%t", configured, ok)
+	}
+
+	if _, ok := r.CommandFromEvent(messageEvent("evt_3", "om_3", "oc_other", "status")); ok {
+		t.Fatal("unmentioned unconfigured group was accepted")
+	}
+	if _, ok := r.CommandFromEvent(messageEvent("evt_4", "om_4", "oc_other", "@_other status", &larkim.MentionEvent{
+		Key: ptr("@_other"),
+		Id:  &larkim.UserId{OpenId: ptr("ou_other")},
+	})); ok {
+		t.Fatal("unconfigured group with a different mention identity was accepted")
+	}
+}
+
 func TestCommandFromEventSkipsMessagesWithoutBotMention(t *testing.T) {
 	r := NewCommandReceiver(CommandReceiverConfig{
 		AppID:     "cli_test",

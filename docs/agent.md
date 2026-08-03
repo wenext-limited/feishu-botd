@@ -51,8 +51,10 @@ Useful primary references:
 ## Configure and run the daemon
 
 Enable inbound commands for the app and configure a Unix gRPC listener. Static
-channels are optional for a direct-message-only agent; group messages are
-accepted only from chat IDs that have a globally unique configured alias.
+channels are optional for a direct-message-only agent. By default, group
+messages are accepted only from chat IDs that have a globally unique configured
+alias. An app can explicitly opt into mentioned messages from unconfigured
+groups as described under Message routing below.
 
 Generate one provider credential. Keep the token file outside version control
 and make it readable only by the daemon and that provider process:
@@ -84,6 +86,7 @@ openssl rand -base64 32 > /run/secrets/feishu-botd-example-agent-token
   },
   "commands": {
     "enabled": true,
+    "allow_unconfigured_group_chats": false,
     "bot_open_id": "REPLACE_WITH_BOT_OPEN_ID",
     "bot_names": ["Example Agent"]
   },
@@ -216,12 +219,25 @@ Routing differs by chat type:
 | Chat type | Accepted input | Public route |
 | --- | --- | --- |
 | Direct (`p2p`) | Any non-empty text; no mention required | `chat_alias = "direct"` |
-| Group / topic group | Text from a globally unique channel alias that mentions this app's bot | Configured alias |
+| Configured group / topic group | Text that mentions this app's bot | Configured alias |
+| Unconfigured group / topic group | Mentioned text when this app sets `commands.allow_unconfigured_group_chats = true` | Stable opaque alias |
 
 Group routing also requires a configured bot identity (`bot_open_id`,
 `bot_user_id`, `bot_union_id`, or a bot name). Strong Feishu IDs are
 authoritative: when one is configured, a same-named mention with a different ID
 is rejected. Direct-message routing does not require a mention identity.
+
+`allow_unconfigured_group_chats` is per app and defaults to `false`. When it is
+enabled, only messages that mention that app's configured bot identity are
+accepted; merely adding the bot to a group is not enough. These dynamic routes
+are agent-only and cannot trigger legacy command subscribers or local scripts.
+They also do not populate the static channel directory used by outbound
+notification APIs. The daemon retains the raw chat id privately so the agent
+can start a response and send authorized conversation follow-ups; providers see
+only opaque delivery, conversation, and chat-alias values. This setting grants
+every member of every invited group that can mention the bot access to the
+agent, so deployments with corpus or user-level authorization requirements
+should keep explicit channel aliases instead.
 
 `InboundAgentMessage.text` is the complete mention-stripped prompt and preserves
 newlines. `command` is the normalized first word and `command_text` is its
@@ -426,8 +442,10 @@ Message shape and limits:
   a prompt the user scrolled past hours ago.
 - `markdown` is capped at 30 KiB and `summary` at 200 bytes. Long bodies are
   split across several Feishu messages by the ordinary send path.
-- A group conversation routes through its configured channel alias. Removing
-  that alias from config makes the conversation unaddressable.
+- A configured group conversation routes through its channel alias. Removing
+  that alias from config makes the conversation unaddressable. An explicitly
+  allowed unconfigured group uses the private ingress route retained for the
+  same process-local conversation lifetime.
 
 Retries follow the same rules as `UpdateAgentResponse` and
 `FinishAgentResponse`. Reuse the `operation_id` for the byte-equivalent request:

@@ -9,6 +9,7 @@
       "app_secret": "REPLACE_WITH_SUPPORT_FEISHU_APP_SECRET",
       "commands": {
         "enabled": true,
+        "allow_unconfigured_group_chats": false,
         "bot_open_id": "REPLACE_WITH_SUPPORT_FEISHU_BOT_OPEN_ID",
         "bot_user_id": "",
         "bot_union_id": "",
@@ -29,6 +30,7 @@
   "agent_providers": {},
   "commands": {
     "enabled": false,
+    "allow_unconfigured_group_chats": false,
     "bot_open_id": "REPLACE_WITH_DEFAULT_FEISHU_BOT_OPEN_ID",
     "bot_user_id": "",
     "bot_union_id": "",

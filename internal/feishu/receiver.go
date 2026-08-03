@@ -25,10 +25,11 @@ type CommandReceiverConfig struct {
 	AppSecret string
 	Channels  map[string]string
 
-	BotOpenID  string
-	BotUserID  string
-	BotUnionID string
-	BotNames   []string
+	AllowUnconfiguredGroupChats bool
+	BotOpenID                   string
+	BotUserID                   string
+	BotUnionID                  string
+	BotNames                    []string
 
 	// ConnectionStateChanged receives only a public app alias and a fixed state.
 	// Raw SDK errors can contain credentials, connection URLs, or tenant data and
@@ -50,6 +51,9 @@ type InboundCommand struct {
 	// ChatID is the raw Feishu reply route. It is daemon-private and must never
 	// cross the public command/provider boundary.
 	ChatID string `json:"-"`
+	// UnconfiguredGroup is daemon-private ingress state. It is true only when a
+	// mentioned group was accepted by the app's explicit wildcard policy.
+	UnconfiguredGroup bool `json:"-"`
 }
 
 type CommandHandler func(context.Context, InboundCommand) error
@@ -300,6 +304,7 @@ func (r *CommandReceiver) CommandFromEvent(event *larkim.P2MessageReceiveV1) (In
 	}
 
 	chatAlias := ""
+	unconfiguredGroup := false
 	switch chatType {
 	case "p2p":
 		chatAlias = "direct"
@@ -307,7 +312,11 @@ func (r *CommandReceiver) CommandFromEvent(event *larkim.P2MessageReceiveV1) (In
 		var ok bool
 		chatAlias, ok = r.chatAliases[chatID]
 		if !ok {
-			return InboundCommand{}, false
+			if !r.cfg.AllowUnconfiguredGroupChats {
+				return InboundCommand{}, false
+			}
+			chatAlias = unconfiguredGroupAlias(r.cfg.AppAlias, chatID)
+			unconfiguredGroup = true
 		}
 	default:
 		return InboundCommand{}, false
@@ -359,17 +368,33 @@ func (r *CommandReceiver) CommandFromEvent(event *larkim.P2MessageReceiveV1) (In
 		return InboundCommand{}, false
 	}
 	return InboundCommand{
-		AppAlias:       r.cfg.AppAlias,
-		DeliveryID:     deliveryID,
-		Command:        strings.ToLower(command),
-		Text:           args,
-		Prompt:         prompt,
-		ChatAlias:      chatAlias,
-		ConversationID: conversationIDForApp(r.cfg.AppAlias, chatID, messageConversationKey(msg)),
-		ChatID:         chatID,
-		SenderID:       senderID(event.Event.Sender),
-		Metadata:       commandMetadataForApp(r.cfg.AppAlias, event, msg, chatType),
+		AppAlias:          r.cfg.AppAlias,
+		DeliveryID:        deliveryID,
+		Command:           strings.ToLower(command),
+		Text:              args,
+		Prompt:            prompt,
+		ChatAlias:         chatAlias,
+		ConversationID:    conversationIDForApp(r.cfg.AppAlias, chatID, messageConversationKey(msg)),
+		ChatID:            chatID,
+		UnconfiguredGroup: unconfiguredGroup,
+		SenderID:          senderID(event.Event.Sender),
+		Metadata:          commandMetadataForApp(r.cfg.AppAlias, event, msg, chatType),
 	}, true
+}
+
+// unconfiguredGroupAlias gives providers a stable correlation value without
+// exposing the raw Feishu chat id. It is descriptive only: replies and
+// follow-ups use daemon-private routing state captured from ingress.
+func unconfiguredGroupAlias(appAlias, chatID string) string {
+	chatID = strings.TrimSpace(chatID)
+	if chatID == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(
+		"feishu-botd/unconfigured-group-alias/v1\x00" +
+			effectiveAppAlias(appAlias) + "\x00" + chatID,
+	))
+	return "unconfigured-group-" + hex.EncodeToString(sum[:])
 }
 
 // CardActionFromEvent removes callback-only credentials and raw routing ids

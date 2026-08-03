@@ -40,9 +40,10 @@ type AgentFollowUpReceipt struct {
 type agentConversationRoute struct {
 	mu sync.Mutex
 
-	appAlias  string
-	chatAlias string
-	chatID    string
+	appAlias          string
+	chatAlias         string
+	chatID            string
+	unconfiguredGroup bool
 	// threadReplyTo is set only for a thread-scoped conversation. A follow-up
 	// into a flat chat is a new top-level message, not a reply threaded under a
 	// prompt the user has long since scrolled past.
@@ -86,7 +87,7 @@ func (s *Service) SendAgentFollowUp(ctx context.Context, in SendAgentFollowUpInp
 	}
 
 	now := time.Now()
-	route, appAlias, chatAlias, privateChatID, replyToMessageID, ok := s.agentBroker.lookupAndPinConversation(
+	route, appAlias, chatAlias, privateChatID, replyToMessageID, unconfiguredGroup, ok := s.agentBroker.lookupAndPinConversation(
 		conversationID,
 		provider,
 		operationID,
@@ -97,7 +98,7 @@ func (s *Service) SendAgentFollowUp(ctx context.Context, in SendAgentFollowUpInp
 	if !ok {
 		return AgentFollowUpReceipt{}, unknownConversationError()
 	}
-	chatID := s.followUpChatID(appAlias, chatAlias, privateChatID)
+	chatID := s.followUpChatID(appAlias, chatAlias, privateChatID, unconfiguredGroup)
 	if chatID == "" {
 		return AgentFollowUpReceipt{}, unknownConversationError()
 	}
@@ -137,11 +138,12 @@ func (s *Service) SendAgentFollowUp(ctx context.Context, in SendAgentFollowUpInp
 }
 
 // followUpChatID resolves the send destination the same way StartAgentResponse
-// does: a group conversation routes through its configured alias, while a direct
-// message uses the private ingress route captured at dispatch. An alias that has
-// since been removed from config leaves the conversation unaddressable.
-func (s *Service) followUpChatID(appAlias, chatAlias, privateChatID string) string {
-	if chatAlias == "direct" {
+// does: a configured group routes through its alias, while a direct message or
+// explicitly allowed unconfigured group uses the private ingress route captured
+// at dispatch. Removing a configured alias leaves that conversation
+// unaddressable.
+func (s *Service) followUpChatID(appAlias, chatAlias, privateChatID string, unconfiguredGroup bool) string {
+	if chatAlias == "direct" || unconfiguredGroup {
 		return privateChatID
 	}
 	resolvedApp, chatID, ok := s.cfg.ResolveChannel(chatAlias)
@@ -277,6 +279,7 @@ func (b *agentBroker) lookupAndPinConversation(
 ) (
 	route *agentConversationRoute,
 	appAlias, chatAlias, chatID, replyToMessageID string,
+	unconfiguredGroup bool,
 	ok bool,
 ) {
 	b.mu.Lock()
@@ -284,20 +287,20 @@ func (b *agentBroker) lookupAndPinConversation(
 	b.pruneLocked(now)
 	route = b.conversations[strings.TrimSpace(conversationID)]
 	if route == nil {
-		return nil, "", "", "", "", false
+		return nil, "", "", "", "", false, false
 	}
 
 	route.mu.Lock()
 	defer route.mu.Unlock()
 	if appAllowed != nil && !appAllowed(route.appAlias) {
-		return nil, "", "", "", "", false
+		return nil, "", "", "", "", false, false
 	}
 	operationKey := route.followUpOperationKeyLocked(provider, operationID)
 	op := route.operations[operationKey]
 	grantedUntil, granted := route.providers[provider]
 	if (op == nil || op.provider != "" && op.provider != provider) &&
 		(!granted || !now.Before(grantedUntil)) {
-		return nil, "", "", "", "", false
+		return nil, "", "", "", "", false, false
 	}
 
 	retainFor := b.ttl
@@ -307,7 +310,7 @@ func (b *agentBroker) lookupAndPinConversation(
 	if retainUntil := now.Add(retainFor); route.expiresAt.Before(retainUntil) {
 		route.expiresAt = retainUntil
 	}
-	return route, route.appAlias, route.chatAlias, route.chatID, route.threadReplyTo, true
+	return route, route.appAlias, route.chatAlias, route.chatID, route.threadReplyTo, route.unconfiguredGroup, true
 }
 
 func (b *agentBroker) conversationAppConflictLocked(conversationID, appAlias string) bool {
@@ -346,6 +349,7 @@ func (b *agentBroker) recordConversationLocked(in CommandInput, providers map[st
 	}
 	route.chatAlias = in.ChatAlias
 	route.chatID = in.ChatID
+	route.unconfiguredGroup = in.UnconfiguredGroup
 	route.threadReplyTo = followUpThreadReply(in.Metadata)
 	for provider := range providers {
 		route.providers[provider] = expiresAt

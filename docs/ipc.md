@@ -218,8 +218,12 @@ paths or after subscriber churn. Delivery is still best-effort: enqueue is
 non-blocking and there is no provider ACK or durable replay log.
 
 Direct (`p2p`) text needs no mention and is exposed as `chat_alias = "direct"`.
-Group and topic-group text must originate in a globally unique configured
-channel alias and mention that app's configured bot. `InboundAgentMessage.text`
+Group and topic-group text must mention that app's configured bot. By default,
+the chat must have a globally unique configured channel alias; an app with
+`commands.allow_unconfigured_group_chats = true` also accepts unknown chat ids
+through a stable opaque alias. These unconfigured-group routes are agent-only
+and do not enter the outbound channel directory, legacy command stream, or
+local script executor. `InboundAgentMessage.text`
 contains the complete mention-stripped prompt, while `command` and
 `command_text` expose the optional first-word view. `conversation_id` is an
 opaque hash of the raw chat and optional thread. The `default` app preserves
@@ -359,8 +363,9 @@ in both return `unknown_conversation`, so the RPC cannot enumerate chats.
 
 A thread-scoped conversation is answered inside its thread; a flat chat or
 direct message receives a new top-level message. `markdown` is capped at 30 KiB
-and `summary` at 200 bytes, and a group conversation routes through its
-configured channel alias.
+and `summary` at 200 bytes. Configured groups resolve through their aliases;
+allowed unconfigured groups use the daemon-private ingress route retained for
+that conversation.
 
 Idempotency follows the Update/Finish rules: a completed retry of the same
 `operation_id` returns `duplicate = true` without sending again, reuse with

@@ -623,8 +623,12 @@ func (s *Service) StartAgentResponse(ctx context.Context, in StartAgentResponseI
 	}
 	if delivery.messageID == "" {
 		chatID := ""
-		if delivery.input.ChatAlias == "direct" {
+		if delivery.input.ChatAlias == "direct" || delivery.input.UnconfiguredGroup {
 			chatID = delivery.input.ChatID
+			if chatID == "" {
+				delivery.abortStartAttempt()
+				return AgentResponseReceipt{}, notify.NewAPIError(404, "unknown_delivery", "unknown delivery", false)
+			}
 		} else {
 			routeApp, routeChatID, exists := s.cfg.ResolveChannel(delivery.input.ChatAlias)
 			if !exists || routeApp != delivery.appAlias {

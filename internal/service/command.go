@@ -12,8 +12,9 @@ import (
 const commandSubscriptionBuffer = 32
 
 // CommandInput is the transport-neutral form of an inbound bot command.
-// ChatAlias must already be resolved from daemon configuration; raw Feishu chat
-// ids never enter the public command stream.
+// ChatAlias is either a configured alias or an opaque alias generated for an
+// explicitly allowed unconfigured group. Raw Feishu chat ids never enter the
+// public command stream.
 type CommandInput struct {
 	// AppAlias is daemon-private ingress routing state. An empty value is the
 	// legacy default app and preserves all existing direct service callers.
@@ -27,10 +28,11 @@ type CommandInput struct {
 	SenderID       string
 	Metadata       map[string]string
 
-	// ChatID is daemon-private ingress routing state. It is required for direct
-	// messages and is deliberately never copied into either public protobuf
-	// stream.
-	ChatID string `json:"-"`
+	// ChatID and UnconfiguredGroup are daemon-private ingress routing state.
+	// ChatID is required for direct messages and allowed unconfigured groups;
+	// neither field is copied into a public provider stream.
+	ChatID            string `json:"-"`
+	UnconfiguredGroup bool   `json:"-"`
 }
 
 // CommandResponse is a provider reply to a previously delivered command.
@@ -210,15 +212,24 @@ func (s *Service) DispatchCommand(ctx context.Context, in CommandInput) (int, *n
 		return 0, notify.BadRequest("missing_channel", "chat_alias is required")
 	}
 	isDirect := in.ChatAlias == "direct" && in.Metadata["chat_type"] == "p2p"
-	if !isDirect {
+	isUnconfiguredGroup := s.acceptsUnconfiguredGroup(in)
+	switch {
+	case isDirect:
+		if in.ChatID == "" {
+			return 0, notify.BadRequest("missing_direct_route", "direct message route is required")
+		}
+		if _, ok := s.backendForApp(in.AppAlias); !ok {
+			return 0, notify.NewAPIError(404, "unknown_channel", "unknown channel", false)
+		}
+	case in.UnconfiguredGroup:
+		if !isUnconfiguredGroup {
+			return 0, notify.NewAPIError(404, "unknown_channel", "unknown channel", false)
+		}
+	default:
 		appAlias, _, ok := s.cfg.ResolveChannel(in.ChatAlias)
 		if !ok || appAlias != in.AppAlias {
 			return 0, notify.NewAPIError(404, "unknown_channel", "unknown channel", false)
 		}
-	} else if in.ChatID == "" {
-		return 0, notify.BadRequest("missing_direct_route", "direct message route is required")
-	} else if _, ok := s.backendForApp(in.AppAlias); !ok {
-		return 0, notify.NewAPIError(404, "unknown_channel", "unknown channel", false)
 	}
 	if in.Prompt == "" {
 		in.Prompt = strings.TrimSpace(strings.Join([]string{in.Command, in.Text}, " "))
@@ -230,7 +241,10 @@ func (s *Service) DispatchCommand(ctx context.Context, in CommandInput) (int, *n
 		return 0, notify.BadRequest("field_too_large", "one or more fields are too large")
 	}
 
-	legacyDelivered, agentDelivered := s.dispatchInboundRoute(in, isDirect)
+	// Direct messages and wildcard groups are agent-only. This preserves the
+	// configured-channel allowlists of legacy command providers and local script
+	// executors while allowing conversational agents to opt into broader ingress.
+	legacyDelivered, agentDelivered := s.dispatchInboundRoute(in, isDirect || isUnconfiguredGroup)
 	s.logger.Info("command dispatched",
 		"correlation", opaqueLogCorrelationID("command", in.DeliveryID),
 		"legacy_subscribers", legacyDelivered,
@@ -239,7 +253,20 @@ func (s *Service) DispatchCommand(ctx context.Context, in CommandInput) (int, *n
 	return legacyDelivered, nil
 }
 
-func (s *Service) dispatchInboundRoute(in CommandInput, isDirect bool) (legacyDelivered, agentDelivered int) {
+func (s *Service) acceptsUnconfiguredGroup(in CommandInput) bool {
+	if !in.UnconfiguredGroup || !s.cfg.AllowsUnconfiguredGroupChats(in.AppAlias) || in.ChatID == "" {
+		return false
+	}
+	switch in.Metadata["chat_type"] {
+	case "group", "topic_group":
+	default:
+		return false
+	}
+	_, ok := s.backendForApp(in.AppAlias)
+	return ok
+}
+
+func (s *Service) dispatchInboundRoute(in CommandInput, agentOnly bool) (legacyDelivered, agentDelivered int) {
 	routes := s.inboundRoutes
 	routes.mu.Lock()
 	defer routes.mu.Unlock()
@@ -256,7 +283,7 @@ func (s *Service) dispatchInboundRoute(in CommandInput, isDirect bool) (legacyDe
 	}
 
 	handled := false
-	if !isDirect {
+	if !agentOnly {
 		legacyDelivered, handled = s.commandBroker.dispatch(in)
 	}
 	if !handled {
@@ -503,6 +530,7 @@ func publicCommandInput(in CommandInput) CommandInput {
 	out.Metadata = legacyPublicMetadata(in.Metadata)
 	out.AppAlias = ""
 	out.ChatID = ""
+	out.UnconfiguredGroup = false
 	return out
 }
 
