@@ -17,6 +17,7 @@ import (
 	"feishu-botd/internal/feishu"
 	"feishu-botd/internal/grpcapi"
 	"feishu-botd/internal/httpapi"
+	"feishu-botd/internal/ownership"
 	"feishu-botd/internal/scriptexec"
 	"feishu-botd/internal/service"
 )
@@ -24,6 +25,7 @@ import (
 const (
 	startupTimeoutFallback = 15 * time.Second
 	shutdownTimeout        = 10 * time.Second
+	agentOwnershipTTL      = 24 * time.Hour
 )
 
 var errReceiverUnavailable = errors.New("Feishu receiver unavailable")
@@ -79,6 +81,13 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 
 	store := dedupe.NewMemoryStore(cfg.DedupeTTL)
 	svc := service.NewMultiAppService(cfg, senders, store, logger)
+	if cfg.StateDir != "" {
+		owners, err := ownership.Open(cfg.StateDir, agentOwnershipTTL)
+		if err != nil {
+			return fmt.Errorf("open agent message ownership state: %w", err)
+		}
+		svc.SetAgentOwnershipStore(owners)
+	}
 	httpServer := httpapi.NewServer(cfg, svc, logger)
 	grpcServer := grpcapi.NewServer(cfg, svc, logger)
 
@@ -106,6 +115,7 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 					ChatAlias:         cmd.ChatAlias,
 					SenderID:          cmd.SenderID,
 					Metadata:          cmd.Metadata,
+					ConversationTitle: cmd.ConversationTitle,
 					ChatID:            cmd.ChatID,
 					UnconfiguredGroup: cmd.UnconfiguredGroup,
 				})
@@ -137,6 +147,26 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 				return nil
 			})
 		}
+		receiver.SetMessageReactionHandler(func(ctx context.Context, reaction feishu.InboundMessageReaction) error {
+			operation := service.MessageReactionUnspecified
+			switch reaction.Operation {
+			case feishu.MessageReactionAdded:
+				operation = service.MessageReactionAdded
+			case feishu.MessageReactionRemoved:
+				operation = service.MessageReactionRemoved
+			}
+			if apiErr := svc.DispatchAgentMessageReaction(ctx, service.AgentMessageReactionInput{
+				AppAlias:     reaction.AppAlias,
+				DeliveryID:   reaction.DeliveryID,
+				MessageRef:   reaction.MessageRef,
+				SenderID:     reaction.SenderID,
+				ReactionType: reaction.ReactionType,
+				Operation:    operation,
+			}); apiErr != nil {
+				return apiErr
+			}
+			return nil
+		})
 		receivers[appAlias] = receiver
 	}
 

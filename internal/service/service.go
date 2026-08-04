@@ -8,10 +8,12 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"time"
 
 	"feishu-botd/internal/config"
 	"feishu-botd/internal/dedupe"
 	"feishu-botd/internal/feishu"
+	"feishu-botd/internal/ownership"
 )
 
 // Version is the reported service version, shared by both transports.
@@ -52,6 +54,12 @@ type Service struct {
 	inboundRoutes *inboundRouteRegistry
 	commandBroker *commandBroker
 	agentBroker   *agentBroker
+	agentOwners   agentOwnershipStore
+}
+
+type agentOwnershipStore interface {
+	Put(messageRef, provider string, now time.Time) error
+	Lookup(messageRef string, now time.Time) (ownership.Owner, bool, error)
 }
 
 // NewService builds a Service from an immutable config snapshot.
@@ -60,6 +68,13 @@ type Service struct {
 // NewMultiAppService so every app has an independent sender.
 func NewService(cfg config.Config, sender feishu.Sender, store *dedupe.MemoryStore, logger *slog.Logger) *Service {
 	return newService(cfg, map[string]feishu.Sender{config.DefaultAppAlias: sender}, store, logger, false)
+}
+
+// SetAgentOwnershipStore installs restart-safe routing for reactions on
+// agent-authored messages. Process composition calls this before any receiver
+// or provider stream starts; tests may inject a deterministic in-memory fake.
+func (s *Service) SetAgentOwnershipStore(store agentOwnershipStore) {
+	s.agentOwners = store
 }
 
 // NewMultiAppService builds one shared service over independent per-app Feishu

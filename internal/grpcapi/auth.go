@@ -24,6 +24,7 @@ type providerPrincipal struct {
 	allowUnmatchedMessages bool
 	allowCardActions       bool
 	allowFollowUpMessages  bool
+	allowMessageReactions  bool
 	allowLegacyCommands    bool
 }
 
@@ -64,6 +65,7 @@ func newProviderAuthenticator(providers map[string]config.AgentProviderConfig) p
 				allowUnmatchedMessages: providerCfg.AllowUnmatchedMessages,
 				allowCardActions:       providerCfg.AllowCardActions,
 				allowFollowUpMessages:  providerCfg.AllowFollowUpMessages,
+				allowMessageReactions:  providerCfg.AllowMessageReactions,
 				allowLegacyCommands:    providerCfg.AllowLegacyCommands,
 			},
 			digest: sha256.Sum256([]byte(providerCfg.AuthToken)),
@@ -224,12 +226,12 @@ func authorizeLegacyResponse(ctx context.Context) (string, error) {
 	return principal.provider, nil
 }
 
-func authorizeAgentSubscription(ctx context.Context, requested string, commands []string, unmatched, actions bool) error {
+func authorizeAgentSubscription(ctx context.Context, requested string, commands []string, unmatched, actions, reactions bool) error {
 	if err := requireProviderIdentity(ctx, requested); err != nil {
 		return err
 	}
 	principal, _ := authenticatedProvider(ctx)
-	if !commandsAllowed(principal, commands) || unmatched && !principal.allowUnmatchedMessages || actions && !principal.allowCardActions {
+	if !commandsAllowed(principal, commands) || unmatched && !principal.allowUnmatchedMessages || actions && !principal.allowCardActions || reactions && !principal.allowMessageReactions {
 		return providerScopeDenied(ctx)
 	}
 	return nil

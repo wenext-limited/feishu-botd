@@ -27,6 +27,7 @@
     "auth_token_file": "/run/secrets/feishu-botd-token",
     "allow_non_loopback_bind": true
   },
+  "state_dir": "/var/lib/feishu-botd",
   "agent_providers": {},
   "commands": {
     "enabled": false,

@@ -132,8 +132,8 @@ is supplied.
 | --- | --- |
 | `Subscribe` | Provider opens a server stream for one or more command names. botd pushes matching `InboundCommand` values. |
 | `Respond` | Provider sends a markdown or card reply for a previously delivered `delivery_id`. |
-| `SubscribeAgentEvents` | Agent opens a server stream for exact commands, unmatched conversational messages, card actions, or any combination. |
-| `StartAgentResponse` | Creates a streaming CardKit 2.0 reply for one inbound delivery and returns an opaque response handle at revision 1. |
+| `SubscribeAgentEvents` | Agent opens a server stream for exact commands, unmatched conversational messages, card actions, native message reactions, or any combination. |
+| `StartAgentResponse` | Creates a streaming CardKit 2.0 reply and returns an opaque response handle, provider-safe message reference, and revision 1. |
 | `UpdateAgentResponse` | Applies a complete accumulated markdown snapshot, and any timeline part it carries, at the expected revision. |
 | `FinishAgentResponse` | Applies final content, records the outcome, and disables CardKit streaming mode. |
 | `SendAgentFollowUp` | Posts one later, standalone message into a conversation the provider has already received an agent event from. |
@@ -194,12 +194,15 @@ Disallowed handles return the same `unknown_delivery`, `unknown_response`, or
 
 - non-empty `commands` for exact, normalized first-word matches;
 - `include_unmatched_messages = true` for natural conversational prompts;
-- `include_card_actions = true` for actions on cards owned by that provider.
+- `include_card_actions = true` for actions on cards owned by that provider;
+- `include_message_reactions = true` for native thumbs attached to messages
+  authored by that provider.
 
 The `provider` must match the identity authenticated by the provider bearer;
 the general notification bearer cannot use an agent RPC. The daemon also checks
 requested selectors against that provider's `allowed_commands`,
-`allow_unmatched_messages`, and `allow_card_actions` before registering the
+`allow_unmatched_messages`, `allow_card_actions`, and
+`allow_message_reactions` before registering the
 stream. Legacy streams additionally require `allow_legacy_commands`, and
 follow-up sends require `allow_follow_up_messages`. Event candidates are then
 filtered by `allowed_apps` before exact-command/fallback arbitration. Grant
@@ -233,6 +236,17 @@ public `app_alias`. Legacy command metadata remains limited to `chat_type` and
 `message_type`. Raw event/chat/message/card ids and callback credentials never
 enter the public stream. `delivery_id` and `conversation_id` are stable,
 domain-separated opaque handles derived by botd.
+An explicit reply adds `InboundAgentMessage.reply_to_message_ref`, derived from
+the exact parent message. Group messages may add the current bounded
+`conversation_title`; lookup failure leaves it empty. Neither value contains a
+raw Feishu route, and the title must never be used as authorization.
+
+Native reaction events contain `message_ref`, exact `reaction_type`
+(`THUMBSUP` or `ThumbsDown`), and `ADDED` or `REMOVED`. They route only to the
+provider that authored that message. `state_dir` is mandatory when any provider
+is granted reactions; botd atomically persists the opaque ownership mapping for
+24 hours so a restart does not make old messages ownerless. Deleted reactions
+are retractions, not opposite votes.
 
 #### Agent response state machine
 
@@ -307,13 +321,12 @@ mutation attempts (about 8 Hz), leaving margin below Feishu's 10
 operations/second/card limit. Providers should still coalesce model tokens into
 cumulative snapshots at about 5–8 Hz.
 Feishu automatically closes streaming mode after roughly 10 minutes and allows
-CardKit entity operations for 14 days. botd's agent state is deliberately
-process-local: handles and operation receipts expire after the configured
-dedupe TTL (six hours by default) and are lost on restart, so an old card cannot
-be resumed through its prior `response_id`. Run one active botd process owning a
-given Feishu app; one multi-app process opens one connection per app. Feishu
-cluster-delivers each event to one random client, and this release has no shared
-ownership store for active-active replicas.
+CardKit entity operations for 14 days. Response handles and operation receipts
+remain process-local and expire after the configured dedupe TTL (six hours by
+default), so an old card cannot be resumed through its prior `response_id`.
+Native-reaction ownership alone is persisted under `state_dir` for 24 hours;
+the snapshot is local to one daemon and is not an active-active coordination
+store. Run one active botd process owning a given Feishu app.
 
 With `agent_providers` configured, startup requires the dedupe TTL to be at
 least one hour plus `send_timeout`. That keeps an ambiguous Start claim alive

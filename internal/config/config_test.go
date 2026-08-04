@@ -110,6 +110,7 @@ func setBaseEnv(t *testing.T) {
 	t.Setenv("FEISHU_BOTD_BIND", "")
 	t.Setenv("FEISHU_BOTD_GRPC_SOCKET", "")
 	t.Setenv("FEISHU_BOTD_GRPC_BIND", "")
+	t.Setenv("FEISHU_BOTD_STATE_DIR", "")
 	t.Setenv("FEISHU_BOTD_AUTH_TOKEN_FILE", "")
 	t.Setenv("FEISHU_BOTD_ALLOW_NON_LOOPBACK_BIND", "")
 	t.Setenv("FEISHU_BOTD_COMMANDS_ENABLED", "")
@@ -135,6 +136,7 @@ func clearConfigEnv(t *testing.T) {
 		"FEISHU_BOTD_BIND",
 		"FEISHU_BOTD_GRPC_SOCKET",
 		"FEISHU_BOTD_GRPC_BIND",
+		"FEISHU_BOTD_STATE_DIR",
 		"FEISHU_BOTD_AUTH_TOKEN_FILE",
 		"FEISHU_BOTD_ALLOW_NON_LOOPBACK_BIND",
 		"FEISHU_BOTD_COMMANDS_ENABLED",
@@ -346,6 +348,76 @@ func TestLoadFromConfigFileAgentProviderFollowUpScope(t *testing.T) {
 			}
 			if got := cfg.AgentProviders["fixture-agent"].AllowFollowUpMessages; got != testCase.want {
 				t.Fatalf("allow_follow_up_messages = %t, want %t", got, testCase.want)
+			}
+		})
+	}
+}
+
+// Native message reactions are independently authorized and require durable
+// owner routing. An operator cannot accidentally enable them with process-only
+// state that changes semantics after a restart.
+func TestLoadFromConfigFileAgentProviderReactionScopeRequiresStateDir(t *testing.T) {
+	for _, testCase := range []struct {
+		name       string
+		entry      string
+		stateEntry string
+		want       bool
+		wantError  string
+	}{
+		{name: "omitted defaults to off"},
+		{
+			name:      "enabled without state is rejected",
+			entry:     `,"allow_message_reactions":true`,
+			want:      true,
+			wantError: "state_dir",
+		},
+		{
+			name:       "enabled with durable state",
+			entry:      `,"allow_message_reactions":true`,
+			stateEntry: `,"state_dir":"/var/lib/feishu-botd"`,
+			want:       true,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			clearConfigEnv(t)
+			dir := t.TempDir()
+			tokenPath := filepath.Join(dir, "agent-token")
+			const token = "fixture-agent-token-0123456789abcdef0123456789"
+			if err := os.WriteFile(tokenPath, []byte(token+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			configPath := filepath.Join(dir, "feishu-botd.json")
+			configJSON := `{
+  "feishu": {"app_id":"app_fixture","app_secret":"secret_fixture"},
+  "listeners": {"grpc_socket":"/tmp/feishu-botd.fixture.sock"},
+  "commands": {"enabled":true},
+  "agent_providers": {
+    "fixture-agent": {
+      "auth_token_file":"` + tokenPath + `",
+      "allow_unmatched_messages":true` + testCase.entry + `
+    }
+  }` + testCase.stateEntry + `
+}`
+			if err := os.WriteFile(configPath, []byte(configJSON), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("FEISHU_BOTD_CONFIG", configPath)
+
+			cfg, err := LoadFromEnv()
+			if testCase.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), testCase.wantError) {
+					t.Fatalf("error = %v, want substring %q", err, testCase.wantError)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("load provider config: %v", err)
+			}
+			if got := cfg.AgentProviders["fixture-agent"].AllowMessageReactions; got != testCase.want {
+				t.Fatalf("allow_message_reactions = %t, want %t", got, testCase.want)
+			}
+			if testCase.want && cfg.StateDir != "/var/lib/feishu-botd" {
+				t.Fatalf("state dir = %q", cfg.StateDir)
 			}
 		})
 	}

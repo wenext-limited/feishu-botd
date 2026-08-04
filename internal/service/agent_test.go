@@ -165,6 +165,7 @@ func TestAgentUnmatchedMessageDeliversCompletePrompt(t *testing.T) {
 	mustDispatchAgentPrompt(t, svc, CommandInput{
 		DeliveryID: "evt_prompt", Command: "explain", Text: "this failure",
 		Prompt: prompt, ConversationID: "conv_prompt", ChatAlias: "ops", SenderID: "ou_sender",
+		ConversationTitle: "Yoki QA", Metadata: map[string]string{"parent_id": "om_parent"},
 	})
 
 	event := receiveAgentEvent(t, sub)
@@ -176,6 +177,9 @@ func TestAgentUnmatchedMessageDeliversCompletePrompt(t *testing.T) {
 	}
 	if event.Message.Command != "explain" || event.Message.CommandText != "this failure" {
 		t.Fatalf("parsed command fields = %#v", event.Message)
+	}
+	if event.Message.ConversationTitle != "Yoki QA" || event.Message.ReplyToMessageRef != feishu.MessageRefForApp("", "om_parent") {
+		t.Fatalf("message context = %#v", event.Message)
 	}
 	if event.ConversationID != "conv_prompt" || event.ChatAlias != "ops" {
 		t.Fatalf("event routing = %#v", event)

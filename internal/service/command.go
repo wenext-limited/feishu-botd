@@ -18,15 +18,16 @@ const commandSubscriptionBuffer = 32
 type CommandInput struct {
 	// AppAlias is daemon-private ingress routing state. An empty value is the
 	// legacy default app and preserves all existing direct service callers.
-	AppAlias       string `json:"-"`
-	DeliveryID     string
-	Command        string
-	Text           string
-	Prompt         string
-	ConversationID string
-	ChatAlias      string
-	SenderID       string
-	Metadata       map[string]string
+	AppAlias          string `json:"-"`
+	DeliveryID        string
+	Command           string
+	Text              string
+	Prompt            string
+	ConversationID    string
+	ChatAlias         string
+	SenderID          string
+	Metadata          map[string]string
+	ConversationTitle string
 
 	// ChatID and UnconfiguredGroup are daemon-private ingress routing state.
 	// ChatID is required for direct messages and allowed unconfigured groups;

@@ -51,6 +51,7 @@ type Config struct {
 	BindAddr       string
 	GRPCSocketPath string
 	GRPCBindAddr   string
+	StateDir       string
 	AuthToken      string
 	AgentProviders map[string]AgentProviderConfig
 	AllowLANBind   bool
@@ -74,6 +75,7 @@ type AgentProviderConfig struct {
 	AllowUnmatchedMessages bool
 	AllowCardActions       bool
 	AllowFollowUpMessages  bool
+	AllowMessageReactions  bool
 	AllowLegacyCommands    bool
 	// AllowedAppsConfigured distinguishes an absent allowed_apps field (all
 	// configured apps) from an explicitly empty list (no apps).
@@ -220,6 +222,7 @@ func LoadFromEnv() (Config, error) {
 		BindAddr:       firstNonEmpty(os.Getenv("FEISHU_BOTD_BIND"), fileCfg.BindAddr),
 		GRPCSocketPath: firstNonEmpty(os.Getenv("FEISHU_BOTD_GRPC_SOCKET"), fileCfg.GRPCSocketPath),
 		GRPCBindAddr:   firstNonEmpty(os.Getenv("FEISHU_BOTD_GRPC_BIND"), fileCfg.GRPCBindAddr),
+		StateDir:       firstNonEmpty(os.Getenv("FEISHU_BOTD_STATE_DIR"), fileCfg.StateDir),
 		AgentProviders: make(map[string]AgentProviderConfig),
 		AllowLANBind:   boolFromEnvDefault("FEISHU_BOTD_ALLOW_NON_LOOPBACK_BIND", fileCfg.AllowLANBind),
 		Commands:       legacyCommands,
@@ -281,6 +284,7 @@ func LoadFromEnv() (Config, error) {
 			AllowUnmatchedMessages: providerCfg.AllowUnmatchedMessages,
 			AllowCardActions:       providerCfg.AllowCardActions,
 			AllowFollowUpMessages:  providerCfg.AllowFollowUpMessages,
+			AllowMessageReactions:  providerCfg.AllowMessageReactions,
 			AllowLegacyCommands:    providerCfg.AllowLegacyCommands,
 			AllowedApps:            allowedApps,
 			AllowedAppsConfigured:  allowedAppsConfigured,
@@ -288,6 +292,11 @@ func LoadFromEnv() (Config, error) {
 	}
 	if err := validateAgentProviderApps(cfg.AgentProviders, cfg.Apps); err != nil {
 		return Config{}, err
+	}
+	for provider, providerCfg := range cfg.AgentProviders {
+		if providerCfg.AllowMessageReactions && cfg.StateDir == "" {
+			return Config{}, fmt.Errorf("provider %q allow_message_reactions requires state_dir or FEISHU_BOTD_STATE_DIR", provider)
+		}
 	}
 	if err := validateAgentProviderTokens(cfg.AgentProviders, ""); err != nil {
 		return Config{}, err
@@ -343,6 +352,7 @@ type fileConfig struct {
 	BindAddr       string
 	GRPCSocketPath string
 	GRPCBindAddr   string
+	StateDir       string
 	AuthTokenFile  string
 	AgentProviders map[string]fileAgentProviderConfig
 	AllowLANBind   bool
@@ -364,6 +374,7 @@ type configFile struct {
 	DefaultChannel     string                             `json:"default_channel"`
 	Services           map[string]ServiceConfig           `json:"services"`
 	AgentProviders     map[string]fileAgentProviderConfig `json:"agent_providers"`
+	StateDir           string                             `json:"state_dir"`
 	DedupeTTLSeconds   int                                `json:"dedupe_ttl_seconds"`
 	SendTimeoutSeconds int                                `json:"send_timeout_seconds"`
 }
@@ -375,6 +386,7 @@ type fileAgentProviderConfig struct {
 	AllowUnmatchedMessages bool               `json:"allow_unmatched_messages"`
 	AllowCardActions       bool               `json:"allow_card_actions"`
 	AllowFollowUpMessages  bool               `json:"allow_follow_up_messages"`
+	AllowMessageReactions  bool               `json:"allow_message_reactions"`
 	AllowLegacyCommands    bool               `json:"allow_legacy_commands"`
 }
 
@@ -448,6 +460,7 @@ func loadFileConfig(path string) (fileConfig, error) {
 	cfg.GRPCSocketPath = strings.TrimSpace(raw.Listeners.GRPCSocket)
 	cfg.GRPCBindAddr = strings.TrimSpace(raw.Listeners.GRPCBind)
 	cfg.AuthTokenFile = strings.TrimSpace(raw.Listeners.AuthTokenFile)
+	cfg.StateDir = strings.TrimSpace(raw.StateDir)
 	agentProviders, err := normalizeAgentProviderConfigs(raw.AgentProviders)
 	if err != nil {
 		return fileConfig{}, err
@@ -1035,6 +1048,7 @@ func normalizeAgentProviderConfigs(in map[string]fileAgentProviderConfig) (map[s
 			AllowUnmatchedMessages: providerCfg.AllowUnmatchedMessages,
 			AllowCardActions:       providerCfg.AllowCardActions,
 			AllowFollowUpMessages:  providerCfg.AllowFollowUpMessages,
+			AllowMessageReactions:  providerCfg.AllowMessageReactions,
 			AllowLegacyCommands:    providerCfg.AllowLegacyCommands,
 		}
 	}

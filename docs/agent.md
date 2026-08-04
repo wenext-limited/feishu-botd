@@ -10,6 +10,7 @@ unchanged protobuf contract over local gRPC:
 Feishu message -> feishu-botd -> SubscribeAgentEvents -> agent
 Feishu card    <- feishu-botd <- Start / Update / Finish <- agent
 Feishu action  -> feishu-botd -> SubscribeAgentEvents -> agent
+Feishu reaction -> feishu-botd -> SubscribeAgentEvents -> agent
 ```
 
 Raw chat IDs, message IDs, card IDs, callback tokens, app credentials, and
@@ -33,7 +34,12 @@ delivery does not support store apps):
    to the `im.message.receive_v1` event.
 5. To receive button callbacks, also subscribe to the
    `card.action.trigger` callback using long-connection delivery.
-6. Publish a new app version, make the bot available to the intended users, and
+6. To receive native reactions attached to agent answers, grant the message
+   reaction read permission and subscribe to both
+   `im.message.reaction.created_v1` and `im.message.reaction.deleted_v1`.
+   To expose the current group title, grant the permission required by
+   `GET /open-apis/im/v1/chats/:chat_id`; title lookup is fail-soft.
+7. Publish a new app version, make the bot available to the intended users, and
    add it to every group in which it should answer.
 
 The callback subscription has no additional permission scope. Feishu requires
@@ -73,6 +79,7 @@ openssl rand -base64 32 > /run/secrets/feishu-botd-example-agent-token
   "listeners": {
     "grpc_socket": "/run/feishu-botd/feishu-botd.grpc.sock"
   },
+  "state_dir": "/var/lib/feishu-botd",
   "agent_providers": {
     "example-agent": {
       "auth_token_file": "/run/secrets/feishu-botd-example-agent-token",
@@ -81,6 +88,7 @@ openssl rand -base64 32 > /run/secrets/feishu-botd-example-agent-token
       "allow_unmatched_messages": true,
       "allow_card_actions": true,
       "allow_follow_up_messages": false,
+      "allow_message_reactions": true,
       "allow_legacy_commands": false
     }
   },
@@ -204,7 +212,8 @@ retry does not switch from a legacy consumer to an agent, from one selector to
 another, or from an agent back to legacy after subscriber churn.
 
 Each provider can request only the selectors authorized in its config:
-`allowed_commands`, `allow_unmatched_messages`, and `allow_card_actions`.
+`allowed_commands`, `allow_unmatched_messages`, `allow_card_actions`, and
+`allow_message_reactions`.
 `allow_legacy_commands` separately permits legacy `Subscribe`/`Respond`, using
 the same `allowed_commands` allowlist, and `allow_follow_up_messages` separately
 permits the follow-up send described below. Requests outside this scope fail
@@ -246,6 +255,20 @@ thread; raw routing IDs are retained only inside the daemon. The reserved
 `default` app keeps the pre-multi-app conversation-id derivation byte-for-byte
 so durable provider state continues to resolve. Only additional apps are
 namespaced into the derivation.
+
+For an explicit Feishu reply, `reply_to_message_ref` is the app-scoped opaque
+identity of the exact parent message. It is empty for a non-reply. Group
+messages also carry the current, trimmed `conversation_title` when the bounded
+five-minute lookup succeeds. The title is user-controlled context, not an
+authorization value; direct messages and failed lookups carry an empty title.
+
+When `include_message_reactions = true`, the stream also receives native
+`THUMBSUP` and `ThumbsDown` reactions attached to messages authored by that
+same provider. Each event carries an opaque `message_ref`, the reacting
+`sender_id`, and `ADDED` or `REMOVED`; removal retracts the prior reaction and
+does not assert its opposite. Unknown messages are not broadcast. This selector
+requires `allow_message_reactions = true` and a configured `state_dir` so owner
+routing survives restart. Ownership expires after 24 hours.
 
 `InboundAgentEvent.metadata` may contain the provider-safe keys `chat_type`,
 `message_type`, and `app_alias`; daemon ingress supplies the source
@@ -485,6 +508,9 @@ degrade to finishing inside the original card.
   conversation speaks to the agent again. Restart does not disable streaming on
   the remote card; Feishu eventually auto-closes it. Finish active responses
   before planned restarts.
+- Native-reaction provider ownership is the exception: an atomic snapshot under
+  `state_dir` retains only opaque `message_ref` to provider mappings for 24
+  hours. A malformed snapshot fails startup rather than widening delivery.
 - Run exactly one active `feishu-botd` process owning a given Feishu app. One
   multi-app process opens one connection for each configured app. Feishu permits
   up to 50 connections but delivers each event to one random client in cluster

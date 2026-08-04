@@ -166,6 +166,27 @@ func requireAgentReceipt(
 	}
 }
 
+func TestAgentEventToProtoCarriesNativeReaction(t *testing.T) {
+	t.Parallel()
+
+	out := agentEventToProto(service.AgentEvent{
+		DeliveryID: "delivery_reaction_fixture",
+		SenderID:   "sender_fixture",
+		MessageReaction: &service.AgentMessageReaction{
+			MessageRef:   "msgref_fixture",
+			ReactionType: "ThumbsDown",
+			Operation:    service.MessageReactionRemoved,
+		},
+	}).GetEvent()
+	if out == nil {
+		t.Fatal("converted event is nil")
+	}
+	reaction := out.GetMessageReaction()
+	if reaction == nil || reaction.GetMessageRef() != "msgref_fixture" || reaction.GetReactionType() != "ThumbsDown" || reaction.GetOperation() != pb.MessageReactionOperation_MESSAGE_REACTION_OPERATION_REMOVED {
+		t.Fatalf("converted reaction = %#v", reaction)
+	}
+}
+
 func TestGRPCAgentResponseLifecycle(t *testing.T) {
 	sender := &fakeAgentSender{fakeSender: fakeSender{messageID: "unused_fixture"}}
 	conn, svc := startAgentUnixServer(t, sender)
@@ -184,17 +205,19 @@ func TestGRPCAgentResponseLifecycle(t *testing.T) {
 	}
 
 	event := dispatchAndReceiveAgentEvent(t, svc, stream, service.CommandInput{
-		DeliveryID:     "delivery_fixture",
-		ConversationID: "conversation_fixture",
-		Command:        "ask",
-		Text:           "the fixture",
-		Prompt:         "Explain the fixture.\nKeep it concise.",
-		ChatAlias:      "ops",
-		SenderID:       "sender_fixture",
+		DeliveryID:        "delivery_fixture",
+		ConversationID:    "conversation_fixture",
+		ConversationTitle: "Yoki QA",
+		Command:           "ask",
+		Text:              "the fixture",
+		Prompt:            "Explain the fixture.\nKeep it concise.",
+		ChatAlias:         "ops",
+		SenderID:          "sender_fixture",
 		Metadata: map[string]string{
 			"chat_type":    "group",
 			"message_type": "text",
 			"message_id":   "inbound_message_fixture",
+			"parent_id":    "parent_message_fixture",
 			"thread_id":    "internal_thread_fixture",
 		},
 	})
@@ -204,6 +227,9 @@ func TestGRPCAgentResponseLifecycle(t *testing.T) {
 	}
 	if message == nil || message.GetText() != "Explain the fixture.\nKeep it concise." || message.GetCommand() != "ask" || message.GetCommandText() != "the fixture" {
 		t.Fatalf("agent message = %#v", message)
+	}
+	if message.GetReplyToMessageRef() != feishu.MessageRefForApp(config.DefaultAppAlias, "parent_message_fixture") || message.GetConversationTitle() != "Yoki QA" {
+		t.Fatalf("agent message context = %#v", message)
 	}
 	if len(event.GetMetadata()) != 2 || event.GetMetadata()["chat_type"] != "group" || event.GetMetadata()["message_type"] != "text" {
 		t.Fatalf("public metadata = %#v", event.GetMetadata())
@@ -232,6 +258,9 @@ func TestGRPCAgentResponseLifecycle(t *testing.T) {
 		t.Fatalf("start agent response: %v", err)
 	}
 	requireAgentReceipt(t, started.GetResponse(), "", 1, pb.AgentResponsePhase_AGENT_RESPONSE_PHASE_STREAMING, false)
+	if got, want := started.GetResponse().GetMessageRef(), feishu.MessageRefForApp(config.DefaultAppAlias, "message_fixture"); got != want {
+		t.Fatalf("response message ref = %q, want %q", got, want)
+	}
 	responseID := started.GetResponse().GetResponseId()
 	if apiErr := svc.DispatchAgentCardAction(context.Background(), service.AgentCardActionInput{
 		DeliveryID: "action_fixture", MessageID: "message_fixture", SenderID: "actor_fixture",

@@ -38,6 +38,13 @@ replicas can split related events and are unsupported until that state is made
 durable and shared. An active/standby setup must ensure only the active process
 opens the Feishu connection.
 
+If any provider enables `allow_message_reactions`, configure `state_dir` on
+durable local storage. The checked-in Compose file mounts the named
+`feishu-botd-state` volume at `/var/lib/feishu-botd`; the example config points
+`state_dir` there. This snapshot contains only opaque message references and
+provider names, expires ownership after 24 hours, and must remain private to the
+daemon. It survives restart but is not shared active-active state.
+
 The general bearer and every provider bearer must contain at least 32 bytes.
 The loader trims and uses only the first line of each token file; later lines
 are ignored. Before upgrading, replace any shorter general token and update all
@@ -152,6 +159,9 @@ it. The compose file also mounts the whole `./secrets` directory read-only
 at `/run/secrets`, so adding a per-provider token (see `agent_providers` in
 [agent.md](./agent.md)) is one new file plus a config entry — no compose
 edit.
+
+The same Compose file keeps reaction ownership in the separate named volume
+`feishu-botd-state`. Do not mount that volume into provider containers.
 
 When a caller and `feishu-botd` run in the same Compose project instead,
 mount one named volume at `/run/feishu-botd` in both services. Configure the

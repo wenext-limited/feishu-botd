@@ -69,7 +69,7 @@ func (c *commandServer) Respond(ctx context.Context, in *pb.RespondRequest) (*pb
 
 func (c *commandServer) SubscribeAgentEvents(in *pb.SubscribeAgentEventsRequest, stream pb.CommandService_SubscribeAgentEventsServer) error {
 	if err := authorizeAgentSubscription(
-		stream.Context(), in.GetProvider(), in.GetCommands(), in.GetIncludeUnmatchedMessages(), in.GetIncludeCardActions(),
+		stream.Context(), in.GetProvider(), in.GetCommands(), in.GetIncludeUnmatchedMessages(), in.GetIncludeCardActions(), in.GetIncludeMessageReactions(),
 	); err != nil {
 		return err
 	}
@@ -79,6 +79,7 @@ func (c *commandServer) SubscribeAgentEvents(in *pb.SubscribeAgentEventsRequest,
 		Commands:                 in.GetCommands(),
 		IncludeUnmatchedMessages: in.GetIncludeUnmatchedMessages(),
 		IncludeCardActions:       in.GetIncludeCardActions(),
+		IncludeMessageReactions:  in.GetIncludeMessageReactions(),
 		AllowedApps:              allowedApps,
 		AllowedAppsConfigured:    allowedAppsConfigured,
 	})
@@ -202,12 +203,19 @@ func agentEventToProto(event service.AgentEvent) *pb.SubscribeAgentEventsRespons
 	if event.Message != nil {
 		out.Payload = &pb.InboundAgentEvent_Message{Message: &pb.InboundAgentMessage{
 			Text: event.Message.Text, Command: event.Message.Command, CommandText: event.Message.CommandText,
+			ReplyToMessageRef: event.Message.ReplyToMessageRef, ConversationTitle: event.Message.ConversationTitle,
 		}}
 	} else if event.CardAction != nil {
 		out.Payload = &pb.InboundAgentEvent_CardAction{CardAction: &pb.InboundCardAction{
 			ResponseId:  event.CardAction.ResponseID,
 			ActionId:    event.CardAction.ActionID,
 			PayloadJson: event.CardAction.PayloadJSON,
+		}}
+	} else if event.MessageReaction != nil {
+		out.Payload = &pb.InboundAgentEvent_MessageReaction{MessageReaction: &pb.InboundMessageReaction{
+			MessageRef:   event.MessageReaction.MessageRef,
+			ReactionType: event.MessageReaction.ReactionType,
+			Operation:    messageReactionOperationToProto(event.MessageReaction.Operation),
 		}}
 	}
 	return &pb.SubscribeAgentEventsResponse{Event: out}
@@ -263,6 +271,18 @@ func agentReceiptToProto(in service.AgentResponseReceipt) *pb.AgentResponseRecei
 		Revision:   in.Revision,
 		Phase:      agentPhaseToProto(in.Phase),
 		Duplicate:  in.Duplicate,
+		MessageRef: in.MessageRef,
+	}
+}
+
+func messageReactionOperationToProto(in service.MessageReactionOperation) pb.MessageReactionOperation {
+	switch in {
+	case service.MessageReactionAdded:
+		return pb.MessageReactionOperation_MESSAGE_REACTION_OPERATION_ADDED
+	case service.MessageReactionRemoved:
+		return pb.MessageReactionOperation_MESSAGE_REACTION_OPERATION_REMOVED
+	default:
+		return pb.MessageReactionOperation_MESSAGE_REACTION_OPERATION_UNSPECIFIED
 	}
 }
 

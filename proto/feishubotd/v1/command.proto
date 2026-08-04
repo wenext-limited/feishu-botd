@@ -91,7 +91,10 @@ message SubscribeAgentEventsRequest {
   repeated string commands = 2;
   bool include_unmatched_messages = 3;
   bool include_card_actions = 4;
-  reserved 5 to 15;
+  // Native Feishu reactions attached to agent-authored messages. This is a
+  // separate permission and event family from interactive card actions.
+  bool include_message_reactions = 5;
+  reserved 6 to 15;
 }
 
 message SubscribeAgentEventsResponse {
@@ -108,14 +111,22 @@ message InboundAgentEvent {
   oneof payload {
     InboundAgentMessage message = 10;
     InboundCardAction card_action = 11;
+    InboundMessageReaction message_reaction = 12;
   }
-  reserved 6 to 9, 12 to 31;
+  reserved 6 to 9, 13 to 31;
 }
 
 message InboundAgentMessage {
   string text = 1; // complete mention-stripped prompt; newlines are preserved
   string command = 2; // optional normalized first word
   string command_text = 3; // optional remainder for command-style agents
+  // Opaque identity of the exact bot-authored message this prompt replies to.
+  // Empty means this is not an explicit reply. Raw Feishu parent ids stay in
+  // botd.
+  string reply_to_message_ref = 4;
+  // Current group title as untrusted, provider-safe context. Empty for direct
+  // messages and when the fail-soft chat lookup is unavailable.
+  string conversation_title = 5;
 }
 
 message InboundCardAction {
@@ -124,6 +135,20 @@ message InboundCardAction {
   // Normalized JSON object containing typed Feishu action and form values.
   // Callback tokens, card ids, message ids, and raw chat ids are omitted.
   string payload_json = 3;
+}
+
+// A native emoji reaction attached below an agent-authored Feishu message.
+// delivery_id and sender_id live on the enclosing InboundAgentEvent.
+message InboundMessageReaction {
+  string message_ref = 1;
+  string reaction_type = 2;
+  MessageReactionOperation operation = 3;
+}
+
+enum MessageReactionOperation {
+  MESSAGE_REACTION_OPERATION_UNSPECIFIED = 0;
+  MESSAGE_REACTION_OPERATION_ADDED = 1;
+  MESSAGE_REACTION_OPERATION_REMOVED = 2;
 }
 
 message AgentResponseContent {
@@ -222,6 +247,9 @@ message AgentResponseReceipt {
   uint64 revision = 2;
   AgentResponsePhase phase = 3;
   bool duplicate = 4;
+  // Stable provider-safe identity of the authored Feishu message. It is not an
+  // update capability and cannot be used to address arbitrary platform ids.
+  string message_ref = 5;
 }
 
 message StartAgentResponseResponse {

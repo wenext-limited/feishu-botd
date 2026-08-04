@@ -268,6 +268,21 @@ func TestAgentRPCsRequireAuthenticatedProviderOnUnix(t *testing.T) {
 		t.Fatalf("out-of-scope action subscription code = %v, want PermissionDenied", status.Code(err))
 	}
 
+	reactionScopeCtx, cancelReactionScope := context.WithTimeout(bearerContext(fixtureAgentToken), time.Second)
+	defer cancelReactionScope()
+	outOfScopeReactions, err := client.SubscribeAgentEvents(reactionScopeCtx, &pb.SubscribeAgentEventsRequest{
+		Provider: "agent-a", IncludeUnmatchedMessages: true, IncludeMessageReactions: true,
+	})
+	if err == nil {
+		_, err = outOfScopeReactions.Recv()
+	}
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("out-of-scope reaction subscription code = %v, want PermissionDenied", status.Code(err))
+	}
+	if detail := botdDetail(t, err); detail.GetCode() != "provider_scope_denied" {
+		t.Fatalf("out-of-scope reaction subscription detail = %#v", detail)
+	}
+
 	streamCtx, cancel := context.WithTimeout(bearerContext(fixtureAgentToken), 2*time.Second)
 	defer cancel()
 	stream, err := client.SubscribeAgentEvents(streamCtx, &pb.SubscribeAgentEventsRequest{

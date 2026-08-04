@@ -30,6 +30,7 @@ type CommandReceiverConfig struct {
 	BotUserID                   string
 	BotUnionID                  string
 	BotNames                    []string
+	ChatTitleLookup             ChatTitleLookup
 
 	// ConnectionStateChanged receives only a public app alias and a fixed state.
 	// Raw SDK errors can contain credentials, connection URLs, or tenant data and
@@ -38,15 +39,16 @@ type CommandReceiverConfig struct {
 }
 
 type InboundCommand struct {
-	AppAlias       string `json:"-"`
-	DeliveryID     string
-	Command        string
-	Text           string
-	Prompt         string
-	ChatAlias      string
-	ConversationID string
-	SenderID       string
-	Metadata       map[string]string
+	AppAlias          string `json:"-"`
+	DeliveryID        string
+	Command           string
+	Text              string
+	Prompt            string
+	ChatAlias         string
+	ConversationID    string
+	SenderID          string
+	Metadata          map[string]string
+	ConversationTitle string
 
 	// ChatID is the raw Feishu reply route. It is daemon-private and must never
 	// cross the public command/provider boundary.
@@ -83,6 +85,27 @@ type InboundCardAction struct {
 
 type CardActionHandler func(context.Context, InboundCardAction) error
 
+type MessageReactionOperation int
+
+const (
+	MessageReactionUnspecified MessageReactionOperation = iota
+	MessageReactionAdded
+	MessageReactionRemoved
+)
+
+// InboundMessageReaction is a provider-safe native reaction. MessageRef and
+// DeliveryID are opaque digests; no raw Feishu routing identifier appears.
+type InboundMessageReaction struct {
+	AppAlias     string
+	DeliveryID   string
+	MessageRef   string
+	SenderID     string
+	ReactionType string
+	Operation    MessageReactionOperation
+}
+
+type MessageReactionHandler func(context.Context, InboundMessageReaction) error
+
 var errCommandReceiverUnavailable = errors.New("feishu command receiver unavailable")
 
 // ConnectionState is the privacy-safe lifecycle state of one app's long
@@ -106,9 +129,13 @@ type CommandReceiver struct {
 	client      *larkws.Client
 	chatAliases map[string]string
 	botNames    map[string]struct{}
+	titleCache  *chatTitleCache
 
 	actionMu      sync.RWMutex
 	actionHandler CardActionHandler
+
+	reactionMu      sync.RWMutex
+	reactionHandler MessageReactionHandler
 
 	stateMu      sync.RWMutex
 	state        ConnectionState
@@ -127,12 +154,18 @@ func NewCommandReceiver(cfg CommandReceiverConfig, handler CommandHandler, logge
 		handler:      handler,
 		chatAliases:  uniqueChatAliases(cfg.Channels),
 		botNames:     normalizedNameSet(cfg.BotNames),
+		titleCache:   newChatTitleCache(cfg.ChatTitleLookup),
 		state:        ConnectionStateDisconnected,
 		initialReady: make(chan struct{}),
 	}
+	if r.titleCache.lookup == nil {
+		r.titleCache.lookup = newSDKChatTitleLookup(cfg.AppID, cfg.AppSecret, logger)
+	}
 	d := dispatcher.NewEventDispatcher("", "").
 		OnP2MessageReceiveV1(r.handleMessage).
-		OnP2CardActionTrigger(r.handleCardAction)
+		OnP2CardActionTrigger(r.handleCardAction).
+		OnP2MessageReactionCreatedV1(r.handleReactionCreated).
+		OnP2MessageReactionDeletedV1(r.handleReactionDeleted)
 	// The dispatcher owns a logger independently from the WebSocket client.
 	// Its SDK default logs complete event headers and bodies, so it must use
 	// the same argument-discarding logger before it handles any event.
@@ -168,6 +201,14 @@ func (r *CommandReceiver) SetCardActionHandler(handler CardActionHandler) {
 	r.actionMu.Lock()
 	defer r.actionMu.Unlock()
 	r.actionHandler = handler
+}
+
+// SetMessageReactionHandler installs the daemon-local sink for native message
+// reactions. Created and deleted events share this one normalized path.
+func (r *CommandReceiver) SetMessageReactionHandler(handler MessageReactionHandler) {
+	r.reactionMu.Lock()
+	defer r.reactionMu.Unlock()
+	r.reactionHandler = handler
 }
 
 func (r *CommandReceiver) Start(ctx context.Context) error {
@@ -228,6 +269,18 @@ func (r *CommandReceiver) handleMessage(ctx context.Context, event *larkim.P2Mes
 	if r.handler == nil {
 		return nil
 	}
+	chatType := cmd.Metadata["chat_type"]
+	if chatType == "group" || chatType == "topic_group" {
+		title, err := r.titleCache.title(ctx, cmd.ChatID)
+		if err != nil {
+			r.logger.Warn("chat title lookup failed",
+				"operation", "chat_title",
+				"error_class", receiverHandlerErrorClass(err),
+			)
+		} else {
+			cmd.ConversationTitle = title
+		}
+	}
 	if err := r.handler(ctx, cmd); err != nil {
 		r.logger.Warn("command handler failed",
 			"operation", "command",
@@ -235,6 +288,109 @@ func (r *CommandReceiver) handleMessage(ctx context.Context, event *larkim.P2Mes
 		)
 	}
 	return nil
+}
+
+func (r *CommandReceiver) handleReactionCreated(ctx context.Context, event *larkim.P2MessageReactionCreatedV1) error {
+	reaction, ok := r.MessageReactionFromCreatedEvent(event)
+	if !ok {
+		return nil
+	}
+	return r.dispatchReaction(ctx, reaction)
+}
+
+func (r *CommandReceiver) handleReactionDeleted(ctx context.Context, event *larkim.P2MessageReactionDeletedV1) error {
+	reaction, ok := r.MessageReactionFromDeletedEvent(event)
+	if !ok {
+		return nil
+	}
+	return r.dispatchReaction(ctx, reaction)
+}
+
+func (r *CommandReceiver) dispatchReaction(ctx context.Context, reaction InboundMessageReaction) error {
+	r.reactionMu.RLock()
+	handler := r.reactionHandler
+	r.reactionMu.RUnlock()
+	if handler == nil {
+		return nil
+	}
+	if err := handler(ctx, reaction); err != nil {
+		r.logger.Warn("message reaction handler failed",
+			"operation", "message_reaction",
+			"error_class", receiverHandlerErrorClass(err),
+		)
+		return errCommandReceiverUnavailable
+	}
+	return nil
+}
+
+// MessageReactionFromCreatedEvent normalizes a native reaction-created event.
+func (r *CommandReceiver) MessageReactionFromCreatedEvent(event *larkim.P2MessageReactionCreatedV1) (InboundMessageReaction, bool) {
+	if event == nil || event.Event == nil {
+		return InboundMessageReaction{}, false
+	}
+	return r.messageReaction(event.EventV2Base, event.Event.MessageId, event.Event.ReactionType, event.Event.UserId, MessageReactionAdded)
+}
+
+// MessageReactionFromDeletedEvent normalizes a native reaction-deleted event.
+func (r *CommandReceiver) MessageReactionFromDeletedEvent(event *larkim.P2MessageReactionDeletedV1) (InboundMessageReaction, bool) {
+	if event == nil || event.Event == nil {
+		return InboundMessageReaction{}, false
+	}
+	return r.messageReaction(event.EventV2Base, event.Event.MessageId, event.Event.ReactionType, event.Event.UserId, MessageReactionRemoved)
+}
+
+func (r *CommandReceiver) messageReaction(
+	base *larkevent.EventV2Base,
+	messageID *string,
+	emoji *larkim.Emoji,
+	userID *larkim.UserId,
+	operation MessageReactionOperation,
+) (InboundMessageReaction, bool) {
+	eventID := ""
+	if base != nil && base.Header != nil {
+		eventID = strings.TrimSpace(base.Header.EventID)
+	}
+	reactionType := ""
+	if emoji != nil {
+		reactionType = strings.TrimSpace(deref(emoji.EmojiType))
+	}
+	if reactionType != "THUMBSUP" && reactionType != "ThumbsDown" {
+		return InboundMessageReaction{}, false
+	}
+	sender := reactionUserID(userID)
+	messageRef := MessageRefForApp(r.cfg.AppAlias, deref(messageID))
+	deliveryID := reactionDeliveryIDForApp(r.cfg.AppAlias, eventID)
+	if sender == "" || messageRef == "" || deliveryID == "" {
+		return InboundMessageReaction{}, false
+	}
+	return InboundMessageReaction{
+		AppAlias:     r.cfg.AppAlias,
+		DeliveryID:   deliveryID,
+		MessageRef:   messageRef,
+		SenderID:     sender,
+		ReactionType: reactionType,
+		Operation:    operation,
+	}, true
+}
+
+func reactionUserID(id *larkim.UserId) string {
+	if id == nil {
+		return ""
+	}
+	for _, candidate := range []*string{id.OpenId, id.UserId, id.UnionId} {
+		if value := strings.TrimSpace(deref(candidate)); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func reactionDeliveryIDForApp(appAlias, eventID string) string {
+	return opaqueDeliveryID(
+		"delivery_reaction_",
+		"feishu-botd/message-reaction-delivery/v1\x00"+effectiveAppAlias(appAlias)+"\x00",
+		eventID,
+	)
 }
 
 // handleCardAction always acknowledges the Feishu callback. Provider work is

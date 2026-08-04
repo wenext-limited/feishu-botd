@@ -38,30 +38,48 @@ type AgentSubscribeOptions struct {
 	Commands                 []string
 	IncludeUnmatchedMessages bool
 	IncludeCardActions       bool
+	IncludeMessageReactions  bool
 	AllowedApps              []string
 	AllowedAppsConfigured    bool
 }
 
 type AgentEvent struct {
-	DeliveryID     string
-	ConversationID string
-	ChatAlias      string
-	SenderID       string
-	Metadata       map[string]string
-	Message        *AgentMessage
-	CardAction     *AgentCardAction
+	DeliveryID      string
+	ConversationID  string
+	ChatAlias       string
+	SenderID        string
+	Metadata        map[string]string
+	Message         *AgentMessage
+	CardAction      *AgentCardAction
+	MessageReaction *AgentMessageReaction
 }
 
 type AgentMessage struct {
-	Text        string
-	Command     string
-	CommandText string
+	Text              string
+	Command           string
+	CommandText       string
+	ReplyToMessageRef string
+	ConversationTitle string
 }
 
 type AgentCardAction struct {
 	ResponseID  string
 	ActionID    string
 	PayloadJSON string
+}
+
+type MessageReactionOperation int
+
+const (
+	MessageReactionUnspecified MessageReactionOperation = iota
+	MessageReactionAdded
+	MessageReactionRemoved
+)
+
+type AgentMessageReaction struct {
+	MessageRef   string
+	ReactionType string
+	Operation    MessageReactionOperation
 }
 
 type AgentSubscription struct {
@@ -134,6 +152,7 @@ type AgentResponseReceipt struct {
 	Revision   uint64
 	Phase      AgentResponsePhase
 	Duplicate  bool
+	MessageRef string
 }
 
 type StartAgentResponseInput struct {
@@ -175,6 +194,18 @@ type AgentCardActionInput struct {
 	ActionID          string
 	PayloadJSON       string
 	ActionPayloadJSON string `json:"-"`
+}
+
+// AgentMessageReactionInput is the provider-safe reaction handoff. Ownership
+// has already been reduced to MessageRef, so this type never accepts a raw
+// Feishu message id.
+type AgentMessageReactionInput struct {
+	AppAlias     string
+	DeliveryID   string
+	MessageRef   string
+	SenderID     string
+	ReactionType string
+	Operation    MessageReactionOperation
 }
 
 // DispatchInboundCardAction normalizes the SDK callback into the provider-safe
@@ -245,6 +276,7 @@ type agentBroker struct {
 	conversations        map[string]*agentConversationRoute
 	seenMessages         map[string]time.Time
 	seenActions          map[appStateKey]time.Time
+	seenReactions        map[appStateKey]time.Time
 }
 
 type agentSubscriber struct {
@@ -255,6 +287,7 @@ type agentSubscriber struct {
 	allowedAppsConfigured    bool
 	includeUnmatchedMessages bool
 	includeCardActions       bool
+	includeMessageReactions  bool
 	ch                       chan AgentEvent
 }
 
@@ -335,6 +368,7 @@ type agentResponse struct {
 	chatAlias      string
 	cardID         string
 	messageID      string
+	messageRef     string
 	actionDigests  map[string]string
 	revision       uint64
 	phase          AgentResponsePhase
@@ -369,6 +403,7 @@ func newAgentBroker(ttl time.Duration) *agentBroker {
 		conversations:        make(map[string]*agentConversationRoute),
 		seenMessages:         make(map[string]time.Time),
 		seenActions:          make(map[appStateKey]time.Time),
+		seenReactions:        make(map[appStateKey]time.Time),
 	}
 }
 
@@ -405,7 +440,7 @@ func (b *agentBroker) subscribe(in AgentSubscribeOptions) (*agentSubscriber, *no
 		}
 		commands[command] = struct{}{}
 	}
-	if len(commands) == 0 && !in.IncludeUnmatchedMessages && !in.IncludeCardActions {
+	if len(commands) == 0 && !in.IncludeUnmatchedMessages && !in.IncludeCardActions && !in.IncludeMessageReactions {
 		return nil, notify.BadRequest("missing_subscription", "at least one agent event kind is required")
 	}
 
@@ -420,6 +455,7 @@ func (b *agentBroker) subscribe(in AgentSubscribeOptions) (*agentSubscriber, *no
 		allowedAppsConfigured:    in.AllowedAppsConfigured,
 		includeUnmatchedMessages: in.IncludeUnmatchedMessages,
 		includeCardActions:       in.IncludeCardActions,
+		includeMessageReactions:  in.IncludeMessageReactions,
 		ch:                       make(chan AgentEvent, agentSubscriptionBuffer),
 	}
 	b.subscribers[sub.id] = sub
@@ -488,9 +524,11 @@ func (b *agentBroker) dispatchMessage(in CommandInput) (delivered int, handled b
 		SenderID:       in.SenderID,
 		Metadata:       agentPublicMetadata(in.Metadata, in.AppAlias),
 		Message: &AgentMessage{
-			Text:        in.Prompt,
-			Command:     in.Command,
-			CommandText: in.Text,
+			Text:              in.Prompt,
+			Command:           in.Command,
+			CommandText:       in.Text,
+			ReplyToMessageRef: feishu.MessageRefForApp(in.AppAlias, in.Metadata["parent_id"]),
+			ConversationTitle: in.ConversationTitle,
 		},
 	}
 	allowed := make(map[string]struct{})
@@ -578,6 +616,9 @@ func (s *Service) StartAgentResponse(ctx context.Context, in StartAgentResponseI
 			delivery.response.mu.Lock()
 			receipt := receiptFor(delivery.response, true)
 			delivery.response.mu.Unlock()
+			if apiErr := s.persistAgentOwner(delivery.response); apiErr != nil {
+				return AgentResponseReceipt{}, apiErr
+			}
 			return receipt, nil
 		}
 		if delivery.state == agentDeliveryStarting {
@@ -669,6 +710,10 @@ func (s *Service) StartAgentResponse(ctx context.Context, in StartAgentResponseI
 		delivery.messageID = messageID
 	}
 
+	messageRef := feishu.MessageRefForApp(delivery.appAlias, delivery.messageID)
+	if messageRef == "" {
+		return AgentResponseReceipt{}, notify.NewAPIError(500, "internal", "could not derive response message reference", true)
+	}
 	response := &agentResponse{
 		responseID:     delivery.responseID,
 		provider:       provider,
@@ -678,6 +723,7 @@ func (s *Service) StartAgentResponse(ctx context.Context, in StartAgentResponseI
 		chatAlias:      delivery.input.ChatAlias,
 		cardID:         delivery.cardID,
 		messageID:      delivery.messageID,
+		messageRef:     messageRef,
 		actionDigests:  cloneStringMap(delivery.actionDigests),
 		revision:       1,
 		phase:          AgentResponsePhaseStreaming,
@@ -693,7 +739,20 @@ func (s *Service) StartAgentResponse(ctx context.Context, in StartAgentResponseI
 	b.responses[response.responseID] = response
 	b.responsesByMessageID[newAppStateKey(response.appAlias, response.messageID)] = response
 	b.mu.Unlock()
+	if apiErr := s.persistAgentOwner(response); apiErr != nil {
+		return AgentResponseReceipt{}, apiErr
+	}
 	return receiptFor(response, false), nil
+}
+
+func (s *Service) persistAgentOwner(response *agentResponse) *notify.APIError {
+	if s.agentOwners == nil {
+		return nil
+	}
+	if err := s.agentOwners.Put(response.messageRef, response.provider, time.Now()); err != nil {
+		return notify.NewAPIError(500, "ownership_store_unavailable", "could not persist response ownership", true)
+	}
+	return nil
 }
 
 func (s *Service) UpdateAgentResponse(ctx context.Context, in UpdateAgentResponseInput) (AgentResponseReceipt, *notify.APIError) {
@@ -1319,6 +1378,80 @@ func (s *Service) DispatchAgentCardAction(ctx context.Context, in AgentCardActio
 	return s.agentBroker.dispatchAction(in)
 }
 
+// DispatchAgentMessageReaction routes one native reaction only to the provider
+// that authored the target message. Unknown ownership is never broadcast.
+func (s *Service) DispatchAgentMessageReaction(ctx context.Context, in AgentMessageReactionInput) *notify.APIError {
+	_ = ctx
+	in.AppAlias = strings.TrimSpace(in.AppAlias)
+	in.DeliveryID = strings.TrimSpace(in.DeliveryID)
+	in.MessageRef = strings.TrimSpace(in.MessageRef)
+	in.SenderID = strings.TrimSpace(in.SenderID)
+	in.ReactionType = strings.TrimSpace(in.ReactionType)
+	if in.DeliveryID == "" || in.MessageRef == "" {
+		return notify.BadRequest("missing_reaction_identity", "reaction delivery and message reference are required")
+	}
+	if in.SenderID == "" {
+		return notify.BadRequest("missing_reaction_actor", "reaction actor identity is required")
+	}
+	if in.ReactionType == "" || in.Operation == MessageReactionUnspecified {
+		return notify.BadRequest("missing_reaction", "reaction type and operation are required")
+	}
+	if len(in.DeliveryID) > 160 || len(in.MessageRef) > 160 || len(in.SenderID) > 160 || len(in.ReactionType) > 64 {
+		return notify.BadRequest("field_too_large", "one or more fields are too large")
+	}
+	if s.agentOwners == nil {
+		return nil
+	}
+	owner, ok, err := s.agentOwners.Lookup(in.MessageRef, time.Now())
+	if err != nil {
+		return notify.NewAPIError(500, "ownership_store_unavailable", "could not resolve response ownership", true)
+	}
+	if !ok || !s.appAllowed(owner.Provider, in.AppAlias) {
+		return nil
+	}
+	return s.agentBroker.dispatchReaction(owner.Provider, in)
+}
+
+func (b *agentBroker) dispatchReaction(provider string, in AgentMessageReactionInput) *notify.APIError {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	now := time.Now()
+	b.pruneLocked(now)
+	reactionKey := newAppStateKey(in.AppAlias, in.DeliveryID)
+	if _, duplicate := b.seenReactions[reactionKey]; duplicate {
+		return nil
+	}
+	var target *agentSubscriber
+	for _, sub := range b.subscribers {
+		if sub.provider != provider || !sub.includeMessageReactions || !sub.allowsApp(in.AppAlias) {
+			continue
+		}
+		if target == nil || sub.id < target.id {
+			target = sub
+		}
+	}
+	if target == nil {
+		return nil
+	}
+	event := AgentEvent{
+		DeliveryID: in.DeliveryID,
+		SenderID:   in.SenderID,
+		Metadata:   appAliasMetadata(in.AppAlias),
+		MessageReaction: &AgentMessageReaction{
+			MessageRef:   in.MessageRef,
+			ReactionType: in.ReactionType,
+			Operation:    in.Operation,
+		},
+	}
+	select {
+	case target.ch <- event:
+		b.seenReactions[reactionKey] = now.Add(b.ttl)
+		return nil
+	default:
+		return notify.NewAPIError(429, "agent_queue_full", "agent provider queue is full", true)
+	}
+}
+
 func (b *agentBroker) dispatchAction(in AgentCardActionInput) *notify.APIError {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -1387,6 +1520,11 @@ func (b *agentBroker) pruneLocked(now time.Time) {
 			delete(b.seenActions, deliveryID)
 		}
 	}
+	for deliveryID, expiresAt := range b.seenReactions {
+		if now.After(expiresAt) {
+			delete(b.seenReactions, deliveryID)
+		}
+	}
 	for messageID, expiresAt := range b.seenMessages {
 		if now.After(expiresAt) {
 			delete(b.seenMessages, messageID)
@@ -1450,11 +1588,11 @@ func phaseForOutcome(outcome AgentResponseOutcome) AgentResponsePhase {
 }
 
 func receiptFor(response *agentResponse, duplicate bool) AgentResponseReceipt {
-	return AgentResponseReceipt{ResponseID: response.responseID, Revision: response.revision, Phase: response.phase, Duplicate: duplicate}
+	return AgentResponseReceipt{ResponseID: response.responseID, Revision: response.revision, Phase: response.phase, Duplicate: duplicate, MessageRef: response.messageRef}
 }
 
 func operationReceipt(response *agentResponse, op *agentOperation, duplicate bool) AgentResponseReceipt {
-	return AgentResponseReceipt{ResponseID: response.responseID, Revision: op.revision, Phase: op.phase, Duplicate: duplicate}
+	return AgentResponseReceipt{ResponseID: response.responseID, Revision: op.revision, Phase: op.phase, Duplicate: duplicate, MessageRef: response.messageRef}
 }
 
 func randomOpaqueID(prefix string) (string, error) {
