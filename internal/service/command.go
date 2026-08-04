@@ -9,7 +9,12 @@ import (
 	"feishu-botd/internal/notify"
 )
 
-const commandSubscriptionBuffer = 32
+const (
+	commandSubscriptionBuffer = 32
+	maxCommandBytes           = 64
+	maxCommandTextBytes       = 8000
+	maxInboundPromptBytes     = 32 * 1024
+)
 
 // CommandInput is the transport-neutral form of an inbound bot command.
 // ChatAlias is either a configured alias or an opaque alias generated for an
@@ -206,9 +211,6 @@ func (s *Service) DispatchCommand(ctx context.Context, in CommandInput) (int, *n
 	if in.DeliveryID == "" {
 		return 0, notify.BadRequest("missing_delivery_id", "delivery_id is required")
 	}
-	if in.Command == "" {
-		return 0, notify.BadRequest("missing_command", "command is required")
-	}
 	if in.ChatAlias == "" {
 		return 0, notify.BadRequest("missing_channel", "chat_alias is required")
 	}
@@ -235,12 +237,17 @@ func (s *Service) DispatchCommand(ctx context.Context, in CommandInput) (int, *n
 	if in.Prompt == "" {
 		in.Prompt = strings.TrimSpace(strings.Join([]string{in.Command, in.Text}, " "))
 	}
+	if in.Prompt == "" {
+		return 0, notify.BadRequest("missing_command", "command or prompt is required")
+	}
 	if in.ConversationID == "" {
 		in.ConversationID = fallbackConversationID(in)
 	}
-	if len(in.DeliveryID) > 160 || len(in.Command) > 64 || len(in.Text) > 8000 || len(in.Prompt) > 32*1024 || len(in.ConversationID) > 160 || len(in.SenderID) > 160 || len(in.ChatID) > 160 || len(in.Metadata["message_id"]) > 160 {
+	if len(in.DeliveryID) > 160 || len(in.Prompt) > maxInboundPromptBytes || len(in.ConversationID) > 160 || len(in.SenderID) > 160 || len(in.ChatID) > 160 || len(in.Metadata["message_id"]) > 160 {
 		return 0, notify.BadRequest("field_too_large", "one or more fields are too large")
 	}
+	projectionDropped := false
+	in.Command, in.Text, projectionDropped = boundedCommandProjection(in.Command, in.Text)
 
 	// Direct messages and wildcard groups are agent-only. This preserves the
 	// configured-channel allowlists of legacy command providers and local script
@@ -250,6 +257,7 @@ func (s *Service) DispatchCommand(ctx context.Context, in CommandInput) (int, *n
 		"correlation", opaqueLogCorrelationID("command", in.DeliveryID),
 		"legacy_subscribers", legacyDelivered,
 		"agent_subscribers", agentDelivered,
+		"command_projection_dropped", projectionDropped,
 	)
 	return legacyDelivered, nil
 }
@@ -382,7 +390,7 @@ func (b *commandBroker) subscribe(in CommandSubscribeOptions, internal bool) (*c
 		if command == "" {
 			continue
 		}
-		if len(command) > 64 {
+		if len(command) > maxCommandBytes {
 			return nil, notify.BadRequest("field_too_large", "one or more fields are too large")
 		}
 		commandSet[command] = struct{}{}
@@ -513,6 +521,20 @@ func normalizeCommand(command string) string {
 	command = strings.TrimSpace(command)
 	command = strings.TrimLeft(command, "/")
 	return strings.ToLower(command)
+}
+
+// boundedCommandProjection keeps the complete prompt authoritative. Command
+// and Text are a compatibility view for exact legacy/agent command matching;
+// if that derived view cannot fit its wire limits, omit it atomically so an
+// otherwise valid conversational prompt can still reach unmatched agents.
+func boundedCommandProjection(command, text string) (string, string, bool) {
+	if command == "" {
+		return "", "", text != ""
+	}
+	if len(command) > maxCommandBytes || len(text) > maxCommandTextBytes {
+		return "", "", true
+	}
+	return command, text, false
 }
 
 func cloneCommandInput(in CommandInput) CommandInput {

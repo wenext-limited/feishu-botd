@@ -249,12 +249,15 @@ agent, so deployments with corpus or user-level authorization requirements
 should keep explicit channel aliases instead.
 
 `InboundAgentMessage.text` is the complete mention-stripped prompt and preserves
-newlines. `command` is the normalized first word and `command_text` is its
-remainder. `conversation_id` is a stable, opaque hash of the chat and optional
-thread; raw routing IDs are retained only inside the daemon. The reserved
-`default` app keeps the pre-multi-app conversation-id derivation byte-for-byte
-so durable provider state continues to resolve. Only additional apps are
-namespaced into the derivation.
+newlines. `command` is the optional normalized first word and `command_text` is
+its optional remainder. This derived view is emitted only when the command fits
+64 bytes and the remainder fits 8,000 bytes; otherwise both fields are empty and
+the complete prompt still routes through `include_unmatched_messages` up to its
+independent 32 KiB limit. `conversation_id` is a stable, opaque hash of the chat
+and optional thread; raw routing IDs are retained only inside the daemon. The
+reserved `default` app keeps the pre-multi-app conversation-id derivation
+byte-for-byte so durable provider state continues to resolve. Only additional
+apps are namespaced into the derivation.
 
 For an explicit Feishu reply, `reply_to_message_ref` is the app-scoped opaque
 identity of the exact parent message. It is empty for a non-reply. Group

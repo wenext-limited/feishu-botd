@@ -435,7 +435,7 @@ func (b *agentBroker) subscribe(in AgentSubscribeOptions) (*agentSubscriber, *no
 		if command == "" {
 			continue
 		}
-		if len(command) > 64 {
+		if len(command) > maxCommandBytes {
 			return nil, notify.BadRequest("field_too_large", "one or more fields are too large")
 		}
 		commands[command] = struct{}{}

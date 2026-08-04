@@ -144,8 +144,9 @@ reserved `default` app). Users invoke commands as
 `@<bot-name> <COMMAND> [args...]`. The daemon opens one Feishu long connection
 per configured app, handles `im.message.receive_v1`, accepts text messages from
 globally unique configured channel aliases, verifies that app's configured
-bot-name or bot-id mention, strips Feishu's mention token, and dispatches the
-first word as `command` with the rest as `text`.
+bot-name or bot-id mention, and strips Feishu's mention token. For exact command
+routing it derives the first word as `command` with the rest as `text`; the
+complete prompt remains authoritative for conversational routing.
 
 `InboundCommand.chat_alias` is always a configured alias; raw Feishu chat ids are
 never exposed. Its metadata is limited to `chat_type` and `message_type`; raw
@@ -228,7 +229,11 @@ through a stable opaque alias. These unconfigured-group routes are agent-only
 and do not enter the outbound channel directory, legacy command stream, or
 local script executor. `InboundAgentMessage.text`
 contains the complete mention-stripped prompt, while `command` and
-`command_text` expose the optional first-word view. `conversation_id` is an
+`command_text` expose an optional bounded first-word view. The daemon omits both
+view fields when the command exceeds 64 bytes or its remainder exceeds 8,000
+bytes; the complete prompt still reaches unmatched agents up to its independent
+32 KiB limit. This prevents language-specific word boundaries from rejecting a
+valid conversational message. `conversation_id` is an
 opaque hash of the raw chat and optional thread. The `default` app preserves
 the historical derivation byte-for-byte; only additional apps are namespaced.
 Agent-event metadata is limited to `chat_type`, `message_type`, and the trusted

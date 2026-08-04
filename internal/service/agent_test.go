@@ -186,6 +186,130 @@ func TestAgentUnmatchedMessageDeliversCompletePrompt(t *testing.T) {
 	}
 }
 
+func TestAgentConversationalPromptKeepsFullTextWhenCommandViewIsUnusable(t *testing.T) {
+	longCJK := "lama安卓客户端，用户没有登录，能发起反馈吗？反馈请求的是后端user/feedback这个接口。有个用户点击反馈后提示登录信息不正确"
+	mixedPrompt := "lama安卓客户端，用户反馈的时候会提示“登录信息不正确，请再次登录（معلومات تسجيل الدخول غير صالحة, يرجي تسجيل الدخول مره أخرى）\"导致用户反馈的请求无法发送，这个提示是什么时候加的你知道吗"
+	mixedFields := strings.Fields(mixedPrompt)
+	longRemainder := strings.Repeat("x", 8001)
+	boundaryCommand := strings.Repeat("c", 64)
+	boundaryRemainder := strings.Repeat("r", 8000)
+
+	tests := []struct {
+		name        string
+		command     string
+		commandText string
+		prompt      string
+		wantCommand string
+		wantText    string
+	}{
+		{
+			name:    "reported CJK prompt without spaces",
+			command: longCJK,
+			prompt:  longCJK,
+		},
+		{
+			name:        "mixed language first segment",
+			command:     mixedFields[0],
+			commandText: strings.Join(mixedFields[1:], " "),
+			prompt:      mixedPrompt,
+		},
+		{
+			name:        "oversized command remainder",
+			command:     "ask",
+			commandText: longRemainder,
+			prompt:      "ask " + longRemainder,
+		},
+		{
+			name:   "absent optional command view",
+			prompt: "直接把这条消息交给会话代理",
+		},
+		{
+			name:        "command boundary is retained",
+			command:     boundaryCommand,
+			prompt:      boundaryCommand,
+			wantCommand: boundaryCommand,
+		},
+		{
+			name:        "command remainder boundary is retained",
+			command:     "ask",
+			commandText: boundaryRemainder,
+			prompt:      "ask " + boundaryRemainder,
+			wantCommand: "ask",
+			wantText:    boundaryRemainder,
+		},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			svc := newAgentTestService(newFakeAgentBackend())
+			sub := mustSubscribeAgent(t, svc, AgentSubscribeOptions{
+				Provider:                 "chat-agent",
+				IncludeUnmatchedMessages: true,
+			})
+			mustDispatchAgentPrompt(t, svc, CommandInput{
+				DeliveryID: "evt_projection", Command: testCase.command,
+				Text: testCase.commandText, Prompt: testCase.prompt, ChatAlias: "ops",
+			})
+
+			event := receiveAgentEvent(t, sub)
+			if event.Message == nil {
+				t.Fatalf("event has no message: %#v", event)
+			}
+			if event.Message.Text != testCase.prompt {
+				t.Fatalf("full prompt = %q, want %q", event.Message.Text, testCase.prompt)
+			}
+			if event.Message.Command != testCase.wantCommand || event.Message.CommandText != testCase.wantText {
+				t.Fatalf("optional command view = %#v, want command %q and text %q", event.Message, testCase.wantCommand, testCase.wantText)
+			}
+		})
+	}
+}
+
+func TestAgentUnusableCommandViewCannotClaimAnExactRoute(t *testing.T) {
+	svc := newAgentTestService(newFakeAgentBackend())
+	legacy, apiErr := svc.SubscribeInternalCommandsForApps(context.Background(), CommandSubscribeOptions{
+		Provider: "legacy", Commands: []string{"ask"},
+	})
+	if apiErr != nil {
+		t.Fatalf("subscribe legacy command: %v", apiErr)
+	}
+	defer legacy.Close()
+	exact := mustSubscribeAgent(t, svc, AgentSubscribeOptions{
+		Provider: "exact-agent", Commands: []string{"ask"},
+	})
+	fallback := mustSubscribeAgent(t, svc, AgentSubscribeOptions{
+		Provider: "chat-agent", IncludeUnmatchedMessages: true,
+	})
+	longRemainder := strings.Repeat("x", 8001)
+	mustDispatchAgentPrompt(t, svc, CommandInput{
+		DeliveryID: "evt_unusable_exact_view", Command: "ask", Text: longRemainder,
+		Prompt: "ask " + longRemainder, ChatAlias: "ops",
+	})
+
+	event := receiveAgentEvent(t, fallback)
+	if event.Message == nil || event.Message.Text != "ask "+longRemainder || event.Message.Command != "" || event.Message.CommandText != "" {
+		t.Fatalf("fallback event = %#v", event)
+	}
+	assertNoAgentEvent(t, exact)
+	select {
+	case command := <-legacy.C:
+		t.Fatalf("unusable command view reached legacy subscriber: %#v", command)
+	case <-time.After(40 * time.Millisecond):
+	}
+}
+
+func TestAgentConversationalPromptStillEnforcesFullPromptLimit(t *testing.T) {
+	svc := newAgentTestService(newFakeAgentBackend())
+	_, apiErr := svc.DispatchCommand(context.Background(), CommandInput{
+		DeliveryID: "evt_oversized_prompt",
+		Prompt:     strings.Repeat("x", 32*1024+1),
+		ChatAlias:  "ops",
+	})
+	if apiErr == nil || apiErr.Code != "field_too_large" {
+		t.Fatalf("oversized prompt error = %v, want field_too_large", apiErr)
+	}
+}
+
 func TestAgentAcceptsAllowedUnconfiguredGroupWithoutReachingLegacyCommands(t *testing.T) {
 	backend := newFakeAgentBackend()
 	svc := newAgentTestService(backend)
