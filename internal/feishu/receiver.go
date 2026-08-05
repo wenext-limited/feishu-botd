@@ -54,8 +54,13 @@ type InboundCommand struct {
 	// cross the public command/provider boundary.
 	ChatID string `json:"-"`
 	// UnconfiguredGroup is daemon-private ingress state. It is true only when a
-	// mentioned group was accepted by the app's explicit wildcard policy.
+	// group was admitted as a candidate by the app's explicit wildcard policy;
+	// an unmentioned candidate still needs agent-parent ownership below.
 	UnconfiguredGroup bool `json:"-"`
+	// UnmentionedReply is daemon-private ingress state. It marks a group reply
+	// that had a parent message but no matching bot mention. The service must
+	// prove that the parent is agent-authored before routing this candidate.
+	UnmentionedReply bool `json:"-"`
 }
 
 type CommandHandler func(context.Context, InboundCommand) error
@@ -490,7 +495,8 @@ func (r *CommandReceiver) CommandFromEvent(event *larkim.P2MessageReceiveV1) (In
 	}
 
 	mentionKeys := r.matchingMentionKeys(msg.Mentions)
-	if chatType != "p2p" && len(mentionKeys) == 0 {
+	unmentionedReply := chatType != "p2p" && len(mentionKeys) == 0 && strings.TrimSpace(deref(msg.ParentId)) != ""
+	if chatType != "p2p" && len(mentionKeys) == 0 && !unmentionedReply {
 		return InboundCommand{}, false
 	}
 	for _, key := range mentionKeys {
@@ -533,6 +539,7 @@ func (r *CommandReceiver) CommandFromEvent(event *larkim.P2MessageReceiveV1) (In
 		ConversationID:    conversationIDForApp(r.cfg.AppAlias, chatID, messageConversationKey(msg)),
 		ChatID:            chatID,
 		UnconfiguredGroup: unconfiguredGroup,
+		UnmentionedReply:  unmentionedReply,
 		SenderID:          senderID(event.Event.Sender),
 		Metadata:          commandMetadataForApp(r.cfg.AppAlias, event, msg, chatType),
 	}, true

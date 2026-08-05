@@ -118,6 +118,7 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 					ConversationTitle: cmd.ConversationTitle,
 					ChatID:            cmd.ChatID,
 					UnconfiguredGroup: cmd.UnconfiguredGroup,
+					UnmentionedReply:  cmd.UnmentionedReply,
 				})
 				if apiErr != nil {
 					return apiErr

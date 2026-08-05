@@ -142,11 +142,12 @@ Inbound Feishu events are dispatched only for an app whose `commands.enabled`
 is true (the existing `FEISHU_BOTD_COMMANDS_ENABLED` override affects the
 reserved `default` app). Users invoke commands as
 `@<bot-name> <COMMAND> [args...]`. The daemon opens one Feishu long connection
-per configured app, handles `im.message.receive_v1`, accepts text messages from
-globally unique configured channel aliases, verifies that app's configured
-bot-name or bot-id mention, and strips Feishu's mention token. For exact command
-routing it derives the first word as `command` with the rest as `text`; the
-complete prompt remains authoritative for conversational routing.
+per configured app and handles `im.message.receive_v1`. It accepts text messages
+from globally unique configured channel aliases after either verifying that
+app's configured bot-name/bot-id mention or proving that an unmentioned reply's
+parent is owned by an agent provider. Mention tokens are stripped. For exact
+command routing it derives the first word as `command` with the rest as `text`;
+the complete prompt remains authoritative for conversational routing.
 
 `InboundCommand.chat_alias` is always a configured alias; raw Feishu chat ids are
 never exposed. Its metadata is limited to `chat_type` and `message_type`; raw
@@ -245,6 +246,12 @@ An explicit reply adds `InboundAgentMessage.reply_to_message_ref`, derived from
 the exact parent message. Group messages may add the current bounded
 `conversation_title`; lookup failure leaves it empty. Neither value contains a
 raw Feishu route, and the title must never be used as authorization.
+An unmentioned group reply is delivered only when the persisted 24-hour owner
+record identifies an app-allowed provider; it is pinned to that provider and
+cannot enter the legacy command or local-script paths. Unknown and expired
+parents are ignored. Feishu delivery of mentionless replies additionally
+requires the sensitive `im:message.group_msg` scope; `group_at_msg` only covers
+messages that mention the bot.
 
 Native reaction events contain `message_ref`, exact `reaction_type`
 (`THUMBSUP` or `ThumbsDown`), and `ADDED` or `REMOVED`. They route only to the

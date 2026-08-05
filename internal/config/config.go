@@ -171,10 +171,11 @@ func (c Config) AppAliases() []string {
 	return aliases
 }
 
-// AllowsUnconfiguredGroupChats reports whether an app accepts mentioned group
-// messages whose raw chat id has no static channel alias. This policy affects
-// inbound agent routing only; configured outbound notification routes remain
-// unchanged.
+// AllowsUnconfiguredGroupChats reports whether an app admits group-message
+// candidates whose raw chat id has no static channel alias. Mentioned messages
+// route normally; unmentioned replies still require agent-parent ownership.
+// This policy affects inbound agent routing only; configured outbound
+// notification routes remain unchanged.
 func (c Config) AllowsUnconfiguredGroupChats(appAlias string) bool {
 	appAlias = strings.TrimSpace(appAlias)
 	if appAlias == "" {

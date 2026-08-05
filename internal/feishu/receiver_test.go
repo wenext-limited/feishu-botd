@@ -40,8 +40,57 @@ func TestCommandFromEventParsesMentionedTextCommand(t *testing.T) {
 	if cmd.Metadata["message_id"] != "om_1" || cmd.Metadata["chat_type"] != "group" {
 		t.Fatalf("metadata = %#v", cmd.Metadata)
 	}
+	if cmd.UnmentionedReply {
+		t.Fatal("mentioned group message was marked as an unmentioned reply")
+	}
 	if _, leaked := cmd.Metadata["chat_id"]; leaked {
 		t.Fatalf("metadata leaked raw chat id: %#v", cmd.Metadata)
+	}
+}
+
+func TestCommandFromEventAcceptsUnmentionedGroupReplyAsPrivateCandidate(t *testing.T) {
+	r := NewCommandReceiver(CommandReceiverConfig{
+		AppAlias:  "support",
+		AppID:     "cli_test",
+		AppSecret: "secret",
+		Channels:  map[string]string{"ops": "oc_ops"},
+		BotOpenID: "ou_bot",
+	}, nil, nil)
+
+	event := messageEvent("evt_reply", "om_reply", "oc_ops", "what about retries?")
+	event.Event.Message.ParentId = ptr("om_agent_answer")
+	cmd, ok := r.CommandFromEvent(event)
+	if !ok {
+		t.Fatal("unmentioned reply to a group message was discarded before ownership lookup")
+	}
+	if !cmd.UnmentionedReply {
+		t.Fatal("unmentioned group reply did not retain its private routing marker")
+	}
+	if cmd.Metadata["parent_id"] != "om_agent_answer" {
+		t.Fatalf("parent metadata = %#v", cmd.Metadata)
+	}
+	if cmd.Prompt != "what about retries?" || cmd.ChatAlias != "ops" {
+		t.Fatalf("reply candidate = %#v", cmd)
+	}
+	body, err := json.Marshal(cmd)
+	if err != nil {
+		t.Fatalf("marshal reply candidate: %v", err)
+	}
+	if strings.Contains(string(body), "UnmentionedReply") {
+		t.Fatalf("serialized command leaked private reply routing state: %s", body)
+	}
+}
+
+func TestCommandFromEventStillRejectsUnmentionedGroupMessageWithoutParent(t *testing.T) {
+	r := NewCommandReceiver(CommandReceiverConfig{
+		AppID:     "cli_test",
+		AppSecret: "secret",
+		Channels:  map[string]string{"ops": "oc_ops"},
+		BotOpenID: "ou_bot",
+	}, nil, nil)
+
+	if _, ok := r.CommandFromEvent(messageEvent("evt_plain", "om_plain", "oc_ops", "not for the bot")); ok {
+		t.Fatal("ordinary unmentioned group message was accepted")
 	}
 }
 

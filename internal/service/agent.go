@@ -32,7 +32,8 @@ const (
 
 // AgentSubscribeOptions selects a full-fidelity agent event stream. Exact
 // command subscribers win; IncludeUnmatchedMessages is the natural chat-agent
-// fallback for P2P prompts and otherwise-unhandled group mentions.
+// fallback for P2P prompts, otherwise-unhandled group mentions, and replies
+// pinned to a message the provider authored.
 type AgentSubscribeOptions struct {
 	Provider                 string
 	Commands                 []string
@@ -474,6 +475,16 @@ func (b *agentBroker) unsubscribe(id uint64) {
 }
 
 func (b *agentBroker) dispatchMessage(in CommandInput) (delivered int, handled bool) {
+	return b.dispatchMessageForProvider(in, "")
+}
+
+// dispatchMessageToProvider preserves reply ownership: only subscriptions for
+// the provider that authored the parent message can receive this prompt.
+func (b *agentBroker) dispatchMessageToProvider(in CommandInput, provider string) (delivered int, handled bool) {
+	return b.dispatchMessageForProvider(in, strings.TrimSpace(provider))
+}
+
+func (b *agentBroker) dispatchMessageForProvider(in CommandInput, provider string) (delivered int, handled bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	now := time.Now()
@@ -498,6 +509,9 @@ func (b *agentBroker) dispatchMessage(in CommandInput) (delivered int, handled b
 	exact := make([]*agentSubscriber, 0)
 	fallback := make([]*agentSubscriber, 0)
 	for _, sub := range b.subscribers {
+		if provider != "" && sub.provider != provider {
+			continue
+		}
 		// Application authorization participates in candidate selection. A
 		// disallowed exact subscriber must not suppress an allowed unmatched
 		// subscriber for this app.

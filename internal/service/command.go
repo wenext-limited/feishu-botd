@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"feishu-botd/internal/feishu"
 	"feishu-botd/internal/notify"
 )
 
@@ -34,11 +35,15 @@ type CommandInput struct {
 	Metadata          map[string]string
 	ConversationTitle string
 
-	// ChatID and UnconfiguredGroup are daemon-private ingress routing state.
+	// ChatID, UnconfiguredGroup, and UnmentionedReply are daemon-private ingress
+	// routing state.
 	// ChatID is required for direct messages and allowed unconfigured groups;
-	// neither field is copied into a public provider stream.
+	// none of these fields is copied into a public provider stream.
 	ChatID            string `json:"-"`
 	UnconfiguredGroup bool   `json:"-"`
+	// UnmentionedReply requires an ownership lookup before any provider may see
+	// the message. It is set only for group replies without a matching bot mention.
+	UnmentionedReply bool `json:"-"`
 }
 
 // CommandResponse is a provider reply to a previously delivered command.
@@ -248,18 +253,50 @@ func (s *Service) DispatchCommand(ctx context.Context, in CommandInput) (int, *n
 	}
 	projectionDropped := false
 	in.Command, in.Text, projectionDropped = boundedCommandProjection(in.Command, in.Text)
+	replyProvider, ownedReply, apiErr := s.resolveAgentReplyOwner(in)
+	if apiErr != nil {
+		return 0, apiErr
+	}
+	if in.UnmentionedReply && !ownedReply {
+		s.logger.Info("unowned group reply ignored",
+			"correlation", opaqueLogCorrelationID("command", in.DeliveryID),
+		)
+		return 0, nil
+	}
 
 	// Direct messages and wildcard groups are agent-only. This preserves the
 	// configured-channel allowlists of legacy command providers and local script
 	// executors while allowing conversational agents to opt into broader ingress.
-	legacyDelivered, agentDelivered := s.dispatchInboundRoute(in, isDirect || isUnconfiguredGroup)
+	// A reply to an owned message is also agent-only and stays pinned to the
+	// provider that authored the parent, regardless of first-word command matches.
+	legacyDelivered, agentDelivered := s.dispatchInboundRoute(in, isDirect || isUnconfiguredGroup || ownedReply, replyProvider)
 	s.logger.Info("command dispatched",
 		"correlation", opaqueLogCorrelationID("command", in.DeliveryID),
 		"legacy_subscribers", legacyDelivered,
 		"agent_subscribers", agentDelivered,
 		"command_projection_dropped", projectionDropped,
+		"owned_reply", ownedReply,
 	)
 	return legacyDelivered, nil
+}
+
+// resolveAgentReplyOwner proves that an inbound parent is an agent-authored
+// message and returns its provider. Unknown, expired, or app-disallowed parents
+// are intentionally indistinguishable from unowned messages.
+func (s *Service) resolveAgentReplyOwner(in CommandInput) (string, bool, *notify.APIError) {
+	messageRef := feishu.MessageRefForApp(in.AppAlias, in.Metadata["parent_id"])
+	if messageRef == "" || s.agentOwners == nil {
+		return "", false, nil
+	}
+	owner, ok, err := s.agentOwners.Lookup(messageRef, time.Now())
+	if err != nil {
+		return "", false, notify.NewAPIError(500, "ownership_store_unavailable", "could not resolve response ownership", true)
+	}
+	provider := strings.TrimSpace(owner.Provider)
+	if !ok || provider == "" || !s.appAllowed(provider, in.AppAlias) {
+		return "", false, nil
+	}
+	return provider, true, nil
 }
 
 func (s *Service) acceptsUnconfiguredGroup(in CommandInput) bool {
@@ -275,7 +312,7 @@ func (s *Service) acceptsUnconfiguredGroup(in CommandInput) bool {
 	return ok
 }
 
-func (s *Service) dispatchInboundRoute(in CommandInput, agentOnly bool) (legacyDelivered, agentDelivered int) {
+func (s *Service) dispatchInboundRoute(in CommandInput, agentOnly bool, replyProvider string) (legacyDelivered, agentDelivered int) {
 	routes := s.inboundRoutes
 	routes.mu.Lock()
 	defer routes.mu.Unlock()
@@ -296,7 +333,11 @@ func (s *Service) dispatchInboundRoute(in CommandInput, agentOnly bool) (legacyD
 		legacyDelivered, handled = s.commandBroker.dispatch(in)
 	}
 	if !handled {
-		agentDelivered, handled = s.agentBroker.dispatchMessage(in)
+		if replyProvider == "" {
+			agentDelivered, handled = s.agentBroker.dispatchMessage(in)
+		} else {
+			agentDelivered, handled = s.agentBroker.dispatchMessageToProvider(in, replyProvider)
+		}
 	}
 	if handled {
 		expiresAt := now.Add(routes.ttl)
@@ -554,6 +595,7 @@ func publicCommandInput(in CommandInput) CommandInput {
 	out.AppAlias = ""
 	out.ChatID = ""
 	out.UnconfiguredGroup = false
+	out.UnmentionedReply = false
 	return out
 }
 

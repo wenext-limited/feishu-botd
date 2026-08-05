@@ -28,8 +28,11 @@ delivery does not support store apps):
 1. Add the bot capability.
 2. Grant `im:message:send_as_bot` and `cardkit:card:write`.
 3. For direct messages, grant `im:message.p2p_msg:readonly`. For group mentions,
-   grant `im:message.group_at_msg:readonly`. Broader message scopes are not
-   required for the routing implemented here.
+   grant `im:message.group_at_msg:readonly`. To let a user invoke the agent by
+   replying to one of its group messages **without mentioning it again**, also
+   grant Feishu's sensitive all-group-user-message scope
+   `im:message.group_msg`. botd still discards every unmentioned message except
+   a reply whose parent resolves to an unexpired agent-message owner.
 4. Under **Events and Callbacks**, choose long-connection delivery and subscribe
    to the `im.message.receive_v1` event.
 5. To receive button callbacks, also subscribe to the
@@ -197,8 +200,8 @@ state.
 - `commands` selects normalized first-word commands. Exact command subscribers
   win over unmatched subscribers.
 - `include_unmatched_messages` is the natural conversational mode. It receives
-  direct messages and group mentions for which there is no exact command
-  subscriber.
+  direct messages, group mentions for which there is no exact command
+  subscriber, and ownership-proven replies to agent-authored group messages.
 
 An existing legacy `Subscribe` consumer takes precedence when it successfully
 receives the same group command. Multiple providers matching the same agent
@@ -228,25 +231,27 @@ Routing differs by chat type:
 | Chat type | Accepted input | Public route |
 | --- | --- | --- |
 | Direct (`p2p`) | Any non-empty text; no mention required | `chat_alias = "direct"` |
-| Configured group / topic group | Text that mentions this app's bot | Configured alias |
-| Unconfigured group / topic group | Mentioned text when this app sets `commands.allow_unconfigured_group_chats = true` | Stable opaque alias |
+| Configured group / topic group | Text that mentions this app's bot; with `im:message.group_msg`, an unmentioned reply to an agent-owned message | Configured alias |
+| Unconfigured group / topic group | Mentioned text when this app sets `commands.allow_unconfigured_group_chats = true`; with the same setting and scope, an unmentioned reply to an agent-owned message | Stable opaque alias |
 
-Group routing also requires a configured bot identity (`bot_open_id`,
-`bot_user_id`, `bot_union_id`, or a bot name). Strong Feishu IDs are
-authoritative: when one is configured, a same-named mention with a different ID
-is rejected. Direct-message routing does not require a mention identity.
+Mention-based group routing also requires a configured bot identity
+(`bot_open_id`, `bot_user_id`, `bot_union_id`, or a bot name). Strong Feishu IDs
+are authoritative: when one is configured, a same-named mention with a
+different ID is rejected. Direct-message and ownership-proven reply routing do
+not require a mention identity.
 
 `allow_unconfigured_group_chats` is per app and defaults to `false`. When it is
-enabled, only messages that mention that app's configured bot identity are
-accepted; merely adding the bot to a group is not enough. These dynamic routes
-are agent-only and cannot trigger legacy command subscribers or local scripts.
-They also do not populate the static channel directory used by outbound
-notification APIs. The daemon retains the raw chat id privately so the agent
-can start a response and send authorized conversation follow-ups; providers see
-only opaque delivery, conversation, and chat-alias values. This setting grants
-every member of every invited group that can mention the bot access to the
-agent, so deployments with corpus or user-level authorization requirements
-should keep explicit channel aliases instead.
+enabled, messages must either mention that app's configured bot identity or be
+an ownership-proven reply to its agent output; merely adding the bot to a group
+is not enough. These dynamic routes are agent-only and cannot trigger legacy
+command subscribers or local scripts. They also do not populate the static
+channel directory used by outbound notification APIs. The daemon retains the
+raw chat id privately so the agent can start a response and send authorized
+conversation follow-ups; providers see only opaque delivery, conversation, and
+chat-alias values. This setting grants every member of every invited group that
+can mention or reply to the bot access to the agent, so deployments with corpus
+or user-level authorization requirements should keep explicit channel aliases
+instead.
 
 `InboundAgentMessage.text` is the complete mention-stripped prompt and preserves
 newlines. `command` is the optional normalized first word and `command_text` is
@@ -264,6 +269,16 @@ identity of the exact parent message. It is empty for a non-reply. Group
 messages also carry the current, trimmed `conversation_title` when the bounded
 five-minute lookup succeeds. The title is user-controlled context, not an
 authorization value; direct messages and failed lookups carry an empty title.
+
+An unmentioned group reply is only an ingress candidate. botd hashes its parent
+id, resolves the existing 24-hour ownership record, checks the provider's app
+allowlist, and delivers only to subscriptions belonging to the provider that
+authored the parent. Unknown, expired, owner-store-disabled, and app-disallowed
+parents are acknowledged and discarded; they never fall back to another agent,
+legacy command subscriber, or local script. Mentioned replies use the same owner
+pin when one exists, so a first-word command cannot steal another provider's
+conversation. A configured `state_dir` is required to retain these ownership
+records and support mentionless replies.
 
 When `include_message_reactions = true`, the stream also receives native
 `THUMBSUP` and `ThumbsDown` reactions attached to messages authored by that
@@ -511,9 +526,10 @@ degrade to finishing inside the original card.
   conversation speaks to the agent again. Restart does not disable streaming on
   the remote card; Feishu eventually auto-closes it. Finish active responses
   before planned restarts.
-- Native-reaction provider ownership is the exception: an atomic snapshot under
+- Agent-message provider ownership is the exception: an atomic snapshot under
   `state_dir` retains only opaque `message_ref` to provider mappings for 24
-  hours. A malformed snapshot fails startup rather than widening delivery.
+  hours. It gates both mentionless group replies and native reactions. A
+  malformed snapshot fails startup rather than widening delivery.
 - Run exactly one active `feishu-botd` process owning a given Feishu app. One
   multi-app process opens one connection for each configured app. Feishu permits
   up to 50 connections but delivers each event to one random client in cluster
@@ -542,7 +558,9 @@ the correct app version, granted the scopes, installed the bot, or enabled both
 long-connection subscriptions.
 
 Before production use, run a live-tenant smoke test: send one direct message,
-send one mentioned message in a configured group, observe multiple cumulative
-card snapshots, finish the response, and click an action button. Confirm nominal
-events reach the intended provider, exercise retry/queue-failure behavior, and
-verify that no raw identifiers or user content appear in logs.
+send one mentioned message in a configured group, reply to that answer without
+another mention, observe multiple cumulative card snapshots, finish the
+response, and click an action button. Confirm the reply reaches only the
+authoring provider, an unmentioned non-reply is ignored, nominal events reach
+the intended provider, retry/queue-failure behavior is exercised, and no raw
+identifiers or user content appear in logs.
