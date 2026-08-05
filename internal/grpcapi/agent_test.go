@@ -1,8 +1,10 @@
 package grpcapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net"
 	"strings"
@@ -21,6 +23,99 @@ import (
 	"feishu-botd/internal/service"
 )
 
+func TestGRPCAgentAttachedContextStreamsHeaderThenBoundedImageChunks(t *testing.T) {
+	imageData := bytes.Repeat([]byte("image-fixture"), 20_000)
+	sender := &fakeAgentSender{
+		fakeSender: fakeSender{messageID: "unused_fixture"},
+		attachedContext: feishu.AttachedContext{
+			Status: feishu.AttachedContextFound,
+			Messages: []feishu.AttachedContextMessage{{
+				AuthorLabel: "participant-1", AuthorType: "user", Text: "crashes on launch",
+				Images: []feishu.AttachedContextImage{{MediaType: "image/png", Data: imageData}},
+			}},
+			Issues: []feishu.AttachedContextIssue{{
+				Code: feishu.AttachedContextIssueVideoOmitted, Count: 1,
+			}},
+		},
+	}
+	conn, svc := startAgentUnixServer(t, sender)
+	client := pb.NewCommandServiceClient(conn)
+
+	subCtx, cancelSub := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelSub()
+	sub, err := client.SubscribeAgentEvents(subCtx, &pb.SubscribeAgentEventsRequest{
+		Provider: "fixture-agent", IncludeUnmatchedMessages: true,
+	})
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	_ = dispatchAndReceiveAgentEvent(t, svc, sub, service.CommandInput{
+		DeliveryID: "delivery_context_fixture", Command: "看看", Prompt: "看看这个问题",
+		ConversationID: "conversation_fixture", ChatAlias: "ops", SenderID: "sender_fixture",
+		Metadata: map[string]string{
+			"chat_type": "topic_group", "message_type": "text", "message_id": "om_guide",
+			"thread_id": "omt_private", "create_time": "1754380800123",
+		},
+	})
+
+	stream, err := client.GetAgentAttachedContext(context.Background(), &pb.GetAgentAttachedContextRequest{
+		Provider: "fixture-agent", DeliveryId: "delivery_context_fixture",
+	})
+	if err != nil {
+		t.Fatalf("get attached context: %v", err)
+	}
+	first, err := stream.Recv()
+	if err != nil {
+		t.Fatalf("receive header: %v", err)
+	}
+	header := first.GetHeader()
+	if header == nil || header.GetStatus() != pb.AgentAttachedContextStatus_AGENT_ATTACHED_CONTEXT_STATUS_FOUND ||
+		len(header.GetMessages()) != 1 || len(header.GetMessages()[0].GetImages()) != 1 {
+		t.Fatalf("header = %#v", header)
+	}
+	message := header.GetMessages()[0]
+	if message.GetAuthorLabel() != "participant-1" || message.GetText() != "crashes on launch" {
+		t.Fatalf("message = %#v", message)
+	}
+	descriptor := message.GetImages()[0]
+	if descriptor.GetImageIndex() != 0 || descriptor.GetMediaType() != "image/png" || descriptor.GetByteSize() != uint64(len(imageData)) {
+		t.Fatalf("image descriptor = %#v", descriptor)
+	}
+
+	var reconstructed []byte
+	chunkCount := 0
+	for {
+		frame, recvErr := stream.Recv()
+		if recvErr == io.EOF {
+			break
+		}
+		if recvErr != nil {
+			t.Fatalf("receive image chunk: %v", recvErr)
+		}
+		chunk := frame.GetImageChunk()
+		if chunk == nil || chunk.GetImageIndex() != 0 || chunk.GetOffset() != uint64(len(reconstructed)) {
+			t.Fatalf("chunk = %#v reconstructed=%d", chunk, len(reconstructed))
+		}
+		if len(chunk.GetData()) == 0 || len(chunk.GetData()) > attachedContextImageChunkBytes {
+			t.Fatalf("chunk size = %d", len(chunk.GetData()))
+		}
+		reconstructed = append(reconstructed, chunk.GetData()...)
+		chunkCount++
+		if chunk.GetFinal() != (len(reconstructed) == len(imageData)) {
+			t.Fatalf("final=%t reconstructed=%d total=%d", chunk.GetFinal(), len(reconstructed), len(imageData))
+		}
+	}
+	if chunkCount < 2 || !bytes.Equal(reconstructed, imageData) {
+		t.Fatalf("chunks=%d reconstructed=%d want=%d", chunkCount, len(reconstructed), len(imageData))
+	}
+	sender.mu.Lock()
+	calls := sender.attachedCalls
+	sender.mu.Unlock()
+	if calls != 1 {
+		t.Fatalf("attached context lookup calls = %d", calls)
+	}
+}
+
 type fakeAgentSender struct {
 	fakeSender
 
@@ -30,6 +125,15 @@ type fakeAgentSender struct {
 	contentUpdates  []feishu.CardContentUpdate
 	settingUpdates  []feishu.CardSettingsUpdate
 	batchUpdates    []feishu.CardBatchUpdate
+	attachedContext feishu.AttachedContext
+	attachedCalls   int
+}
+
+func (f *fakeAgentSender) LookupAttachedContext(_ context.Context, _ feishu.AttachedContextRequest) (feishu.AttachedContext, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.attachedCalls++
+	return f.attachedContext, nil
 }
 
 func (f *fakeAgentSender) CreateCard(_ context.Context, cardJSON string) (string, error) {
@@ -82,7 +186,7 @@ func startAgentUnixServer(t *testing.T, sender *fakeAgentSender) (*grpc.ClientCo
 	cfg.AgentProviders = map[string]config.AgentProviderConfig{
 		"fixture-agent": {
 			AuthToken: fixtureAgentToken, AllowedCommands: []string{"ask"},
-			AllowUnmatchedMessages: true, AllowCardActions: true,
+			AllowUnmatchedMessages: true, AllowCardActions: true, AllowAttachedContext: true,
 		},
 	}
 	svc := service.NewService(cfg, sender, dedupe.NewMemoryStore(time.Hour), slog.Default())

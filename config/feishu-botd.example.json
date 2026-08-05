@@ -28,7 +28,19 @@
     "allow_non_loopback_bind": true
   },
   "state_dir": "/var/lib/feishu-botd",
-  "agent_providers": {},
+  "agent_providers": {
+    "example-agent": {
+      "auth_token_file": "/run/secrets/feishu-botd-example-agent-token",
+      "allowed_apps": ["default", "support"],
+      "allowed_commands": [],
+      "allow_unmatched_messages": true,
+      "allow_card_actions": true,
+      "allow_attached_context": false,
+      "allow_follow_up_messages": false,
+      "allow_message_reactions": false,
+      "allow_legacy_commands": false
+    }
+  },
   "commands": {
     "enabled": false,
     "allow_unconfigured_group_chats": false,

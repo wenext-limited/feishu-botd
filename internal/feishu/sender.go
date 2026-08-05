@@ -83,12 +83,13 @@ type ordinaryPostElement struct {
 }
 
 type ChannelSender struct {
-	appID      string
-	appSecret  string
-	client     *lark.Client
-	cardAPI    cardKitCardAPI
-	elementAPI cardKitElementAPI
-	messageAPI cardKitMessageAPI
+	appID           string
+	appSecret       string
+	client          *lark.Client
+	cardAPI         cardKitCardAPI
+	elementAPI      cardKitElementAPI
+	messageAPI      cardKitMessageAPI
+	attachedContext AttachedContextLookup
 
 	retryMaxAttempts int
 	retryBase        time.Duration
@@ -109,13 +110,24 @@ func NewChannelSender(appID, appSecret string, logger *slog.Logger) *ChannelSend
 		lark.WithLogger(safeSDKLogger{logger: logger}),
 	)
 	return &ChannelSender{
-		appID:      appID,
-		appSecret:  appSecret,
-		client:     client,
-		cardAPI:    client.Cardkit.V1.Card,
-		elementAPI: client.Cardkit.V1.CardElement,
-		messageAPI: client.Im.V1.Message,
+		appID:           appID,
+		appSecret:       appSecret,
+		client:          client,
+		cardAPI:         client.Cardkit.V1.Card,
+		elementAPI:      client.Cardkit.V1.CardElement,
+		messageAPI:      client.Im.V1.Message,
+		attachedContext: newSDKAttachedContextLookup(client.Im.V1.Message, client.Im.V1.MessageResource),
 	}
+}
+
+// LookupAttachedContext lazily reads a topic snapshot using this sender's app
+// credentials. Service-layer delivery authorization happens before this method
+// receives any daemon-private thread or message identity.
+func (s *ChannelSender) LookupAttachedContext(ctx context.Context, in AttachedContextRequest) (AttachedContext, error) {
+	if s == nil || s.attachedContext == nil {
+		return attachedContextWithIssue(AttachedContextUnreadable, AttachedContextIssueHistoryUnreadable), nil
+	}
+	return s.attachedContext.LookupAttachedContext(ctx, in)
 }
 
 func (s *ChannelSender) Ready(ctx context.Context) error {

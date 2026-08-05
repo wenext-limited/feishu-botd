@@ -74,6 +74,7 @@ type AgentProviderConfig struct {
 	AllowedCommands        []string
 	AllowUnmatchedMessages bool
 	AllowCardActions       bool
+	AllowAttachedContext   bool
 	AllowFollowUpMessages  bool
 	AllowMessageReactions  bool
 	AllowLegacyCommands    bool
@@ -208,6 +209,13 @@ func (c Config) ProviderAllowsApp(provider, appAlias string) bool {
 	return false
 }
 
+// ProviderAllowsAttachedContext is an explicit sensitive-read grant. Unlike
+// app visibility, omission always denies topic history and message resources.
+func (c Config) ProviderAllowsAttachedContext(provider string) bool {
+	providerCfg, configured := c.AgentProviders[strings.TrimSpace(provider)]
+	return configured && providerCfg.AllowAttachedContext
+}
+
 func LoadFromEnv() (Config, error) {
 	fileCfg, err := loadFileConfig(strings.TrimSpace(os.Getenv("FEISHU_BOTD_CONFIG")))
 	if err != nil {
@@ -284,6 +292,7 @@ func LoadFromEnv() (Config, error) {
 			AllowedCommands:        append([]string(nil), providerCfg.AllowedCommands...),
 			AllowUnmatchedMessages: providerCfg.AllowUnmatchedMessages,
 			AllowCardActions:       providerCfg.AllowCardActions,
+			AllowAttachedContext:   providerCfg.AllowAttachedContext,
 			AllowFollowUpMessages:  providerCfg.AllowFollowUpMessages,
 			AllowMessageReactions:  providerCfg.AllowMessageReactions,
 			AllowLegacyCommands:    providerCfg.AllowLegacyCommands,
@@ -386,6 +395,7 @@ type fileAgentProviderConfig struct {
 	AllowedApps            optionalStringList `json:"allowed_apps"`
 	AllowUnmatchedMessages bool               `json:"allow_unmatched_messages"`
 	AllowCardActions       bool               `json:"allow_card_actions"`
+	AllowAttachedContext   bool               `json:"allow_attached_context"`
 	AllowFollowUpMessages  bool               `json:"allow_follow_up_messages"`
 	AllowMessageReactions  bool               `json:"allow_message_reactions"`
 	AllowLegacyCommands    bool               `json:"allow_legacy_commands"`
@@ -1048,6 +1058,7 @@ func normalizeAgentProviderConfigs(in map[string]fileAgentProviderConfig) (map[s
 			AllowedApps:            allowedApps,
 			AllowUnmatchedMessages: providerCfg.AllowUnmatchedMessages,
 			AllowCardActions:       providerCfg.AllowCardActions,
+			AllowAttachedContext:   providerCfg.AllowAttachedContext,
 			AllowFollowUpMessages:  providerCfg.AllowFollowUpMessages,
 			AllowMessageReactions:  providerCfg.AllowMessageReactions,
 			AllowLegacyCommands:    providerCfg.AllowLegacyCommands,

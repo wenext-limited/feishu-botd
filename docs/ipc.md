@@ -133,6 +133,7 @@ is supplied.
 | `Subscribe` | Provider opens a server stream for one or more command names. botd pushes matching `InboundCommand` values. |
 | `Respond` | Provider sends a markdown or card reply for a previously delivered `delivery_id`. |
 | `SubscribeAgentEvents` | Agent opens a server stream for exact commands, unmatched conversational messages, card actions, native message reactions, or any combination. |
+| `GetAgentAttachedContext` | Lazily streams the bounded topic snapshot and image chunks for one exact inbound delivery. |
 | `StartAgentResponse` | Creates a streaming CardKit 2.0 reply and returns an opaque response handle, provider-safe message reference, and revision 1. |
 | `UpdateAgentResponse` | Applies a complete accumulated markdown snapshot, and any timeline part it carries, at the expected revision. |
 | `FinishAgentResponse` | Applies final content, records the outcome, and disables CardKit streaming mode. |
@@ -206,7 +207,8 @@ requested selectors against that provider's `allowed_commands`,
 `allow_unmatched_messages`, `allow_card_actions`, and
 `allow_message_reactions` before registering the
 stream. Legacy streams additionally require `allow_legacy_commands`, and
-follow-up sends require `allow_follow_up_messages`. Event candidates are then
+follow-up sends require `allow_follow_up_messages`. Attached topic reads require
+the independent, default-false `allow_attached_context` grant. Event candidates are then
 filtered by `allowed_apps` before exact-command/fallback arbitration. Grant
 unmatched-message access carefully because it includes direct-message prompts.
 
@@ -252,6 +254,23 @@ cannot enter the legacy command or local-script paths. Unknown and expired
 parents are ignored. Feishu delivery of mentionless replies additionally
 requires the sensitive `im:message.group_msg` scope; `group_at_msg` only covers
 messages that mention the bot.
+
+`GetAgentAttachedContext(provider, delivery_id)` is a lazy, provider-authenticated
+server stream. The exact delivery is the only lookup capability; it expires
+after 10 minutes, must have been delivered to that provider, and remains scoped
+by `allowed_apps`. The first frame reports `FOUND`, `MISSING`, or `UNREADABLE`,
+oldest-first text, snapshot-local participant labels, image descriptors, typed
+issues, and explicit truncation. Later frames carry at most 64 KiB of one image
+and identify its descriptor index and byte offset. Raw message/thread ids and
+image keys never cross the boundary.
+
+botd lists the triggering Feishu thread newest-first until it finds the exact
+trigger message, then returns only older content, plus non-video media attached
+to the trigger itself. Guide text and messages posted after the trigger are
+excluded. Failure to find the trigger within 256 scanned messages is
+`UNREADABLE`, never an approximate snapshot. Limits are 64 prior messages,
+64 KiB normalized text, eight images, 5 MiB per image, and 16 MiB total image
+bytes. Limit hits and partial failures are typed; video is explicitly omitted.
 
 Native reaction events contain `message_ref`, exact `reaction_type`
 (`THUMBSUP` or `ThumbsDown`), and `ADDED` or `REMOVED`. They route only to the

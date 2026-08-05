@@ -33,6 +33,8 @@ delivery does not support store apps):
    grant Feishu's sensitive all-group-user-message scope
    `im:message.group_msg`. botd still discards every unmentioned message except
    a reply whose parent resolves to an unexpired agent-message owner.
+   The same sensitive scope is required when `allow_attached_context` lets a
+   provider lazily read a topic's group-message history.
 4. Under **Events and Callbacks**, choose long-connection delivery and subscribe
    to the `im.message.receive_v1` event.
 5. To receive button callbacks, also subscribe to the
@@ -90,6 +92,7 @@ openssl rand -base64 32 > /run/secrets/feishu-botd-example-agent-token
       "allowed_commands": [],
       "allow_unmatched_messages": true,
       "allow_card_actions": true,
+      "allow_attached_context": false,
       "allow_follow_up_messages": false,
       "allow_message_reactions": true,
       "allow_legacy_commands": false
@@ -219,10 +222,13 @@ Each provider can request only the selectors authorized in its config:
 `allow_message_reactions`.
 `allow_legacy_commands` separately permits legacy `Subscribe`/`Respond`, using
 the same `allowed_commands` allowlist, and `allow_follow_up_messages` separately
-permits the follow-up send described below. Requests outside this scope fail
-before broker registration. Event selection also considers `allowed_apps`: a
-disallowed exact-command subscriber cannot suppress an allowed unmatched
-subscriber. Grant only the minimum selectors needed; unmatched-message access
+permits the follow-up send described below. `allow_attached_context` separately
+permits the sensitive topic-history and message-resource read described below;
+it defaults to false and is not implied by unmatched-message access. Requests
+outside this scope fail before broker registration. Event selection also
+considers `allowed_apps`: a disallowed exact-command subscriber cannot suppress
+an allowed unmatched subscriber. Grant only the minimum selectors needed;
+unmatched-message access
 includes direct-message prompts. Card actions are additionally restricted to
 the provider that owns the response.
 
@@ -295,6 +301,37 @@ map entry, and no request or routing decision requires a provider to echo it.
 Legacy `InboundCommand.metadata` remains limited to `chat_type` and
 `message_type`. Raw event, message, thread, root, parent, card, and chat ids are
 still omitted from both public streams.
+
+## Lazy attached topic context
+
+An agent that receives a guide-only prompt can call the server-streaming
+`GetAgentAttachedContext` RPC with its `provider` and the exact `delivery_id`.
+botd rejects the call unless that provider has `allow_attached_context = true`,
+received that delivery, is allowed to access its app, and calls within the
+10-minute context-capability lifetime. There is no conversation-latest or
+cross-delivery fallback. Ordinary self-contained questions should not call the
+RPC, so they incur no history or image reads.
+
+The first stream frame is a typed header: `FOUND`, `MISSING`, or `UNREADABLE`,
+oldest-first normalized messages, snapshot-local `participant-N` labels,
+image descriptors, typed issues, and a truncation flag. Image bytes then arrive
+as at-most-64-KiB chunks in descriptor order. The snapshot stops at the exact
+triggering event: its guide text and all later messages are excluded, while an
+image in the trigger's rich content is retained. If botd cannot find that exact
+boundary within its bounded scan, it returns `UNREADABLE`; it never guesses.
+
+Server-owned limits are 64 prior messages, 64 KiB normalized text, eight
+images, 5 MiB per image, and 16 MiB total image payload bytes. A separate
+256-message scan limit protects exact-boundary discovery. Every limit and every
+partial image/message failure produces a typed issue; videos are omitted with
+`VIDEO_OMITTED`. MIME types are detected from bytes and allowlisted rather than
+trusted from message metadata. Provider-visible output contains no Feishu
+message id, thread id, image key, or stable participant id.
+
+Topic history uses Feishu message history with `container_id_type=thread` and
+therefore requires the sensitive `im:message.group_msg` permission for group
+content. Image download uses the exact private `message_id` + `image_key` pair
+with resource type `image`; the bot must remain in the same conversation.
 
 ## Progressive response lifecycle
 

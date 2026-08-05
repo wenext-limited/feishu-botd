@@ -33,8 +33,9 @@ const (
 )
 
 type appBackend struct {
-	sender       feishu.Sender
-	dynamicCards feishu.DynamicCards
+	sender          feishu.Sender
+	dynamicCards    feishu.DynamicCards
+	attachedContext feishu.AttachedContextLookup
 }
 
 // Service owns the send/dedupe/readiness flow. It is safe for concurrent use
@@ -100,6 +101,9 @@ func newService(
 		backend := appBackend{sender: sender}
 		if cards, ok := sender.(feishu.DynamicCards); ok {
 			backend.dynamicCards = cards
+		}
+		if lookup, ok := sender.(feishu.AttachedContextLookup); ok {
+			backend.attachedContext = lookup
 		}
 		backends[alias] = backend
 	}

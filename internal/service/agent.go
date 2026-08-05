@@ -28,6 +28,7 @@ const (
 	maxAgentTitleBytes          = 200
 	minCardMutationInterval     = 125 * time.Millisecond
 	messageUUIDDedupeWindow     = time.Hour
+	agentAttachedContextTTL     = 10 * time.Minute
 )
 
 // AgentSubscribeOptions selects a full-fidelity agent event stream. Exact
@@ -304,25 +305,26 @@ const (
 type agentDelivery struct {
 	mu sync.Mutex
 
-	appAlias         string
-	input            CommandInput
-	allowedProviders map[string]struct{}
-	expiresAt        time.Time
-	state            agentDeliveryState
-	provider         string
-	operationID      string
-	fingerprint      string
-	responseID       string
-	messageUUID      string
-	cardJSON         string
-	cardID           string
-	messageID        string
-	messageDedupeKey string
-	actionDigests    map[string]string
-	sendAmbiguousAt  time.Time
-	sendRetryClosed  bool
-	sendRetryCode    string
-	response         *agentResponse
+	appAlias                 string
+	input                    CommandInput
+	allowedProviders         map[string]struct{}
+	expiresAt                time.Time
+	attachedContextExpiresAt time.Time
+	state                    agentDeliveryState
+	provider                 string
+	operationID              string
+	fingerprint              string
+	responseID               string
+	messageUUID              string
+	cardJSON                 string
+	cardID                   string
+	messageID                string
+	messageDedupeKey         string
+	actionDigests            map[string]string
+	sendAmbiguousAt          time.Time
+	sendRetryClosed          bool
+	sendRetryCode            string
+	response                 *agentResponse
 }
 
 type agentOperation struct {
@@ -561,12 +563,13 @@ func (b *agentBroker) dispatchMessageForProvider(in CommandInput, provider strin
 	}
 	if delivered > 0 {
 		b.deliveries[in.DeliveryID] = &agentDelivery{
-			appAlias:         in.AppAlias,
-			input:            cloneCommandInput(in),
-			allowedProviders: allowed,
-			expiresAt:        now.Add(b.ttl),
-			state:            agentDeliveryOpen,
-			messageDedupeKey: messageDedupeKey,
+			appAlias:                 in.AppAlias,
+			input:                    cloneCommandInput(in),
+			allowedProviders:         allowed,
+			expiresAt:                now.Add(b.ttl),
+			attachedContextExpiresAt: now.Add(agentAttachedContextTTL),
+			state:                    agentDeliveryOpen,
+			messageDedupeKey:         messageDedupeKey,
 		}
 		b.recordConversationLocked(in, allowed, now)
 		if messageDedupeKey != "" {

@@ -760,6 +760,9 @@ func commandMetadata(event *larkim.P2MessageReceiveV1, msg *larkim.EventMessage,
 	if messageID := deref(msg.MessageId); messageID != "" {
 		metadata["message_id"] = messageID
 	}
+	if createTime := deref(msg.CreateTime); createTime != "" {
+		metadata["create_time"] = createTime
+	}
 	if threadID := deref(msg.ThreadId); threadID != "" {
 		metadata["thread_id"] = threadID
 	}

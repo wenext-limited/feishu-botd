@@ -23,6 +23,7 @@ type providerPrincipal struct {
 	allowedAppsConfigured  bool
 	allowUnmatchedMessages bool
 	allowCardActions       bool
+	allowAttachedContext   bool
 	allowFollowUpMessages  bool
 	allowMessageReactions  bool
 	allowLegacyCommands    bool
@@ -64,6 +65,7 @@ func newProviderAuthenticator(providers map[string]config.AgentProviderConfig) p
 				allowedAppsConfigured:  allowedAppsConfigured,
 				allowUnmatchedMessages: providerCfg.AllowUnmatchedMessages,
 				allowCardActions:       providerCfg.AllowCardActions,
+				allowAttachedContext:   providerCfg.AllowAttachedContext,
 				allowFollowUpMessages:  providerCfg.AllowFollowUpMessages,
 				allowMessageReactions:  providerCfg.AllowMessageReactions,
 				allowLegacyCommands:    providerCfg.AllowLegacyCommands,
@@ -87,6 +89,7 @@ func isHealthMethod(fullMethod string) bool {
 func isAgentMethod(fullMethod string) bool {
 	switch fullMethod {
 	case pb.CommandService_SubscribeAgentEvents_FullMethodName,
+		pb.CommandService_GetAgentAttachedContext_FullMethodName,
 		pb.CommandService_StartAgentResponse_FullMethodName,
 		pb.CommandService_UpdateAgentResponse_FullMethodName,
 		pb.CommandService_FinishAgentResponse_FullMethodName,
@@ -95,6 +98,17 @@ func isAgentMethod(fullMethod string) bool {
 	default:
 		return false
 	}
+}
+
+func authorizeAgentAttachedContext(ctx context.Context, requested string) error {
+	if err := requireProviderIdentity(ctx, requested); err != nil {
+		return err
+	}
+	principal, _ := authenticatedProvider(ctx)
+	if !principal.allowAttachedContext {
+		return providerScopeDenied(ctx)
+	}
+	return nil
 }
 
 func isLegacyProviderMethod(fullMethod string) bool {

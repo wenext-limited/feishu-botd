@@ -99,6 +99,7 @@ and per-caller defaults. This example keeps the existing top-level app as
       "allowed_commands": [],
       "allow_unmatched_messages": true,
       "allow_card_actions": true,
+      "allow_attached_context": false,
       "allow_follow_up_messages": false,
       "allow_legacy_commands": false
     }
@@ -191,7 +192,7 @@ a separate token file. The general bearer and every provider token must contain
 at least 32 bytes. Provider tokens must be unique and must differ from the
 general bearer. Token loading trims and uses only the first line of each file.
 Existing deployments with a shorter general bearer must rotate it before
-upgrading because the daemon now fails closed at startup. The five agent RPCs
+upgrading because the daemon now fails closed at startup. The six agent RPCs
 require the matching provider token on both Unix and loopback TCP. When this map
 is non-empty, legacy command `Subscribe`/`Respond` is scoped the same way; existing
 legacy deployments without the map keep their current local/global-token mode.
@@ -204,6 +205,8 @@ Each subscription is limited by `allowed_commands`,
 `allow_unmatched_messages`, `allow_card_actions`, and
 `allow_legacy_commands`; `allow_follow_up_messages` separately permits sending a
 later message into a conversation the provider has already answered in.
+`allow_attached_context` separately permits lazy reads of topic history and
+message images for an exact inbound delivery; it defaults to false.
 `allowed_apps` optionally limits that provider to configured app aliases. When
 the field is absent, all apps are allowed; an explicit empty list allows none,
 and `null` is rejected. botd applies the allowlist before event fan-out and

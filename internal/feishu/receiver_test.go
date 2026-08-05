@@ -40,6 +40,9 @@ func TestCommandFromEventParsesMentionedTextCommand(t *testing.T) {
 	if cmd.Metadata["message_id"] != "om_1" || cmd.Metadata["chat_type"] != "group" {
 		t.Fatalf("metadata = %#v", cmd.Metadata)
 	}
+	if cmd.Metadata["create_time"] != "1754380800123" {
+		t.Fatalf("trigger boundary metadata = %#v", cmd.Metadata)
+	}
 	if cmd.UnmentionedReply {
 		t.Fatal("mentioned group message was marked as an unmentioned reply")
 	}
@@ -683,6 +686,7 @@ func messageEvent(eventID, messageID, chatID, text string, mentions ...*larkim.M
 			},
 			Message: &larkim.EventMessage{
 				MessageId:   ptr(messageID),
+				CreateTime:  ptr("1754380800123"),
 				ChatId:      ptr(chatID),
 				ChatType:    ptr(chatType),
 				MessageType: &messageType,

@@ -52,6 +52,7 @@ func TestIsHealthMethod(t *testing.T) {
 func TestProviderMethodClassification(t *testing.T) {
 	for _, method := range []string{
 		pb.CommandService_SubscribeAgentEvents_FullMethodName,
+		pb.CommandService_GetAgentAttachedContext_FullMethodName,
 		pb.CommandService_StartAgentResponse_FullMethodName,
 		pb.CommandService_UpdateAgentResponse_FullMethodName,
 		pb.CommandService_FinishAgentResponse_FullMethodName,
@@ -67,6 +68,19 @@ func TestProviderMethodClassification(t *testing.T) {
 	}
 	if requiresProviderAuth(pb.NotificationService_SendNotification_FullMethodName, true) {
 		t.Fatal("notification RPC was classified as a provider method")
+	}
+}
+
+func TestAuthorizeAgentAttachedContextRequiresIndependentGrant(t *testing.T) {
+	ctx := context.WithValue(context.Background(), providerPrincipalKey{}, providerPrincipal{provider: "agent"})
+	if err := authorizeAgentAttachedContext(ctx, "agent"); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("missing grant code = %v, want PermissionDenied", status.Code(err))
+	}
+	ctx = context.WithValue(context.Background(), providerPrincipalKey{}, providerPrincipal{
+		provider: "agent", allowAttachedContext: true,
+	})
+	if err := authorizeAgentAttachedContext(ctx, "agent"); err != nil {
+		t.Fatalf("authorized attached context: %v", err)
 	}
 }
 

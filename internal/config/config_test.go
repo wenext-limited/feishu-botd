@@ -353,6 +353,60 @@ func TestLoadFromConfigFileAgentProviderFollowUpScope(t *testing.T) {
 	}
 }
 
+// Topic history and message resources are a sensitive read capability. They
+// remain off even when unmatched conversational messages are enabled.
+func TestLoadFromConfigFileAgentProviderAttachedContextScope(t *testing.T) {
+	for _, testCase := range []struct {
+		name  string
+		entry string
+		want  bool
+	}{
+		{name: "omitted defaults to off", want: false},
+		{name: "explicitly disabled", entry: `,"allow_attached_context":false`, want: false},
+		{name: "explicitly enabled", entry: `,"allow_attached_context":true`, want: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			clearConfigEnv(t)
+			dir := t.TempDir()
+			tokenPath := filepath.Join(dir, "agent-token")
+			const token = "fixture-agent-token-0123456789abcdef0123456789"
+			if err := os.WriteFile(tokenPath, []byte(token+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			configPath := filepath.Join(dir, "feishu-botd.json")
+			configJSON := `{
+  "feishu": {"app_id":"app_fixture","app_secret":"secret_fixture"},
+  "listeners": {"grpc_socket":"/tmp/feishu-botd.fixture.sock"},
+  "commands": {"enabled":true},
+  "agent_providers": {
+    "fixture-agent": {
+      "auth_token_file":"` + tokenPath + `",
+      "allow_unmatched_messages":true` + testCase.entry + `
+    }
+  }
+}`
+			if err := os.WriteFile(configPath, []byte(configJSON), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("FEISHU_BOTD_CONFIG", configPath)
+
+			cfg, err := LoadFromEnv()
+			if err != nil {
+				t.Fatalf("load provider config: %v", err)
+			}
+			if got := cfg.AgentProviders["fixture-agent"].AllowAttachedContext; got != testCase.want {
+				t.Fatalf("allow_attached_context = %t, want %t", got, testCase.want)
+			}
+			if got := cfg.ProviderAllowsAttachedContext("fixture-agent"); got != testCase.want {
+				t.Fatalf("ProviderAllowsAttachedContext = %t, want %t", got, testCase.want)
+			}
+			if cfg.ProviderAllowsAttachedContext("unknown-provider") {
+				t.Fatal("unconfigured provider inherited attached-context access")
+			}
+		})
+	}
+}
+
 // Native message reactions are independently authorized and require durable
 // owner routing. An operator cannot accidentally enable them with process-only
 // state that changes semantics after a restart.

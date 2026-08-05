@@ -22,6 +22,10 @@ service CommandService {
   // separate from Subscribe so existing command consumers never receive an
   // event variant they do not understand.
   rpc SubscribeAgentEvents(SubscribeAgentEventsRequest) returns (stream SubscribeAgentEventsResponse);
+  // Lazily reads the topic snapshot attached to one exact inbound delivery.
+  // The first frame is metadata; subsequent frames carry bounded image chunks
+  // so the 16 MiB domain image budget never depends on unary gRPC limits.
+  rpc GetAgentAttachedContext(GetAgentAttachedContextRequest) returns (stream GetAgentAttachedContextResponse);
   rpc StartAgentResponse(StartAgentResponseRequest) returns (StartAgentResponseResponse);
   rpc UpdateAgentResponse(UpdateAgentResponseRequest) returns (UpdateAgentResponseResponse);
   rpc FinishAgentResponse(FinishAgentResponseRequest) returns (FinishAgentResponseResponse);
@@ -127,6 +131,81 @@ message InboundAgentMessage {
   // Current group title as untrusted, provider-safe context. Empty for direct
   // messages and when the fail-soft chat lookup is unavailable.
   string conversation_title = 5;
+}
+
+message GetAgentAttachedContextRequest {
+  string provider = 1; // must match the bearer-authenticated principal
+  // Exact opaque delivery capability received from SubscribeAgentEvents.
+  // No conversation-latest fallback exists, and the capability expires soon.
+  string delivery_id = 2;
+  reserved 3 to 15;
+}
+
+enum AgentAttachedContextStatus {
+  AGENT_ATTACHED_CONTEXT_STATUS_UNSPECIFIED = 0;
+  AGENT_ATTACHED_CONTEXT_STATUS_FOUND = 1;
+  AGENT_ATTACHED_CONTEXT_STATUS_MISSING = 2;
+  AGENT_ATTACHED_CONTEXT_STATUS_UNREADABLE = 3;
+}
+
+enum AgentAttachedContextIssueCode {
+  AGENT_ATTACHED_CONTEXT_ISSUE_CODE_UNSPECIFIED = 0;
+  AGENT_ATTACHED_CONTEXT_ISSUE_CODE_NO_THREAD = 1;
+  AGENT_ATTACHED_CONTEXT_ISSUE_CODE_HISTORY_UNREADABLE = 2;
+  AGENT_ATTACHED_CONTEXT_ISSUE_CODE_BOUNDARY_NOT_FOUND = 3;
+  AGENT_ATTACHED_CONTEXT_ISSUE_CODE_BOUNDARY_SCAN_LIMIT = 4;
+  AGENT_ATTACHED_CONTEXT_ISSUE_CODE_MESSAGE_LIMIT = 5;
+  AGENT_ATTACHED_CONTEXT_ISSUE_CODE_TEXT_LIMIT = 6;
+  AGENT_ATTACHED_CONTEXT_ISSUE_CODE_IMAGE_LIMIT = 7;
+  AGENT_ATTACHED_CONTEXT_ISSUE_CODE_IMAGE_TOO_LARGE = 8;
+  AGENT_ATTACHED_CONTEXT_ISSUE_CODE_TOTAL_IMAGE_LIMIT = 9;
+  AGENT_ATTACHED_CONTEXT_ISSUE_CODE_IMAGE_UNREADABLE = 10;
+  AGENT_ATTACHED_CONTEXT_ISSUE_CODE_IMAGE_TYPE_UNSUPPORTED = 11;
+  AGENT_ATTACHED_CONTEXT_ISSUE_CODE_VIDEO_OMITTED = 12;
+  AGENT_ATTACHED_CONTEXT_ISSUE_CODE_UNSUPPORTED_MESSAGE = 13;
+  AGENT_ATTACHED_CONTEXT_ISSUE_CODE_MALFORMED_MESSAGE = 14;
+}
+
+message AgentAttachedContextIssue {
+  AgentAttachedContextIssueCode code = 1;
+  uint32 count = 2;
+}
+
+message AgentAttachedContextImageDescriptor {
+  // Monotonic across the snapshot and referenced by image chunk frames.
+  uint32 image_index = 1;
+  string media_type = 2; // server-detected allowlisted image MIME type
+  uint64 byte_size = 3;
+}
+
+message AgentAttachedContextMessage {
+  // Oldest-first topic order. participant-N labels are snapshot-local and do
+  // not encode a stable Feishu identity.
+  string author_label = 1;
+  string author_type = 2;
+  string text = 3;
+  repeated AgentAttachedContextImageDescriptor images = 4;
+}
+
+message AgentAttachedContextHeader {
+  AgentAttachedContextStatus status = 1;
+  repeated AgentAttachedContextMessage messages = 2;
+  repeated AgentAttachedContextIssue issues = 3;
+  bool truncated = 4;
+}
+
+message AgentAttachedContextImageChunk {
+  uint32 image_index = 1;
+  uint64 offset = 2;
+  bytes data = 3; // at most 64 KiB per frame
+  bool final = 4;
+}
+
+message GetAgentAttachedContextResponse {
+  oneof frame {
+    AgentAttachedContextHeader header = 1;
+    AgentAttachedContextImageChunk image_chunk = 2;
+  }
 }
 
 message InboundCardAction {
