@@ -93,6 +93,7 @@ func isAgentMethod(fullMethod string) bool {
 		pb.CommandService_StartAgentResponse_FullMethodName,
 		pb.CommandService_UpdateAgentResponse_FullMethodName,
 		pb.CommandService_FinishAgentResponse_FullMethodName,
+		pb.CommandService_ReplaceAgentResponse_FullMethodName,
 		pb.CommandService_SendAgentFollowUp_FullMethodName:
 		return true
 	default:

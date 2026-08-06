@@ -29,11 +29,13 @@ service CommandService {
   rpc StartAgentResponse(StartAgentResponseRequest) returns (StartAgentResponseResponse);
   rpc UpdateAgentResponse(UpdateAgentResponseRequest) returns (UpdateAgentResponseResponse);
   rpc FinishAgentResponse(FinishAgentResponseRequest) returns (FinishAgentResponseResponse);
+  // Replaces the content of a terminal CardKit response without reopening its
+  // streaming lifecycle. Detached work uses this to settle the initial card.
+  rpc ReplaceAgentResponse(ReplaceAgentResponseRequest) returns (ReplaceAgentResponseResponse);
 
   // SendAgentFollowUp posts one later message into a conversation that already
-  // delivered an agent event to this provider. A finished CardKit entity cannot
-  // carry a new answer, so a detached run reports back through this path rather
-  // than by reopening a closed response.
+  // delivered an agent event to this provider. This is the compatibility path
+  // when a terminal response handle is unavailable for in-place replacement.
   rpc SendAgentFollowUp(SendAgentFollowUpRequest) returns (SendAgentFollowUpResponse);
 }
 
@@ -340,6 +342,24 @@ message UpdateAgentResponseResponse {
 }
 
 message FinishAgentResponseResponse {
+  AgentResponseReceipt response = 1;
+}
+
+message ReplaceAgentResponseRequest {
+  string provider = 1; // must match the bearer-authenticated principal
+  string response_id = 2;
+  string operation_id = 3;
+  uint64 expected_revision = 4;
+  string markdown = 10; // complete replacement answer
+  string summary = 11; // compact notification/preview text
+  reserved 5 to 9, 12 to 31;
+
+  // Complete terminal panel snapshot. The response phase stays terminal.
+  string timeline_markdown = 32;
+  string timeline_title = 33;
+}
+
+message ReplaceAgentResponseResponse {
   AgentResponseReceipt response = 1;
 }
 

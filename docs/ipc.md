@@ -137,6 +137,7 @@ is supplied.
 | `StartAgentResponse` | Creates a streaming CardKit 2.0 reply and returns an opaque response handle, provider-safe message reference, and revision 1. |
 | `UpdateAgentResponse` | Applies a complete accumulated markdown snapshot, and any timeline part it carries, at the expected revision. |
 | `FinishAgentResponse` | Applies final content, records the outcome, and disables CardKit streaming mode. |
+| `ReplaceAgentResponse` | Replaces a terminal card's answer and timeline at the exact final revision without reopening streaming mode. |
 | `SendAgentFollowUp` | Posts one later, standalone message into a conversation the provider has already received an agent event from. |
 
 Inbound Feishu events are dispatched only for an app whose `commands.enabled`

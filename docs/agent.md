@@ -484,12 +484,22 @@ omitted. Do not place secrets or raw routing identifiers in a button's
 provider-defined payload: Feishu sends that value back to the callback and the
 agent receives it unchanged inside `value.payload`.
 
-## Follow-up sends
+## Terminal replacement and follow-up sends
 
-A CardKit response is closed by `FinishAgentResponse` and Feishu auto-closes
-streaming mode after about ten minutes, so a long or detached run cannot report
-back through the card it started. `SendAgentFollowUp` posts one later,
-standalone message into the same conversation instead.
+A CardKit response is closed by `FinishAgentResponse`, but its entity remains
+mutable. `ReplaceAgentResponse` lets detached work replace the answer and
+timeline in that original terminal card without reopening streaming mode. The
+request carries the response handle, its exact final revision, a stable
+`operation_id`, the complete markdown, summary, and terminal timeline. Success
+increments the revision while preserving `COMPLETED`, `FAILED`, or `CANCELLED`.
+The mutation is idempotent and uses one CardKit batch patch plus a settings
+update, both in the response's existing sequence domain.
+
+The response handle is process-local and TTL-bounded. If it is definitively
+missing or expired, `SendAgentFollowUp` remains the compatibility path and
+posts one later, standalone message into the same conversation. An ambiguous
+replacement must be retried with the same operation id and must not also fall
+back to a message, because the replacement may already have committed.
 
 The request carries `provider`, the `conversation_id` from any previously
 delivered `InboundAgentEvent`, an `operation_id`, the complete `markdown`, and

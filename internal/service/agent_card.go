@@ -133,6 +133,39 @@ func agentTimelineHeaderPatch(title string) string {
 	return string(data)
 }
 
+// agentTerminalReplacementPatch updates every visible terminal field in one
+// CardKit batch operation. Unlike the streaming content endpoint, batch
+// element replacement remains valid after streaming mode has been disabled.
+func agentTerminalReplacementPatch(markdown string, hasTimeline bool, timeline agentTimelineParts) string {
+	actions := []map[string]any{{
+		"action": "partial_update_element",
+		"params": map[string]any{
+			"element_id":      agentContentElementID,
+			"partial_element": map[string]any{"content": markdown},
+		},
+	}}
+	if hasTimeline && timeline.Markdown != "" {
+		actions = append(actions, map[string]any{
+			"action": "partial_update_element",
+			"params": map[string]any{
+				"element_id":      agentTimelineElementID,
+				"partial_element": map[string]any{"content": timeline.Markdown},
+			},
+		})
+	}
+	if hasTimeline && timeline.Title != "" {
+		actions = append(actions, map[string]any{
+			"action": "partial_update_element",
+			"params": map[string]any{
+				"element_id":      agentTimelinePanelElementID,
+				"partial_element": map[string]any{"header": agentTimelineHeader(timeline.Title)},
+			},
+		})
+	}
+	data, _ := json.Marshal(actions)
+	return string(data)
+}
+
 func agentFinishSettings(summary string) string {
 	config := map[string]any{"streaming_mode": false}
 	if summary != "" {

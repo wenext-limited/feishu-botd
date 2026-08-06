@@ -56,6 +56,7 @@ func TestProviderMethodClassification(t *testing.T) {
 		pb.CommandService_StartAgentResponse_FullMethodName,
 		pb.CommandService_UpdateAgentResponse_FullMethodName,
 		pb.CommandService_FinishAgentResponse_FullMethodName,
+		pb.CommandService_ReplaceAgentResponse_FullMethodName,
 	} {
 		if !isAgentMethod(method) || !requiresProviderAuth(method, false) {
 			t.Fatalf("agent method was not provider scoped: %s", method)

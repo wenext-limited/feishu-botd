@@ -26,6 +26,7 @@ const (
 	CommandService_StartAgentResponse_FullMethodName      = "/feishubotd.v1.CommandService/StartAgentResponse"
 	CommandService_UpdateAgentResponse_FullMethodName     = "/feishubotd.v1.CommandService/UpdateAgentResponse"
 	CommandService_FinishAgentResponse_FullMethodName     = "/feishubotd.v1.CommandService/FinishAgentResponse"
+	CommandService_ReplaceAgentResponse_FullMethodName    = "/feishubotd.v1.CommandService/ReplaceAgentResponse"
 	CommandService_SendAgentFollowUp_FullMethodName       = "/feishubotd.v1.CommandService/SendAgentFollowUp"
 )
 
@@ -55,10 +56,12 @@ type CommandServiceClient interface {
 	StartAgentResponse(ctx context.Context, in *StartAgentResponseRequest, opts ...grpc.CallOption) (*StartAgentResponseResponse, error)
 	UpdateAgentResponse(ctx context.Context, in *UpdateAgentResponseRequest, opts ...grpc.CallOption) (*UpdateAgentResponseResponse, error)
 	FinishAgentResponse(ctx context.Context, in *FinishAgentResponseRequest, opts ...grpc.CallOption) (*FinishAgentResponseResponse, error)
+	// Replaces the content of a terminal CardKit response without reopening its
+	// streaming lifecycle. Detached work uses this to settle the initial card.
+	ReplaceAgentResponse(ctx context.Context, in *ReplaceAgentResponseRequest, opts ...grpc.CallOption) (*ReplaceAgentResponseResponse, error)
 	// SendAgentFollowUp posts one later message into a conversation that already
-	// delivered an agent event to this provider. A finished CardKit entity cannot
-	// carry a new answer, so a detached run reports back through this path rather
-	// than by reopening a closed response.
+	// delivered an agent event to this provider. This is the compatibility path
+	// when a terminal response handle is unavailable for in-place replacement.
 	SendAgentFollowUp(ctx context.Context, in *SendAgentFollowUpRequest, opts ...grpc.CallOption) (*SendAgentFollowUpResponse, error)
 }
 
@@ -167,6 +170,16 @@ func (c *commandServiceClient) FinishAgentResponse(ctx context.Context, in *Fini
 	return out, nil
 }
 
+func (c *commandServiceClient) ReplaceAgentResponse(ctx context.Context, in *ReplaceAgentResponseRequest, opts ...grpc.CallOption) (*ReplaceAgentResponseResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReplaceAgentResponseResponse)
+	err := c.cc.Invoke(ctx, CommandService_ReplaceAgentResponse_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *commandServiceClient) SendAgentFollowUp(ctx context.Context, in *SendAgentFollowUpRequest, opts ...grpc.CallOption) (*SendAgentFollowUpResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(SendAgentFollowUpResponse)
@@ -203,10 +216,12 @@ type CommandServiceServer interface {
 	StartAgentResponse(context.Context, *StartAgentResponseRequest) (*StartAgentResponseResponse, error)
 	UpdateAgentResponse(context.Context, *UpdateAgentResponseRequest) (*UpdateAgentResponseResponse, error)
 	FinishAgentResponse(context.Context, *FinishAgentResponseRequest) (*FinishAgentResponseResponse, error)
+	// Replaces the content of a terminal CardKit response without reopening its
+	// streaming lifecycle. Detached work uses this to settle the initial card.
+	ReplaceAgentResponse(context.Context, *ReplaceAgentResponseRequest) (*ReplaceAgentResponseResponse, error)
 	// SendAgentFollowUp posts one later message into a conversation that already
-	// delivered an agent event to this provider. A finished CardKit entity cannot
-	// carry a new answer, so a detached run reports back through this path rather
-	// than by reopening a closed response.
+	// delivered an agent event to this provider. This is the compatibility path
+	// when a terminal response handle is unavailable for in-place replacement.
 	SendAgentFollowUp(context.Context, *SendAgentFollowUpRequest) (*SendAgentFollowUpResponse, error)
 	mustEmbedUnimplementedCommandServiceServer()
 }
@@ -238,6 +253,9 @@ func (UnimplementedCommandServiceServer) UpdateAgentResponse(context.Context, *U
 }
 func (UnimplementedCommandServiceServer) FinishAgentResponse(context.Context, *FinishAgentResponseRequest) (*FinishAgentResponseResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method FinishAgentResponse not implemented")
+}
+func (UnimplementedCommandServiceServer) ReplaceAgentResponse(context.Context, *ReplaceAgentResponseRequest) (*ReplaceAgentResponseResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ReplaceAgentResponse not implemented")
 }
 func (UnimplementedCommandServiceServer) SendAgentFollowUp(context.Context, *SendAgentFollowUpRequest) (*SendAgentFollowUpResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SendAgentFollowUp not implemented")
@@ -368,6 +386,24 @@ func _CommandService_FinishAgentResponse_Handler(srv interface{}, ctx context.Co
 	return interceptor(ctx, in, info, handler)
 }
 
+func _CommandService_ReplaceAgentResponse_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReplaceAgentResponseRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CommandServiceServer).ReplaceAgentResponse(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CommandService_ReplaceAgentResponse_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CommandServiceServer).ReplaceAgentResponse(ctx, req.(*ReplaceAgentResponseRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _CommandService_SendAgentFollowUp_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(SendAgentFollowUpRequest)
 	if err := dec(in); err != nil {
@@ -408,6 +444,10 @@ var CommandService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "FinishAgentResponse",
 			Handler:    _CommandService_FinishAgentResponse_Handler,
+		},
+		{
+			MethodName: "ReplaceAgentResponse",
+			Handler:    _CommandService_ReplaceAgentResponse_Handler,
 		},
 		{
 			MethodName: "SendAgentFollowUp",

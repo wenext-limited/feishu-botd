@@ -162,6 +162,26 @@ func (c *commandServer) FinishAgentResponse(ctx context.Context, in *pb.FinishAg
 	return &pb.FinishAgentResponseResponse{Response: agentReceiptToProto(receipt)}, nil
 }
 
+func (c *commandServer) ReplaceAgentResponse(ctx context.Context, in *pb.ReplaceAgentResponseRequest) (*pb.ReplaceAgentResponseResponse, error) {
+	if err := requireProviderIdentity(ctx, in.GetProvider()); err != nil {
+		return nil, err
+	}
+	receipt, apiErr := c.svc.ReplaceAgentResponse(ctx, service.ReplaceAgentResponseInput{
+		Provider:         in.GetProvider(),
+		ResponseID:       in.GetResponseId(),
+		OperationID:      in.GetOperationId(),
+		ExpectedRevision: in.GetExpectedRevision(),
+		Markdown:         in.GetMarkdown(),
+		Summary:          in.GetSummary(),
+		TimelineMarkdown: in.GetTimelineMarkdown(),
+		TimelineTitle:    in.GetTimelineTitle(),
+	})
+	if apiErr != nil {
+		return nil, grpcError(apiErr, requestIDFromContext(ctx))
+	}
+	return &pb.ReplaceAgentResponseResponse{Response: agentReceiptToProto(receipt)}, nil
+}
+
 func (c *commandServer) SendAgentFollowUp(ctx context.Context, in *pb.SendAgentFollowUpRequest) (*pb.SendAgentFollowUpResponse, error) {
 	if err := authorizeAgentFollowUp(ctx, in.GetProvider()); err != nil {
 		return nil, err

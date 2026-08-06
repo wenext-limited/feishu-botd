@@ -487,11 +487,27 @@ func TestGRPCAgentResponseLifecycle(t *testing.T) {
 	}
 	requireAgentReceipt(t, finished.GetResponse(), responseID, 3, pb.AgentResponsePhase_AGENT_RESPONSE_PHASE_FAILED, false)
 
+	replaceRequest := &pb.ReplaceAgentResponseRequest{
+		Provider: "fixture-agent", ResponseId: responseID, OperationId: "replace_fixture",
+		ExpectedRevision: 3, Markdown: "The detached fixture investigation is complete.",
+		Summary: "Fixture investigation complete",
+	}
+	replaced, err := client.ReplaceAgentResponse(context.Background(), replaceRequest)
+	if err != nil {
+		t.Fatalf("replace terminal agent response: %v", err)
+	}
+	requireAgentReceipt(t, replaced.GetResponse(), responseID, 4, pb.AgentResponsePhase_AGENT_RESPONSE_PHASE_FAILED, false)
+	replayedReplacement, err := client.ReplaceAgentResponse(context.Background(), replaceRequest)
+	if err != nil {
+		t.Fatalf("replay terminal replacement: %v", err)
+	}
+	requireAgentReceipt(t, replayedReplacement.GetResponse(), responseID, 4, pb.AgentResponsePhase_AGENT_RESPONSE_PHASE_FAILED, true)
+
 	_, err = client.UpdateAgentResponse(context.Background(), &pb.UpdateAgentResponseRequest{
 		Provider:         "fixture-agent",
 		ResponseId:       responseID,
 		OperationId:      "after_finish_fixture",
-		ExpectedRevision: 3,
+		ExpectedRevision: 4,
 		Markdown:         "This update is too late.",
 	})
 	if status.Code(err) != codes.FailedPrecondition {
@@ -502,8 +518,9 @@ func TestGRPCAgentResponseLifecycle(t *testing.T) {
 	}
 
 	_, cardSends, contentUpdates, settingUpdates = sender.snapshot()
-	if len(cardSends) != 1 || len(contentUpdates) != 2 || len(settingUpdates) != 1 {
-		t.Fatalf("card operation counts: sends=%d content=%d settings=%d", len(cardSends), len(contentUpdates), len(settingUpdates))
+	batchUpdates := sender.batchSnapshot()
+	if len(cardSends) != 1 || len(contentUpdates) != 2 || len(settingUpdates) != 2 || len(batchUpdates) != 1 {
+		t.Fatalf("card operation counts: sends=%d content=%d settings=%d batch=%d", len(cardSends), len(contentUpdates), len(settingUpdates), len(batchUpdates))
 	}
 }
 
