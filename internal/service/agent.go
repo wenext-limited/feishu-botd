@@ -532,6 +532,14 @@ func (b *agentBroker) dispatchMessageForProvider(in CommandInput, provider strin
 	if len(candidates) == 0 {
 		candidates = fallback
 	}
+	replyToMessageRef := ""
+	if provider != "" {
+		// A pinned provider reaches this path only after
+		// resolveAgentReplyOwner proved the parent was authored by that
+		// provider. A raw parent_id alone is not proof: ordinary topic and DM
+		// replies can point at human-authored messages.
+		replyToMessageRef = feishu.MessageRefForApp(in.AppAlias, in.Metadata["parent_id"])
+	}
 
 	event := AgentEvent{
 		DeliveryID:     in.DeliveryID,
@@ -543,7 +551,7 @@ func (b *agentBroker) dispatchMessageForProvider(in CommandInput, provider strin
 			Text:              in.Prompt,
 			Command:           in.Command,
 			CommandText:       in.Text,
-			ReplyToMessageRef: feishu.MessageRefForApp(in.AppAlias, in.Metadata["parent_id"]),
+			ReplyToMessageRef: replyToMessageRef,
 			ConversationTitle: in.ConversationTitle,
 		},
 	}

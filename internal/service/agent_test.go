@@ -178,11 +178,37 @@ func TestAgentUnmatchedMessageDeliversCompletePrompt(t *testing.T) {
 	if event.Message.Command != "explain" || event.Message.CommandText != "this failure" {
 		t.Fatalf("parsed command fields = %#v", event.Message)
 	}
-	if event.Message.ConversationTitle != "Yoki QA" || event.Message.ReplyToMessageRef != feishu.MessageRefForApp("", "om_parent") {
+	if event.Message.ConversationTitle != "Yoki QA" || event.Message.ReplyToMessageRef != "" {
 		t.Fatalf("message context = %#v", event.Message)
 	}
 	if event.ConversationID != "conv_prompt" || event.ChatAlias != "ops" {
 		t.Fatalf("event routing = %#v", event)
+	}
+}
+
+func TestAgentDirectReplyToUnownedMessageOmitsReplyReference(t *testing.T) {
+	svc := newAgentTestService(newFakeAgentBackend())
+	sub := mustSubscribeAgent(t, svc, AgentSubscribeOptions{
+		Provider:                 "chat-agent",
+		IncludeUnmatchedMessages: true,
+	})
+	mustDispatchAgentPrompt(t, svc, CommandInput{
+		DeliveryID:     "evt_direct_unowned_reply",
+		Prompt:         "看看这个问题",
+		ConversationID: "conv_direct",
+		ChatAlias:      "direct",
+		SenderID:       "ou_sender",
+		ChatID:         "oc_direct",
+		Metadata: map[string]string{
+			"chat_type":  "p2p",
+			"message_id": "om_direct_reply",
+			"parent_id":  "om_human_parent",
+		},
+	})
+
+	event := receiveAgentEvent(t, sub)
+	if event.Message == nil || event.Message.ReplyToMessageRef != "" {
+		t.Fatalf("unowned direct reply event = %#v", event)
 	}
 }
 

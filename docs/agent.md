@@ -270,8 +270,10 @@ reserved `default` app keeps the pre-multi-app conversation-id derivation
 byte-for-byte so durable provider state continues to resolve. Only additional
 apps are namespaced into the derivation.
 
-For an explicit Feishu reply, `reply_to_message_ref` is the app-scoped opaque
-identity of the exact parent message. It is empty for a non-reply. Group
+For a Feishu reply whose parent is proven to be authored by the receiving
+provider, `reply_to_message_ref` is the app-scoped opaque identity of that
+exact parent message. It is empty for a non-reply and for a reply to an
+unowned message, including an ordinary human-authored topic parent. Group
 messages also carry the current, trimmed `conversation_title` when the bounded
 five-minute lookup succeeds. The title is user-controlled context, not an
 authorization value; direct messages and failed lookups carry an empty title.

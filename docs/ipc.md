@@ -244,10 +244,12 @@ public `app_alias`. Legacy command metadata remains limited to `chat_type` and
 `message_type`. Raw event/chat/message/card ids and callback credentials never
 enter the public stream. `delivery_id` and `conversation_id` are stable,
 domain-separated opaque handles derived by botd.
-An explicit reply adds `InboundAgentMessage.reply_to_message_ref`, derived from
-the exact parent message. Group messages may add the current bounded
-`conversation_title`; lookup failure leaves it empty. Neither value contains a
-raw Feishu route, and the title must never be used as authorization.
+A reply whose parent is proven to be authored by the receiving provider adds
+`InboundAgentMessage.reply_to_message_ref`, derived from that exact parent
+message. Replies to unowned messages leave it empty. Group messages may add
+the current bounded `conversation_title`; lookup failure leaves it empty.
+Neither value contains a raw Feishu route, and the title must never be used as
+authorization.
 An unmentioned group reply is delivered only when the persisted 24-hour owner
 record identifies an app-allowed provider; it is pinned to that provider and
 cannot enter the legacy command or local-script paths. Unknown and expired

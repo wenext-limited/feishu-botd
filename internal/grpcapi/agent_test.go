@@ -332,7 +332,7 @@ func TestGRPCAgentResponseLifecycle(t *testing.T) {
 	if message == nil || message.GetText() != "Explain the fixture.\nKeep it concise." || message.GetCommand() != "ask" || message.GetCommandText() != "the fixture" {
 		t.Fatalf("agent message = %#v", message)
 	}
-	if message.GetReplyToMessageRef() != feishu.MessageRefForApp(config.DefaultAppAlias, "parent_message_fixture") || message.GetConversationTitle() != "Yoki QA" {
+	if message.GetReplyToMessageRef() != "" || message.GetConversationTitle() != "Yoki QA" {
 		t.Fatalf("agent message context = %#v", message)
 	}
 	if len(event.GetMetadata()) != 2 || event.GetMetadata()["chat_type"] != "group" || event.GetMetadata()["message_type"] != "text" {
