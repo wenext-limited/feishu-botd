@@ -144,10 +144,16 @@ Inbound Feishu events are dispatched only for an app whose `commands.enabled`
 is true (the existing `FEISHU_BOTD_COMMANDS_ENABLED` override affects the
 reserved `default` app). Users invoke commands as
 `@<bot-name> <COMMAND> [args...]`. The daemon opens one Feishu long connection
-per configured app and handles `im.message.receive_v1`. It accepts text messages
+per configured app and handles `im.message.receive_v1`. It accepts text and
+rich-text (post) messages
 from globally unique configured channel aliases after either verifying that
 app's configured bot-name/bot-id mention or proving that an unmentioned reply's
-parent is owned by an agent provider. Mention tokens are stripped. For exact
+parent is owned by an agent provider. Mention tokens are stripped. A rich-text
+trigger is flattened into the prompt: text runs pass through, other users'
+mentions become `@participant`, and content the daemon cannot carry degrades to
+an inline placeholder (`[image]`, `[unsupported video file]`) instead of
+dropping the whole message, so a provider can still answer the words beside an
+attachment it cannot see. For exact
 command routing it derives the first word as `command` with the rest as `text`;
 the complete prompt remains authoritative for conversational routing.
 

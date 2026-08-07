@@ -245,13 +245,52 @@ func TestAttachedContextLookupReportsPartialImageAndVideoFailures(t *testing.T) 
 	if err != nil {
 		t.Fatalf("lookup: %v", err)
 	}
-	if got.Status != AttachedContextUnreadable {
-		t.Fatalf("status = %v, want unreadable when all discovered content is unreadable/omitted", got.Status)
+	if got.Status != AttachedContextFound {
+		t.Fatalf("status = %v, want found: the video degrades to a placeholder row, not a refusal", got.Status)
+	}
+	if len(got.Messages) != 1 || got.Messages[0].Text != placeholderVideo {
+		t.Fatalf("messages = %#v, want one video placeholder row", got.Messages)
 	}
 	for _, issue := range []AttachedContextIssueCode{AttachedContextIssueVideoOmitted, AttachedContextIssueImageUnreadable} {
 		if !hasAttachedContextIssue(got.Issues, issue) {
 			t.Fatalf("missing issue %q in %#v", issue, got.Issues)
 		}
+	}
+}
+
+func TestAttachedContextLookupDegradesUnsupportedMessagesToPlaceholderRows(t *testing.T) {
+	history := &fakeThreadMessageAPI{responses: []*larkim.ListMessageResp{listMessageResponse(false, "",
+		threadMessage("om_guide", "text", `{"text":"@Nous 看看这个"}`, "5000", "ou_guide", "user"),
+		threadMessage("om_card", "interactive", `{"elements":[]}`, "4000", "ou_bot", "app"),
+		threadMessage("om_file", "file", `{"file_key":"file_doc","file_name":"crash报告.pdf"}`, "3000", "ou_one", "user"),
+		threadMessage("om_audio", "audio", `{"file_key":"file_voice"}`, "2000", "ou_one", "user"),
+		threadMessage("om_post", "post", `{"zh_cn":{"title":"","content":[[{"tag":"text","text":"复现视频："},{"tag":"media","file_key":"video_repro"},{"tag":"text","text":"，登录后必现"}]]}}`, "1000", "ou_two", "user"),
+	)}}
+	lookup := newSDKAttachedContextLookup(history, &orderedFakeMessageResourceAPI{})
+
+	got, err := lookup.LookupAttachedContext(context.Background(), AttachedContextRequest{
+		ThreadID: "omt_thread", TriggerMessageID: "om_guide", TriggerCreateTime: "5000",
+	})
+	if err != nil {
+		t.Fatalf("lookup: %v", err)
+	}
+	if got.Status != AttachedContextFound || len(got.Messages) != 4 {
+		t.Fatalf("context = %#v", got)
+	}
+	wantTexts := []string{
+		"复现视频：" + placeholderVideo + "，登录后必现",
+		placeholderAudio,
+		"[unsupported file: crash报告.pdf]",
+		placeholderUnsupported,
+	}
+	for index, want := range wantTexts {
+		if got.Messages[index].Text != want {
+			t.Fatalf("messages[%d].Text = %q, want %q", index, got.Messages[index].Text, want)
+		}
+	}
+	if !hasAttachedContextIssue(got.Issues, AttachedContextIssueVideoOmitted) ||
+		!hasAttachedContextIssue(got.Issues, AttachedContextIssueUnsupportedMessage) {
+		t.Fatalf("issues = %#v", got.Issues)
 	}
 }
 

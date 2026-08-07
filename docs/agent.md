@@ -325,8 +325,15 @@ boundary within its bounded scan, it returns `UNREADABLE`; it never guesses.
 Server-owned limits are 64 prior messages, 64 KiB normalized text, eight
 images, 5 MiB per image, and 16 MiB total image payload bytes. A separate
 256-message scan limit protects exact-boundary discovery. Every limit and every
-partial image/message failure produces a typed issue; videos are omitted with
-`VIDEO_OMITTED`. MIME types are detected from bytes and allowlisted rather than
+partial image/message failure produces a typed issue. Content the daemon
+cannot carry degrades to an inline text placeholder at its position in the
+snapshot rather than disappearing behind the counter alone: a video message or
+a post's embedded video becomes `[unsupported video file]` (still counted as
+`VIDEO_OMITTED`), a file message becomes `[unsupported file: <name>]`, and
+audio/sticker/other kinds become typed `[unsupported …]` rows (counted as
+`UNSUPPORTED_MESSAGE`) — so a topic whose only content is a video still
+resolves `FOUND` and the provider can address the question around it. MIME
+types are detected from bytes and allowlisted rather than
 trusted from message metadata. Provider-visible output contains no Feishu
 message id, thread id, image key, or stable participant id.
 

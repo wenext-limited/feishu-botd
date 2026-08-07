@@ -242,6 +242,96 @@ func TestCommandFromEventAcceptsP2PWithoutMentionAndPreservesPrompt(t *testing.T
 	}
 }
 
+func TestCommandFromEventAcceptsMentionedPostTriggerWithPlaceholders(t *testing.T) {
+	r := NewCommandReceiver(CommandReceiverConfig{
+		AppID:     "cli_test",
+		AppSecret: "secret",
+		Channels:  map[string]string{"ops": "oc_ops"},
+		BotOpenID: "ou_bot",
+	}, nil, nil)
+
+	content := `{"zh_cn":{"title":"","content":[[` +
+		`{"tag":"at","user_id":"ou_bot","user_name":"Nous"},` +
+		`{"tag":"text","text":"看看这个"},` +
+		`{"tag":"media","file_key":"video_1"}],[` +
+		`{"tag":"at","user_id":"ou_colleague","user_name":"Private Name"},` +
+		`{"tag":"text","text":"reported it"},` +
+		`{"tag":"img","image_key":"img_1"}]]}}`
+	event := postMessageEvent("evt_post", "om_post", "oc_ops", content, &larkim.MentionEvent{
+		Key:           ptr("@_user_1"),
+		MentionedType: ptr("app"),
+	})
+	cmd, ok := r.CommandFromEvent(event)
+	if !ok {
+		t.Fatal("expected a rich-text trigger to be accepted")
+	}
+	want := "看看这个" + placeholderVideo + "\n@participant" + "reported it" + placeholderImage
+	if cmd.Prompt != want {
+		t.Fatalf("prompt = %q, want %q", cmd.Prompt, want)
+	}
+	if strings.Contains(cmd.Prompt, "Private Name") || strings.Contains(cmd.Prompt, "ou_colleague") {
+		t.Fatalf("prompt leaked a mention identity: %q", cmd.Prompt)
+	}
+	if cmd.Metadata["message_type"] != "post" || cmd.ChatAlias != "ops" {
+		t.Fatalf("command = %#v", cmd)
+	}
+}
+
+func TestCommandFromEventAcceptsP2PPostTrigger(t *testing.T) {
+	r := NewCommandReceiver(CommandReceiverConfig{
+		AppID:     "cli_test",
+		AppSecret: "secret",
+		Channels:  map[string]string{"ops": "oc_ops"},
+	}, nil, nil)
+
+	content := `{"zh_cn":{"title":"","content":[[{"tag":"text","text":"这个视频里的问题帮我查一下"},{"tag":"media","file_key":"video_1"}]]}}`
+	event := postMessageEvent("evt_direct_post", "om_direct_post", "oc_direct", content)
+	*event.Event.Message.ChatType = "p2p"
+	cmd, ok := r.CommandFromEvent(event)
+	if !ok {
+		t.Fatal("expected a direct rich-text trigger to be accepted")
+	}
+	if cmd.Prompt != "这个视频里的问题帮我查一下"+placeholderVideo {
+		t.Fatalf("prompt = %q", cmd.Prompt)
+	}
+	if cmd.ChatAlias != "direct" {
+		t.Fatalf("route = %#v", cmd)
+	}
+}
+
+func TestCommandFromEventStillRejectsUnmentionedGroupPost(t *testing.T) {
+	r := NewCommandReceiver(CommandReceiverConfig{
+		AppID:     "cli_test",
+		AppSecret: "secret",
+		Channels:  map[string]string{"ops": "oc_ops"},
+		BotOpenID: "ou_bot",
+	}, nil, nil)
+
+	content := `{"zh_cn":{"title":"","content":[[{"tag":"text","text":"just chatting"},{"tag":"media","file_key":"video_1"}]]}}`
+	if _, ok := r.CommandFromEvent(postMessageEvent("evt_plain_post", "om_plain_post", "oc_ops", content)); ok {
+		t.Fatal("unmentioned group post must not become a command")
+	}
+}
+
+func TestCommandFromEventRejectsPostTriggerWithNoUsableContent(t *testing.T) {
+	r := NewCommandReceiver(CommandReceiverConfig{
+		AppID:     "cli_test",
+		AppSecret: "secret",
+		Channels:  map[string]string{"ops": "oc_ops"},
+		BotOpenID: "ou_bot",
+	}, nil, nil)
+
+	// Only the bot's own mention: nothing remains to ask.
+	content := `{"zh_cn":{"title":"","content":[[{"tag":"at","user_id":"ou_bot","user_name":"Nous"}]]}}`
+	event := postMessageEvent("evt_empty_post", "om_empty_post", "oc_ops", content, &larkim.MentionEvent{
+		Key:           ptr("@_user_1"),
+		MentionedType: ptr("app"),
+	})
+	if _, ok := r.CommandFromEvent(event); ok {
+		t.Fatal("a mention-only post must not become a command")
+	}
+}
+
 func TestCommandFromEventUsesOpaqueStableDeliveryIDWhenEventIDIsMissing(t *testing.T) {
 	r := NewCommandReceiver(CommandReceiverConfig{
 		AppID:     "cli_test",
@@ -667,10 +757,16 @@ func TestCardActionFromEventRejectsMissingEventID(t *testing.T) {
 }
 
 func messageEvent(eventID, messageID, chatID, text string, mentions ...*larkim.MentionEvent) *larkim.P2MessageReceiveV1 {
-	messageType := "text"
-	chatType := "group"
 	contentBytes, _ := json.Marshal(map[string]string{"text": text})
-	content := string(contentBytes)
+	return rawMessageEvent(eventID, messageID, chatID, "text", string(contentBytes), mentions...)
+}
+
+func postMessageEvent(eventID, messageID, chatID, content string, mentions ...*larkim.MentionEvent) *larkim.P2MessageReceiveV1 {
+	return rawMessageEvent(eventID, messageID, chatID, "post", content, mentions...)
+}
+
+func rawMessageEvent(eventID, messageID, chatID, messageType, content string, mentions ...*larkim.MentionEvent) *larkim.P2MessageReceiveV1 {
+	chatType := "group"
 	for _, mention := range mentions {
 		if mention != nil && mention.Id == nil && strings.EqualFold(deref(mention.MentionedType), "app") {
 			mention.Id = &larkim.UserId{OpenId: ptr("ou_bot")}

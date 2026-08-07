@@ -23,6 +23,19 @@ const (
 	attachedContextMaxTotalImageBytes = 16 * 1024 * 1024
 )
 
+// Inline placeholders for content botd cannot carry. They ride in message
+// text so a provider sees WHERE an unsupported item sat in the conversation
+// and can still address the question beside it, instead of refusing over an
+// opaque aggregate issue counter.
+const (
+	placeholderVideo       = "[unsupported video file]"
+	placeholderFile        = "[unsupported file]"
+	placeholderAudio       = "[unsupported audio message]"
+	placeholderSticker     = "[unsupported sticker]"
+	placeholderImage       = "[image]"
+	placeholderUnsupported = "[unsupported message]"
+)
+
 // AttachedContextStatus distinguishes an absent topic from a topic botd could
 // not safely read. Found always contains at least one usable text or image.
 type AttachedContextStatus int
@@ -299,6 +312,16 @@ type parsedAttachedMessage struct {
 }
 
 func parseAttachedMessage(message *larkim.Message, trigger bool) (parsedAttachedMessage, []AttachedContextIssueCode, bool) {
+	parsed, issues, malformed := parseAttachedMessageContent(message)
+	if trigger {
+		// The trigger's own words already ride the prompt; only its images
+		// (and the omission issues above) belong in the snapshot.
+		parsed.text = ""
+	}
+	return parsed, issues, malformed
+}
+
+func parseAttachedMessageContent(message *larkim.Message) (parsedAttachedMessage, []AttachedContextIssueCode, bool) {
 	if message == nil || message.Body == nil || message.Body.Content == nil {
 		return parsedAttachedMessage{}, []AttachedContextIssueCode{AttachedContextIssueMalformedMessage}, true
 	}
@@ -311,9 +334,6 @@ func parseAttachedMessage(message *larkim.Message, trigger bool) (parsedAttached
 		if err := json.Unmarshal([]byte(content), &body); err != nil {
 			return parsedAttachedMessage{}, []AttachedContextIssueCode{AttachedContextIssueMalformedMessage}, true
 		}
-		if trigger {
-			return parsedAttachedMessage{}, nil, false
-		}
 		return parsedAttachedMessage{text: strings.TrimSpace(body.Text)}, nil, false
 	case "post":
 		text, images, videos, ok := parseAttachedPost(content)
@@ -323,9 +343,6 @@ func parseAttachedMessage(message *larkim.Message, trigger bool) (parsedAttached
 		issues := make([]AttachedContextIssueCode, videos)
 		for index := range issues {
 			issues[index] = AttachedContextIssueVideoOmitted
-		}
-		if trigger {
-			text = ""
 		}
 		return parsedAttachedMessage{text: text, imageKeys: images}, issues, false
 	case "image":
@@ -337,37 +354,70 @@ func parseAttachedMessage(message *larkim.Message, trigger bool) (parsedAttached
 		}
 		return parsedAttachedMessage{imageKeys: []string{strings.TrimSpace(body.ImageKey)}}, nil, false
 	case "media":
-		return parsedAttachedMessage{}, []AttachedContextIssueCode{AttachedContextIssueVideoOmitted}, false
+		return parsedAttachedMessage{text: placeholderVideo}, []AttachedContextIssueCode{AttachedContextIssueVideoOmitted}, false
+	case "file":
+		return parsedAttachedMessage{text: filePlaceholder(content)}, []AttachedContextIssueCode{AttachedContextIssueUnsupportedMessage}, false
+	case "audio":
+		return parsedAttachedMessage{text: placeholderAudio}, []AttachedContextIssueCode{AttachedContextIssueUnsupportedMessage}, false
+	case "sticker":
+		return parsedAttachedMessage{text: placeholderSticker}, []AttachedContextIssueCode{AttachedContextIssueUnsupportedMessage}, false
 	default:
-		return parsedAttachedMessage{}, []AttachedContextIssueCode{AttachedContextIssueUnsupportedMessage}, false
+		return parsedAttachedMessage{text: placeholderUnsupported}, []AttachedContextIssueCode{AttachedContextIssueUnsupportedMessage}, false
 	}
 }
 
-type attachedPostDocument map[string]struct {
-	Title   string `json:"title"`
-	Content [][]struct {
-		Tag      string `json:"tag"`
-		Text     string `json:"text"`
-		ImageKey string `json:"image_key"`
-	} `json:"content"`
+// filePlaceholder names the file when its descriptor parses — the name is
+// ordinary user-shared chat content and often IS the referent of a question
+// ("看看这个") — and degrades to the bare placeholder when it does not.
+func filePlaceholder(content string) string {
+	var body struct {
+		FileName string `json:"file_name"`
+	}
+	if err := json.Unmarshal([]byte(content), &body); err != nil {
+		return placeholderFile
+	}
+	name := strings.TrimSpace(body.FileName)
+	if name == "" {
+		return placeholderFile
+	}
+	return "[unsupported file: " + name + "]"
+}
+
+// postElement is one typed run inside a Feishu rich-text (post) message.
+type postElement struct {
+	Tag      string `json:"tag"`
+	Text     string `json:"text"`
+	ImageKey string `json:"image_key"`
+	UserID   string `json:"user_id"`
+	UserName string `json:"user_name"`
+}
+
+type localizedPost struct {
+	Title   string          `json:"title"`
+	Content [][]postElement `json:"content"`
+}
+
+type attachedPostDocument map[string]localizedPost
+
+// localizedAttachedPost picks the one localization this daemon flattens.
+func localizedAttachedPost(raw string) (localizedPost, bool) {
+	var document attachedPostDocument
+	if err := json.Unmarshal([]byte(raw), &document); err != nil || len(document) == 0 {
+		return localizedPost{}, false
+	}
+	for _, candidate := range []string{"zh_cn", "en_us", "ja_jp"} {
+		if localized, ok := document[candidate]; ok {
+			return localized, true
+		}
+	}
+	return localizedPost{}, false
 }
 
 func parseAttachedPost(raw string) (string, []string, int, bool) {
-	var document attachedPostDocument
-	if err := json.Unmarshal([]byte(raw), &document); err != nil || len(document) == 0 {
+	localized, ok := localizedAttachedPost(raw)
+	if !ok {
 		return "", nil, 0, false
 	}
-	language := ""
-	for _, candidate := range []string{"zh_cn", "en_us", "ja_jp"} {
-		if _, ok := document[candidate]; ok {
-			language = candidate
-			break
-		}
-	}
-	if language == "" {
-		return "", nil, 0, false
-	}
-	localized := document[language]
 	lines := make([]string, 0)
 	if title := strings.TrimSpace(localized.Title); title != "" {
 		lines = append(lines, title)
@@ -383,6 +433,10 @@ func parseAttachedPost(raw string) (string, []string, int, bool) {
 					images = append(images, key)
 				}
 			case "media":
+				// The video itself cannot cross this boundary; the inline
+				// placeholder keeps its position in the prose so a provider
+				// knows what the surrounding words refer to.
+				parts = append(parts, placeholderVideo)
 				videos++
 			case "at":
 				// Structured mention display names are provider identities, not

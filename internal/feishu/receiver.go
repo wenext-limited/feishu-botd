@@ -455,7 +455,8 @@ func (r *CommandReceiver) CommandFromEvent(event *larkim.P2MessageReceiveV1) (In
 		return InboundCommand{}, false
 	}
 	msg := event.Event.Message
-	if deref(msg.MessageType) != "text" || msg.Content == nil {
+	messageType := deref(msg.MessageType)
+	if (messageType != "text" && messageType != "post") || msg.Content == nil {
 		return InboundCommand{}, false
 	}
 	chatType := deref(msg.ChatType)
@@ -483,13 +484,23 @@ func (r *CommandReceiver) CommandFromEvent(event *larkim.P2MessageReceiveV1) (In
 		return InboundCommand{}, false
 	}
 
-	var body struct {
-		Text string `json:"text"`
+	text := ""
+	switch messageType {
+	case "text":
+		var body struct {
+			Text string `json:"text"`
+		}
+		if err := json.Unmarshal([]byte(deref(msg.Content)), &body); err != nil {
+			return InboundCommand{}, false
+		}
+		text = strings.TrimSpace(body.Text)
+	case "post":
+		var ok bool
+		text, ok = r.postTriggerText(deref(msg.Content), msg.Mentions)
+		if !ok {
+			return InboundCommand{}, false
+		}
 	}
-	if err := json.Unmarshal([]byte(deref(msg.Content)), &body); err != nil {
-		return InboundCommand{}, false
-	}
-	text := strings.TrimSpace(body.Text)
 	if text == "" {
 		return InboundCommand{}, false
 	}
@@ -619,6 +630,91 @@ func (r *CommandReceiver) matchingMentionKeys(mentions []*larkim.MentionEvent) [
 		}
 	}
 	return keys
+}
+
+// postTriggerText flattens a rich-text (post) trigger into the prompt. Text
+// runs pass through; the bot's own mention is dropped (it addresses, it does
+// not ask); other mentions become "@participant" — structured display names
+// are provider identities, same rule as the attached-context snapshot; and
+// content the daemon cannot carry degrades to an inline placeholder
+// ("[image]", "[unsupported video file]") instead of vanishing, so a provider
+// knows the message carried something it cannot see and can still answer the
+// words around it.
+func (r *CommandReceiver) postTriggerText(raw string, mentions []*larkim.MentionEvent) (string, bool) {
+	post, ok := localizedAttachedPost(raw)
+	if !ok {
+		return "", false
+	}
+	botTokens := r.botMentionTokens(mentions)
+	lines := make([]string, 0)
+	if title := strings.TrimSpace(post.Title); title != "" {
+		lines = append(lines, title)
+	}
+	for _, row := range post.Content {
+		parts := make([]string, 0, len(row))
+		for _, element := range row {
+			switch strings.TrimSpace(element.Tag) {
+			case "img":
+				parts = append(parts, placeholderImage)
+			case "media":
+				parts = append(parts, placeholderVideo)
+			case "at":
+				if r.isBotPostMention(element, botTokens) {
+					continue
+				}
+				parts = append(parts, "@participant")
+			default:
+				if element.Text != "" {
+					parts = append(parts, element.Text)
+				}
+			}
+		}
+		if line := strings.TrimSpace(strings.Join(parts, "")); line != "" {
+			lines = append(lines, line)
+		}
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n")), true
+}
+
+// botMentionTokens collects every identifier shape a post at-element could
+// carry for THIS bot: the event's mention keys and ids for mentions that
+// matched the bot, plus the configured strong identities.
+func (r *CommandReceiver) botMentionTokens(mentions []*larkim.MentionEvent) map[string]struct{} {
+	tokens := make(map[string]struct{})
+	add := func(value string) {
+		if value = strings.TrimSpace(value); value != "" {
+			tokens[value] = struct{}{}
+		}
+	}
+	for _, mention := range mentions {
+		if !r.matchesBotMention(mention) {
+			continue
+		}
+		add(deref(mention.Key))
+		if mention.Id != nil {
+			add(deref(mention.Id.OpenId))
+			add(deref(mention.Id.UserId))
+			add(deref(mention.Id.UnionId))
+		}
+	}
+	add(r.cfg.BotOpenID)
+	add(r.cfg.BotUserID)
+	add(r.cfg.BotUnionID)
+	return tokens
+}
+
+// isBotPostMention says whether one post at-element addresses this bot — by
+// any known identity token, or (as a display-only fallback) by configured
+// name. A false positive only hides one "@participant" from the prompt; the
+// authorization decision stays with matchesBotMention.
+func (r *CommandReceiver) isBotPostMention(element postElement, botTokens map[string]struct{}) bool {
+	if userID := strings.TrimSpace(element.UserID); userID != "" {
+		if _, ok := botTokens[userID]; ok {
+			return true
+		}
+	}
+	_, ok := r.botNames[strings.ToLower(strings.TrimSpace(element.UserName))]
+	return ok
 }
 
 func (r *CommandReceiver) matchesBotMention(mention *larkim.MentionEvent) bool {
