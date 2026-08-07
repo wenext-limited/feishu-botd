@@ -250,13 +250,13 @@ func TestCommandFromEventAcceptsMentionedPostTriggerWithPlaceholders(t *testing.
 		BotOpenID: "ou_bot",
 	}, nil, nil)
 
-	content := `{"zh_cn":{"title":"","content":[[` +
+	content := `{"title":"","content":[[` +
 		`{"tag":"at","user_id":"ou_bot","user_name":"Nous"},` +
 		`{"tag":"text","text":"看看这个"},` +
 		`{"tag":"media","file_key":"video_1"}],[` +
 		`{"tag":"at","user_id":"ou_colleague","user_name":"Private Name"},` +
 		`{"tag":"text","text":"reported it"},` +
-		`{"tag":"img","image_key":"img_1"}]]}}`
+		`{"tag":"img","image_key":"img_1"}]]}`
 	event := postMessageEvent("evt_post", "om_post", "oc_ops", content, &larkim.MentionEvent{
 		Key:           ptr("@_user_1"),
 		MentionedType: ptr("app"),
@@ -284,7 +284,7 @@ func TestCommandFromEventAcceptsP2PPostTrigger(t *testing.T) {
 		Channels:  map[string]string{"ops": "oc_ops"},
 	}, nil, nil)
 
-	content := `{"zh_cn":{"title":"","content":[[{"tag":"text","text":"这个视频里的问题帮我查一下"},{"tag":"media","file_key":"video_1"}]]}}`
+	content := `{"title":"","content":[[{"tag":"text","text":"这个视频里的问题帮我查一下"},{"tag":"media","file_key":"video_1"}]]}`
 	event := postMessageEvent("evt_direct_post", "om_direct_post", "oc_direct", content)
 	*event.Event.Message.ChatType = "p2p"
 	cmd, ok := r.CommandFromEvent(event)
@@ -307,7 +307,7 @@ func TestCommandFromEventStillRejectsUnmentionedGroupPost(t *testing.T) {
 		BotOpenID: "ou_bot",
 	}, nil, nil)
 
-	content := `{"zh_cn":{"title":"","content":[[{"tag":"text","text":"just chatting"},{"tag":"media","file_key":"video_1"}]]}}`
+	content := `{"title":"","content":[[{"tag":"text","text":"just chatting"},{"tag":"media","file_key":"video_1"}]]}`
 	if _, ok := r.CommandFromEvent(postMessageEvent("evt_plain_post", "om_plain_post", "oc_ops", content)); ok {
 		t.Fatal("unmentioned group post must not become a command")
 	}
@@ -322,7 +322,7 @@ func TestCommandFromEventRejectsPostTriggerWithNoUsableContent(t *testing.T) {
 	}, nil, nil)
 
 	// Only the bot's own mention: nothing remains to ask.
-	content := `{"zh_cn":{"title":"","content":[[{"tag":"at","user_id":"ou_bot","user_name":"Nous"}]]}}`
+	content := `{"title":"","content":[[{"tag":"at","user_id":"ou_bot","user_name":"Nous"}]]}`
 	event := postMessageEvent("evt_empty_post", "om_empty_post", "oc_ops", content, &larkim.MentionEvent{
 		Key:           ptr("@_user_1"),
 		MentionedType: ptr("app"),

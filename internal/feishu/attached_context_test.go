@@ -134,8 +134,8 @@ func TestAttachedContextLookupFailsClosedWhenTriggerSearchCapIsExhausted(t *test
 func TestAttachedContextLookupRetainsTriggerImagesButNotGuideText(t *testing.T) {
 	png := append([]byte("\x89PNG\r\n\x1a\n"), bytes.Repeat([]byte{0}, 32)...)
 	history := &fakeThreadMessageAPI{responses: []*larkim.ListMessageResp{listMessageResponse(false, "",
-		threadMessage("om_guide", "post", `{"zh_cn":{"title":"guide title","content":[[{"tag":"text","text":"@Nous 看看这个问题"},{"tag":"img","image_key":"img_guide"},{"tag":"media","file_key":"video_guide"}]]}}`, "2000", "ou_guide", "user"),
-		threadMessage("om_before", "post", `{"zh_cn":{"title":"Crash","content":[[{"tag":"text","text":"happens on launch, reported by "},{"tag":"at","user_name":"Private Display Name"},{"tag":"img","image_key":"img_before"}]]}}`, "1000", "ou_reporter", "user"),
+		threadMessage("om_guide", "post", `{"title":"guide title","content":[[{"tag":"text","text":"@Nous 看看这个问题"},{"tag":"img","image_key":"img_guide"},{"tag":"media","file_key":"video_guide"}]]}`, "2000", "ou_guide", "user"),
+		threadMessage("om_before", "post", `{"title":"Crash","content":[[{"tag":"text","text":"happens on launch, reported by "},{"tag":"at","user_name":"Private Display Name"},{"tag":"img","image_key":"img_before"}]]}`, "1000", "ou_reporter", "user"),
 	)}}
 	resources := &orderedFakeMessageResourceAPI{data: [][]byte{png, png}}
 	lookup := newSDKAttachedContextLookup(history, resources)
@@ -264,7 +264,7 @@ func TestAttachedContextLookupDegradesUnsupportedMessagesToPlaceholderRows(t *te
 		threadMessage("om_card", "interactive", `{"elements":[]}`, "4000", "ou_bot", "app"),
 		threadMessage("om_file", "file", `{"file_key":"file_doc","file_name":"crash报告.pdf"}`, "3000", "ou_one", "user"),
 		threadMessage("om_audio", "audio", `{"file_key":"file_voice"}`, "2000", "ou_one", "user"),
-		threadMessage("om_post", "post", `{"zh_cn":{"title":"","content":[[{"tag":"text","text":"复现视频："},{"tag":"media","file_key":"video_repro"},{"tag":"text","text":"，登录后必现"}]]}}`, "1000", "ou_two", "user"),
+		threadMessage("om_post", "post", `{"title":"","content":[[{"tag":"text","text":"复现视频："},{"tag":"media","file_key":"video_repro"},{"tag":"text","text":"，登录后必现"}]]}`, "1000", "ou_two", "user"),
 	)}}
 	lookup := newSDKAttachedContextLookup(history, &orderedFakeMessageResourceAPI{})
 
@@ -323,6 +323,65 @@ func TestAttachedContextLookupEnforcesAndReportsCaps(t *testing.T) {
 	}
 	if len(got.Messages) != 1 || len(got.Messages[0].Text) > attachedContextMaxTextBytes {
 		t.Fatalf("bounded messages = %#v", got.Messages)
+	}
+}
+
+// Received post content is the FLAT shape ({"title":…,"content":[[…]]});
+// the locale wrapper only exists in the send format. Both parse, because a
+// parser that only knew the send shape silently classified every real
+// rich-text bug report as malformed — the 2026-08-07 「看看这个」 incident.
+func TestLocalizedAttachedPostAcceptsReceivedAndSendShapes(t *testing.T) {
+	flat := `{"title":"Bug 报告","content":[[{"tag":"text","text":"问题描述"}]],"content_v2":[[{"tag":"md","text":"问题描述"}]]}`
+	wrapped := `{"zh_cn":{"title":"Bug 报告","content":[[{"tag":"text","text":"问题描述"}]]}}`
+	for name, raw := range map[string]string{"received flat": flat, "send wrapped": wrapped} {
+		post, ok := localizedAttachedPost(raw)
+		if !ok || post.Title != "Bug 报告" || len(post.Content) != 1 {
+			t.Fatalf("%s shape did not parse: ok=%v post=%#v", name, ok, post)
+		}
+	}
+	for name, raw := range map[string]string{
+		"not json":   "not json",
+		"empty":      "{}",
+		"wrong type": `{"title":42}`,
+	} {
+		if _, ok := localizedAttachedPost(raw); ok {
+			t.Fatalf("%s shape must not parse", name)
+		}
+	}
+}
+
+func TestAttachedContextLookupSkipsRecalledAndSystemMessages(t *testing.T) {
+	yes := true
+	recalled := threadMessage("om_recalled", "text", `{"text":"taken back"}`, "1500", "ou_one", "user")
+	recalled.Deleted = &yes
+	history := &fakeThreadMessageAPI{responses: []*larkim.ListMessageResp{listMessageResponse(false, "",
+		threadMessage("om_guide", "text", `{"text":"@Nous 看看这个"}`, "4000", "ou_guide", "user"),
+		threadMessage("om_system", "system", `{"template":"joined the topic"}`, "3000", "ou_sys", "app"),
+		recalled,
+		threadMessage("om_report", "post", `{"title":"","content":[[{"tag":"text","text":"问题描述：游戏中卡住"},{"tag":"media","file_key":"video_1"}]]}`, "1000", "ou_one", "user"),
+	)}}
+	lookup := newSDKAttachedContextLookup(history, &orderedFakeMessageResourceAPI{})
+
+	got, err := lookup.LookupAttachedContext(context.Background(), AttachedContextRequest{
+		ThreadID: "omt_thread", TriggerMessageID: "om_guide", TriggerCreateTime: "4000",
+	})
+	if err != nil {
+		t.Fatalf("lookup: %v", err)
+	}
+	if got.Status != AttachedContextFound || len(got.Messages) != 1 {
+		t.Fatalf("context = %#v", got)
+	}
+	if got.Messages[0].Text != "问题描述：游戏中卡住"+placeholderVideo {
+		t.Fatalf("report row = %#v", got.Messages[0])
+	}
+	for _, message := range got.Messages {
+		if strings.Contains(message.Text, "taken back") {
+			t.Fatalf("a recalled message resurfaced: %#v", message)
+		}
+	}
+	if hasAttachedContextIssue(got.Issues, AttachedContextIssueUnsupportedMessage) ||
+		hasAttachedContextIssue(got.Issues, AttachedContextIssueMalformedMessage) {
+		t.Fatalf("chrome must not be reported as an issue: %#v", got.Issues)
 	}
 }
 

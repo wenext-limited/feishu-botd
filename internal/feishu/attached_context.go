@@ -155,6 +155,11 @@ func (s *sdkAttachedContextLookup) LookupAttachedContext(ctx context.Context, in
 	participants := make(map[string]string)
 	for index := len(candidates) - 1; index >= 0; index-- {
 		candidate := candidates[index]
+		// A recalled message was withdrawn by its author; carrying even a
+		// placeholder would resurface what they chose to take back.
+		if derefBool(candidate.message.Deleted) && !candidate.isTrigger {
+			continue
+		}
 		parsed, parseIssues, malformed := parseAttachedMessage(candidate.message, candidate.isTrigger)
 		for _, issue := range parseIssues {
 			result.Issues = appendOrIncrementAttachedContextIssue(result.Issues, issue)
@@ -361,6 +366,10 @@ func parseAttachedMessageContent(message *larkim.Message) (parsedAttachedMessage
 		return parsedAttachedMessage{text: placeholderAudio}, []AttachedContextIssueCode{AttachedContextIssueUnsupportedMessage}, false
 	case "sticker":
 		return parsedAttachedMessage{text: placeholderSticker}, []AttachedContextIssueCode{AttachedContextIssueUnsupportedMessage}, false
+	case "system":
+		// Conversational chrome ("… joined the topic"), not content: a
+		// placeholder row would only add noise between real messages.
+		return parsedAttachedMessage{}, nil, false
 	default:
 		return parsedAttachedMessage{text: placeholderUnsupported}, []AttachedContextIssueCode{AttachedContextIssueUnsupportedMessage}, false
 	}
@@ -399,18 +408,31 @@ type localizedPost struct {
 
 type attachedPostDocument map[string]localizedPost
 
-// localizedAttachedPost picks the one localization this daemon flattens.
+// localizedAttachedPost extracts the one post body this daemon flattens.
+//
+// RECEIVED post content — message events and the history/list API alike — is
+// the flat `{"title":…,"content":[[…]]}` shape; the `{"zh_cn":{…}}` locale
+// wrapper exists only in the SEND format. The wrapped shape stays accepted
+// for robustness, but the flat shape is what real inbound traffic carries.
 func localizedAttachedPost(raw string) (localizedPost, bool) {
+	var flat localizedPost
+	if err := json.Unmarshal([]byte(raw), &flat); err == nil && postHasBody(flat) {
+		return flat, true
+	}
 	var document attachedPostDocument
 	if err := json.Unmarshal([]byte(raw), &document); err != nil || len(document) == 0 {
 		return localizedPost{}, false
 	}
 	for _, candidate := range []string{"zh_cn", "en_us", "ja_jp"} {
-		if localized, ok := document[candidate]; ok {
+		if localized, ok := document[candidate]; ok && postHasBody(localized) {
 			return localized, true
 		}
 	}
 	return localizedPost{}, false
+}
+
+func postHasBody(post localizedPost) bool {
+	return strings.TrimSpace(post.Title) != "" || len(post.Content) > 0
 }
 
 func parseAttachedPost(raw string) (string, []string, int, bool) {
