@@ -111,6 +111,35 @@ func TestChannelSenderCreatesPostWhenReplyMessageIDIsAbsent(t *testing.T) {
 	assertOrdinaryMessageBody(t, api.createReq.Body.MsgType, api.createReq.Body.Content, larkim.MsgTypePost, "Release", "Ready to ship")
 }
 
+func TestOrdinaryMessagePartsPrependNativeMention(t *testing.T) {
+	parts, err := ordinaryMessageParts(notify.Request{
+		Title:         "Status",
+		Markdown:      "Done",
+		MentionUserID: "ou_asker",
+	})
+	if err != nil || len(parts) != 1 {
+		t.Fatalf("parts = %#v, err=%v", parts, err)
+	}
+
+	var post ordinaryPost
+	if err := json.Unmarshal([]byte(parts[0].content), &post); err != nil {
+		t.Fatalf("decode post content: %v", err)
+	}
+	if len(post.ZhCn.Content) != 1 || len(post.ZhCn.Content[0]) != 2 {
+		t.Fatalf("content = %#v", post.ZhCn.Content)
+	}
+	mention, body := post.ZhCn.Content[0][0], post.ZhCn.Content[0][1]
+	if mention.Tag != "at" || mention.UserID != "ou_asker" || mention.Text != "" {
+		t.Fatalf("mention element = %#v", mention)
+	}
+	if body.Tag != "md" || body.Text != "Done" {
+		t.Fatalf("body element = %#v", body)
+	}
+	if parts[0].fallbackText != "@ou_asker Done" {
+		t.Fatalf("fallback text = %q", parts[0].fallbackText)
+	}
+}
+
 func TestChannelSenderSendsCardJSONAsInteractiveReply(t *testing.T) {
 	messageID := "om_new"
 	api := &fakeCardKitMessageAPI{replyResp: &larkim.ReplyMessageResp{

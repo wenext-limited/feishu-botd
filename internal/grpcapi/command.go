@@ -192,6 +192,7 @@ func (c *commandServer) SendAgentFollowUp(ctx context.Context, in *pb.SendAgentF
 		OperationID:    in.GetOperationId(),
 		Markdown:       in.GetMarkdown(),
 		Summary:        in.GetSummary(),
+		MentionUserID:  in.GetMentionUserId(),
 	})
 	if apiErr != nil {
 		return nil, grpcError(apiErr, requestIDFromContext(ctx))

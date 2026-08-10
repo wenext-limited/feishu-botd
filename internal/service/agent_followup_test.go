@@ -142,6 +142,32 @@ func TestAgentFollowUpDeliversToTheRecordedConversation(t *testing.T) {
 	}
 }
 
+func TestAgentFollowUpCarriesNativeMentionIdentity(t *testing.T) {
+	backend := newFakeFollowUpBackend()
+	svc := newFollowUpTestService(backend)
+	seedFollowUpConversation(t, svc, "agent", groupFollowUpPrompt())
+
+	receipt, apiErr := svc.SendAgentFollowUp(context.Background(), SendAgentFollowUpInput{
+		Provider:       "agent",
+		ConversationID: "conv_follow_up",
+		OperationID:    "op-mention",
+		Markdown:       "Done",
+		Summary:        "Task finished",
+		MentionUserID:  "ou_sender",
+	})
+	if apiErr != nil {
+		t.Fatalf("send mentioned follow-up: %v", apiErr)
+	}
+	if receipt.Duplicate {
+		t.Fatalf("first mentioned follow-up was marked duplicate: %#v", receipt)
+	}
+
+	sends := backend.snapshot()
+	if len(sends) != 1 || sends[0].request.MentionUserID != "ou_sender" {
+		t.Fatalf("mention identity = %#v", sends)
+	}
+}
+
 func TestAgentFollowUpThreadsIntoAThreadScopedConversation(t *testing.T) {
 	backend := newFakeFollowUpBackend()
 	svc := newFollowUpTestService(backend)

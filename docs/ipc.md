@@ -399,8 +399,10 @@ expire and returns `send_retry_expired` without another Feishu call.
 inbound delivery to answer. It accepts `provider`, a `conversation_id` from a
 previously delivered `InboundAgentEvent`, an `operation_id`, the complete
 `markdown`, and an optional `summary` used as the title and notification
-preview. It returns an opaque `follow_up_id` and a `duplicate` flag. There is no
-revision and no later edit: this is an ordinary message, not a CardKit entity.
+preview. An optional `mention_user_id` prepends a native Feishu `at` element to
+the first paragraph; it is provider-safe identity data, not a raw chat route.
+It returns an opaque `follow_up_id` and a `duplicate` flag. There is no revision
+and no later edit: this is an ordinary message, not a CardKit entity.
 
 botd records a private, app-scoped reverse map from `conversation_id` to the
 owning app, concrete chat, and optional thread each time it delivers an agent

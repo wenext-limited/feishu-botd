@@ -2408,9 +2408,12 @@ type SendAgentFollowUpRequest struct {
 	ConversationId string `protobuf:"bytes,2,opt,name=conversation_id,json=conversationId,proto3" json:"conversation_id,omitempty"`
 	// Provider-generated idempotency key. Reusing it with different content is
 	// rejected; retrying the same operation returns duplicate=true.
-	OperationId   string `protobuf:"bytes,3,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
-	Markdown      string `protobuf:"bytes,10,opt,name=markdown,proto3" json:"markdown,omitempty"` // complete follow-up body
-	Summary       string `protobuf:"bytes,11,opt,name=summary,proto3" json:"summary,omitempty"`   // compact notification/preview text
+	OperationId string `protobuf:"bytes,3,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
+	Markdown    string `protobuf:"bytes,10,opt,name=markdown,proto3" json:"markdown,omitempty"` // complete follow-up body
+	Summary     string `protobuf:"bytes,11,opt,name=summary,proto3" json:"summary,omitempty"`   // compact notification/preview text
+	// Optional native Feishu mention prepended to the first post paragraph.
+	// The id is an opaque provider-safe user identity (normally an open_id).
+	MentionUserId string `protobuf:"bytes,12,opt,name=mention_user_id,json=mentionUserId,proto3" json:"mention_user_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2476,6 +2479,13 @@ func (x *SendAgentFollowUpRequest) GetMarkdown() string {
 func (x *SendAgentFollowUpRequest) GetSummary() string {
 	if x != nil {
 		return x.Summary
+	}
+	return ""
+}
+
+func (x *SendAgentFollowUpRequest) GetMentionUserId() string {
+	if x != nil {
+		return x.MentionUserId
 	}
 	return ""
 }
@@ -2852,15 +2862,16 @@ const file_feishubotd_v1_command_proto_rawDesc = "" +
 	"\x0etimeline_title\x18! \x01(\tR\rtimelineTitleJ\x04\b\x05\x10\n" +
 	"J\x04\b\f\x10 \"_\n" +
 	"\x1cReplaceAgentResponseResponse\x12?\n" +
-	"\bresponse\x18\x01 \x01(\v2#.feishubotd.v1.AgentResponseReceiptR\bresponse\"\xc4\x01\n" +
+	"\bresponse\x18\x01 \x01(\v2#.feishubotd.v1.AgentResponseReceiptR\bresponse\"\xec\x01\n" +
 	"\x18SendAgentFollowUpRequest\x12\x1a\n" +
 	"\bprovider\x18\x01 \x01(\tR\bprovider\x12'\n" +
 	"\x0fconversation_id\x18\x02 \x01(\tR\x0econversationId\x12!\n" +
 	"\foperation_id\x18\x03 \x01(\tR\voperationId\x12\x1a\n" +
 	"\bmarkdown\x18\n" +
 	" \x01(\tR\bmarkdown\x12\x18\n" +
-	"\asummary\x18\v \x01(\tR\asummaryJ\x04\b\x04\x10\n" +
-	"J\x04\b\f\x10 \"V\n" +
+	"\asummary\x18\v \x01(\tR\asummary\x12&\n" +
+	"\x0fmention_user_id\x18\f \x01(\tR\rmentionUserIdJ\x04\b\x04\x10\n" +
+	"J\x04\b\r\x10 \"V\n" +
 	"\x14AgentFollowUpReceipt\x12 \n" +
 	"\ffollow_up_id\x18\x01 \x01(\tR\n" +
 	"followUpId\x12\x1c\n" +

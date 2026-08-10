@@ -26,6 +26,7 @@ type SendAgentFollowUpInput struct {
 	OperationID    string
 	Markdown       string
 	Summary        string
+	MentionUserID  string
 }
 
 type AgentFollowUpReceipt struct {
@@ -79,10 +80,11 @@ func (s *Service) SendAgentFollowUp(ctx context.Context, in SendAgentFollowUpInp
 	}
 	markdown := strings.TrimSpace(in.Markdown)
 	summary := strings.TrimSpace(in.Summary)
+	mentionUserID := strings.TrimSpace(in.MentionUserID)
 	if markdown == "" {
 		return AgentFollowUpReceipt{}, notify.BadRequest("missing_markdown", "markdown is required")
 	}
-	if len(markdown) > maxAgentCardBytes || len(summary) > 200 {
+	if len(markdown) > maxAgentCardBytes || len(summary) > 200 || len(mentionUserID) > 160 {
 		return AgentFollowUpReceipt{}, notify.BadRequest("field_too_large", "one or more fields are too large")
 	}
 
@@ -107,11 +109,7 @@ func (s *Service) SendAgentFollowUp(ctx context.Context, in SendAgentFollowUpInp
 		return AgentFollowUpReceipt{}, unknownConversationError()
 	}
 
-	fingerprint := hashJSON(struct {
-		Conversation string
-		Markdown     string
-		Summary      string
-	}{conversationID, markdown, summary})
+	fingerprint := followUpFingerprint(conversationID, markdown, summary, mentionUserID)
 	followUpID, replay, apiErr := route.beginFollowUp(provider, operationID, fingerprint, now, s.cfg.SendTimeout)
 	if apiErr != nil {
 		return AgentFollowUpReceipt{}, apiErr
@@ -127,6 +125,7 @@ func (s *Service) SendAgentFollowUp(ctx context.Context, in SendAgentFollowUpInp
 		DedupeKey:        followUpID,
 		Title:            summary,
 		Markdown:         markdown,
+		MentionUserID:    mentionUserID,
 		ReplyToMessageID: replyToMessageID,
 	}); err != nil {
 		s.logFeishuFailure("agent follow-up", "follow_up", followUpID, err)
@@ -135,6 +134,25 @@ func (s *Service) SendAgentFollowUp(ctx context.Context, in SendAgentFollowUpInp
 	}
 	route.commitFollowUp(provider, operationID)
 	return AgentFollowUpReceipt{FollowUpID: followUpID}, nil
+}
+
+// Keep the legacy fingerprint for unmentioned follow-ups so an operation
+// claimed by an older daemon remains replayable after an upgrade. A native
+// mention is part of the content identity only when it is requested.
+func followUpFingerprint(conversationID, markdown, summary, mentionUserID string) string {
+	if mentionUserID == "" {
+		return hashJSON(struct {
+			Conversation string
+			Markdown     string
+			Summary      string
+		}{conversationID, markdown, summary})
+	}
+	return hashJSON(struct {
+		Conversation  string
+		Markdown      string
+		Summary       string
+		MentionUserID string
+	}{conversationID, markdown, summary, mentionUserID})
 }
 
 // followUpChatID resolves the send destination the same way StartAgentResponse

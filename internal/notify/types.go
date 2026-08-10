@@ -9,12 +9,16 @@ import (
 )
 
 type Request struct {
-	Source           string            `json:"source"`
-	SourceEventID    string            `json:"source_event_id"`
-	DedupeKey        string            `json:"dedupe_key"`
-	Severity         string            `json:"severity"`
-	Title            string            `json:"title"`
-	Markdown         string            `json:"markdown"`
+	Source        string `json:"source"`
+	SourceEventID string `json:"source_event_id"`
+	DedupeKey     string `json:"dedupe_key"`
+	Severity      string `json:"severity"`
+	Title         string `json:"title"`
+	Markdown      string `json:"markdown"`
+	// MentionUserID asks the Feishu sender to prepend a native at element to
+	// the first paragraph. It is optional and remains provider-safe: raw chat
+	// routing identifiers never enter this request.
+	MentionUserID    string            `json:"mention_user_id,omitempty"`
 	CardJSON         string            `json:"card_json,omitempty"`
 	Target           Target            `json:"target"`
 	Links            []Link            `json:"links"`
@@ -82,7 +86,7 @@ func (r Request) Validate(channels map[string]string) *APIError {
 	if _, ok := channels[r.Target.Channel]; !ok {
 		return NewAPIError(404, "unknown_channel", "unknown channel", false)
 	}
-	if len(r.Source) > 64 || len(r.SourceEventID) > 160 || len(r.DedupeKey) > 240 || len(r.Title) > 200 || len(r.Markdown) > 8000 || len(r.ReplyToMessageID) > 160 {
+	if len(r.Source) > 64 || len(r.SourceEventID) > 160 || len(r.DedupeKey) > 240 || len(r.Title) > 200 || len(r.Markdown) > 8000 || len(r.MentionUserID) > 160 || len(r.ReplyToMessageID) > 160 {
 		return BadRequest("field_too_large", "one or more fields are too large")
 	}
 	if len(r.Links) > 8 || len(r.Metadata) > 32 {

@@ -510,9 +510,12 @@ back to a message, because the replacement may already have committed.
 
 The request carries `provider`, the `conversation_id` from any previously
 delivered `InboundAgentEvent`, an `operation_id`, the complete `markdown`, and
-an optional `summary` used as the message title and notification preview. The
-response returns an opaque `follow_up_id` and a `duplicate` flag. There is no
-revision: a follow-up is an ordinary message and cannot be edited afterwards.
+an optional `summary` used as the message title and notification preview. For
+Feishu, an optional `mention_user_id` prepends a native `at` element to the
+first paragraph; it does not put a raw provider route into the message body.
+The response returns an opaque `follow_up_id` and a `duplicate` flag. There is
+no revision: a follow-up is an ordinary message and cannot be edited
+afterwards.
 
 botd records an app-scoped reverse map from `conversation_id` to the concrete
 route each time it delivers an agent event, and resolves both the app and chat

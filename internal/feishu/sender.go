@@ -78,8 +78,10 @@ type ordinaryPostLanguage struct {
 }
 
 type ordinaryPostElement struct {
-	Tag  string `json:"tag"`
-	Text string `json:"text"`
+	Tag      string `json:"tag"`
+	Text     string `json:"text,omitempty"`
+	UserID   string `json:"user_id,omitempty"`
+	UserName string `json:"user_name,omitempty"`
 }
 
 type ChannelSender struct {
@@ -204,13 +206,20 @@ func ordinaryMessageParts(req notify.Request) ([]ordinaryMessagePart, *MessageSe
 
 	chunks := outbound.SplitWithCodeFences(req.Markdown, ordinaryMarkdownChunkLimit)
 	parts := make([]ordinaryMessagePart, 0, len(chunks))
-	for _, chunk := range chunks {
+	mentionUserID := strings.TrimSpace(req.MentionUserID)
+	for index, chunk := range chunks {
+		elements := []ordinaryPostElement{{Tag: "md", Text: chunk}}
+		fallbackText := chunk
+		if index == 0 && mentionUserID != "" {
+			elements = []ordinaryPostElement{
+				{Tag: "at", UserID: mentionUserID},
+				{Tag: "md", Text: chunk},
+			}
+			fallbackText = "@" + mentionUserID + " " + chunk
+		}
 		content, err := json.Marshal(ordinaryPost{ZhCn: ordinaryPostLanguage{
-			Title: req.Title,
-			Content: [][]ordinaryPostElement{{{
-				Tag:  "md",
-				Text: chunk,
-			}}},
+			Title:   req.Title,
+			Content: [][]ordinaryPostElement{elements},
 		}})
 		if err != nil {
 			return nil, &MessageSendError{Operation: "message_encode", Class: "encode_failed"}
@@ -218,7 +227,7 @@ func ordinaryMessageParts(req notify.Request) ([]ordinaryMessagePart, *MessageSe
 		parts = append(parts, ordinaryMessagePart{
 			messageType:  larkim.MsgTypePost,
 			content:      string(content),
-			fallbackText: chunk,
+			fallbackText: fallbackText,
 		})
 	}
 	if len(parts) == 0 {
