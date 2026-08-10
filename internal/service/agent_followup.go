@@ -45,9 +45,9 @@ type agentConversationRoute struct {
 	chatAlias         string
 	chatID            string
 	unconfiguredGroup bool
-	// threadReplyTo is set only for a thread-scoped conversation. A follow-up
-	// into a flat chat is a new top-level message, not a reply threaded under a
-	// prompt the user has long since scrolled past.
+	// threadReplyTo is the provider-private message that a follow-up replies to.
+	// It is the inbound prompt for a flat chat and the thread root for an
+	// existing Feishu thread.
 	threadReplyTo string
 	// providers maps each provider that received an agent event here to the
 	// moment its grant lapses. Scope follows the conversation, not the daemon:
@@ -397,15 +397,12 @@ func (b *agentBroker) refreshConversationLocked(conversationID, provider string,
 	}
 }
 
-// followUpThreadReply returns the message a follow-up must reply to in order to
-// land in the same Feishu thread. Feishu's thread id is not a message id, so a
-// thread-scoped conversation without a root falls back to the prompt itself.
+// followUpThreadReply returns the provider-private message a follow-up should
+// reply to. Feishu's thread id is not a message id, so a thread-scoped
+// conversation without a root falls back to the prompt itself. Flat chats use
+// the prompt too, keeping completion notices visually attached to the request.
 func followUpThreadReply(metadata map[string]string) string {
-	threadID := strings.TrimSpace(metadata["thread_id"])
 	rootID := strings.TrimSpace(metadata["root_id"])
-	if threadID == "" && rootID == "" {
-		return ""
-	}
 	if rootID != "" {
 		return rootID
 	}

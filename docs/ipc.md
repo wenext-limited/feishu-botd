@@ -416,9 +416,9 @@ have received an agent event for that exact conversation inside the TTL. A
 conversation botd cannot route and a conversation the caller was never spoken to
 in both return `unknown_conversation`, so the RPC cannot enumerate chats.
 
-A thread-scoped conversation is answered inside its thread; a flat chat or
-direct message receives a new top-level message. `markdown` is capped at 30 KiB
-and `summary` at 200 bytes. Configured groups resolve through their aliases;
+A follow-up replies to the triggering message; in a thread-scoped conversation
+the thread root keeps it in the existing Feishu thread. `markdown` is capped at
+30 KiB and `summary` at 200 bytes. Configured groups resolve through their aliases;
 allowed unconfigured groups use the daemon-private ingress route retained for
 that conversation.
 

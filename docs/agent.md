@@ -537,9 +537,9 @@ probe which chats exist.
 
 Message shape and limits:
 
-- A thread-scoped conversation is answered inside its thread. A flat chat or
-  direct message gets a new top-level message rather than a reply threaded under
-  a prompt the user scrolled past hours ago.
+- A follow-up replies to the triggering message. In a thread-scoped conversation
+  the thread root keeps it in the existing Feishu thread; flat chats and direct
+  messages remain attached to the prompt that started the run.
 - `markdown` is capped at 30 KiB and `summary` at 200 bytes. Long bodies are
   split across several Feishu messages by the ordinary send path.
 - A configured group conversation routes through its channel alias. Removing

@@ -132,10 +132,10 @@ func TestAgentFollowUpDeliversToTheRecordedConversation(t *testing.T) {
 	if request.Markdown != "Research finished." || request.Title != "Research finished" {
 		t.Fatalf("follow-up content = %#v", request)
 	}
-	// A flat chat gets a fresh top-level message, not a reply threaded under a
-	// prompt the user scrolled past hours ago.
-	if request.ReplyToMessageID != "" {
-		t.Fatalf("flat-chat follow-up replied to %q, want a top-level message", request.ReplyToMessageID)
+	// A flat-chat follow-up stays attached to the triggering prompt, just like
+	// the initial CardKit response.
+	if request.ReplyToMessageID != "om_inbound" {
+		t.Fatalf("flat-chat follow-up replied to %q, want om_inbound", request.ReplyToMessageID)
 	}
 	if request.Source != agentFollowUpSource || request.DedupeKey != receipt.FollowUpID {
 		t.Fatalf("follow-up message uuid seed = %q/%q", request.Source, request.DedupeKey)
