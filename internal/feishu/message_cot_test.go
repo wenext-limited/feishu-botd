@@ -531,6 +531,32 @@ func TestCoTMessagesClassifyTerminalStatusAsSentinel(t *testing.T) {
 	}
 }
 
+// TestCoTMessagesClassifyTerminalStateAsSentinel pins the wording actually
+// observed from a live AppendEvents call against an already-completed CoT
+// message (slice 0 probe, 2026-08-19): the API says "terminal state", not
+// "terminal status" as Complete does for the same rejection. The two call
+// sites use different nouns for one rejection; both must classify.
+func TestCoTMessagesClassifyTerminalStateAsSentinel(t *testing.T) {
+	httpClient := &cotStubHTTPClient{
+		status: http.StatusBadRequest,
+		body:   `{"code":10001,"msg":"Your request contains an invalid request parameter, ext=AppendCOTEvents: COT already in terminal state"}`,
+	}
+	sender := newCoTTestSender(httpClient)
+
+	err := sender.AppendEvents(context.Background(), CoTAppendRequest{
+		CoTID:     "cot_7355",
+		MessageID: "om_cot",
+		Events:    []CoTEvent{cotTestRunStarted(t, "thread-1", "run-1")},
+	})
+	if !errors.Is(err, ErrCoTAlreadyTerminal) {
+		t.Fatalf("error = %v, want ErrCoTAlreadyTerminal", err)
+	}
+	var apiErr *CoTAPIError
+	if !errors.As(err, &apiErr) || apiErr.Class != "already_terminal" {
+		t.Fatalf("error = %v, want already_terminal CoTAPIError", err)
+	}
+}
+
 func TestCoTMessagesRedactsRejectedResponses(t *testing.T) {
 	secret := "om_private_user_content"
 	httpClient := &cotStubHTTPClient{

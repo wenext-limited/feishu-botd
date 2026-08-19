@@ -53,9 +53,13 @@ const (
 	cotClassCanceled        = "context_canceled"
 	cotClassDeadline        = "deadline_exceeded"
 
-	// The endpoint rejects a completion whose message already reached a terminal
-	// state. That is the state the caller wanted, so it is reported as success.
-	cotTerminalStatusMarker = "already in terminal status"
+	// The endpoint rejects an operation on a message that already reached a
+	// terminal state. That is the state the caller wanted, so Complete reports
+	// it as success. Verified live against both call sites, which use different
+	// nouns for the same rejection: Complete says "already in terminal status",
+	// AppendEvents says "already in terminal state". Matching the shared prefix
+	// catches both without depending on either exact wording.
+	cotTerminalStatusMarker = "already in terminal"
 
 	// The API is undocumented, so these are our own conservative payload caps
 	// rather than published limits. They exist to bound a single request, not to
