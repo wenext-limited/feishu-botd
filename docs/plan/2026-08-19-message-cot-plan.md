@@ -1,23 +1,23 @@
 # Feishu CoT progress message implementation plan
 
-Source request: "check how this project handle COT:
-https://github.com/wenext-limited/wenext-lark-bridge" and then "scope that" —
-port that project's native Feishu CoT progress surface into feishu-botd.
+Source request: investigate how an existing internal bot handles
+chain-of-thought progress display, then scope porting its native Feishu CoT
+progress surface into feishu-botd.
 
 ## Facts and scope
 
-- `wenext-lark-bridge` renders agent progress with a first-party Feishu API,
-  `im/v1/message_cot`, not with cards. Its Feishu client sends only
-  `msg_type: "text"`; the repository contains no CardKit, `collapsible_panel`,
-  or `streaming_mode` usage at all.
+- The reference implementation renders agent progress with a first-party Feishu
+  API, `im/v1/message_cot`, not with cards. Its Feishu client sends only
+  `msg_type: "text"`; it contains no CardKit, `collapsible_panel`, or
+  `streaming_mode` usage at all.
 - The API is three calls: `POST /open-apis/im/v1/message_cot` (create, bound to
   the user's `origin_message_id`, returns `cot_id` + `message_id`), `PUT
   /open-apis/im/v1/message_cot` (append events), and `POST
   /open-apis/im/v1/message_cot/complete/{cot_id}?message_id=…&reason=done|error`.
 - The update payload is an AG-UI event stream. Each event is
-  `{event_type, content: <JSON string>, timestamp: <ms>}`. The bridge uses
-  `RUN_STARTED`, `STEP_STARTED`, `STEP_FINISHED`, and `RUN_FINISHED`; the Go SDK
-  names `TOOL_CALL_START` as another valid type.
+  `{event_type, content: <JSON string>, timestamp: <ms>}`. The reference
+  implementation uses `RUN_STARTED`, `STEP_STARTED`, `STEP_FINISHED`, and
+  `RUN_FINISHED`; the Go SDK names `TOOL_CALL_START` as another valid type.
 - **The API is undocumented.** The doc path embedded in the SDK v3.9.10 comment
   (`.../reference/im-v1/message_cot/cot-message-brief`) returns "文档不存在" in
   both locales, the docs-site search for `message_cot` returns nothing, and the
@@ -36,11 +36,11 @@ port that project's native Feishu CoT progress surface into feishu-botd.
   the CoT permission is absent, and it is the only path for tenants where the
   API is not allowlisted. No existing provider behavior changes.
 - CoT progress is strictly best effort. A CoT failure must never fail the
-  provider's RPC, mirroring both the bridge's hook contract and the daemon's
-  existing `logFeishuFailure` handling.
+  provider's RPC, mirroring both the reference implementation's hook contract
+  and the daemon's existing `logFeishuFailure` handling.
 - Progress content is a fixed vocabulary of sanitized step labels. No user
   text, raw commands, tool output, logs, or credentials are sent, matching the
-  bridge's stated rule.
+  reference implementation's stated rule.
 
 ## Implementation plan
 
@@ -48,8 +48,8 @@ port that project's native Feishu CoT progress surface into feishu-botd.
    probe only. Confirm the 动态消息 permission scope is grantable to our app in
    开发者后台, then exercise create/append/complete against a scratch chat over
    `larkcore.Request`. Resolve two known ambiguities: the SDK types `timestamp`
-   as a string while the bridge sends integer milliseconds, and the event
-   vocabulary beyond the bridge's proven four types is unverified
+   as a string while the reference implementation sends integer milliseconds,
+   and the event vocabulary beyond its proven four types is unverified
    (`TOOL_CALL_START` exists, its `content` fields are unknown). Acceptance: a
    CoT message is created, advanced, and completed in a real chat, and the
    accepted `timestamp` type and usable `event_type` set are recorded. If the
@@ -95,10 +95,10 @@ port that project's native Feishu CoT progress surface into feishu-botd.
    persistence under `StateDir`, and tests. Journal pending `{cot_id,
    message_id, outcome}` records so a crash mid-run does not leak a CoT message
    that spins forever, and close leftovers on startup. This is deliberately
-   narrower than the bridge's SQLite store plus background compensator: a
-   bounded journal and a startup sweep, not a general outbox. Acceptance: a
-   simulated restart closes a pending CoT message exactly once. Specialist: Go
-   service developer. Depends on slice 3.
+   narrower than the reference implementation's SQLite store plus background
+   compensator: a bounded journal and a startup sweep, not a general outbox.
+   Acceptance: a simulated restart closes a pending CoT message exactly once.
+   Specialist: Go service developer. Depends on slice 3.
 
 6. **Slice 5: Fallback and documentation** — files: `docs/agent.md`,
    `README.md`, configuration docs. Document the capability flag, the required
