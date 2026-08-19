@@ -78,6 +78,11 @@ type AgentProviderConfig struct {
 	AllowFollowUpMessages  bool
 	AllowMessageReactions  bool
 	AllowLegacyCommands    bool
+	// AllowCoTProgress permits the provider to drive the native Feishu
+	// chain-of-thought progress surface with typed timeline steps. It is a
+	// separate capability from the collapsible-panel timeline every provider
+	// already has, because the underlying API needs its own tenant permission.
+	AllowCoTProgress bool
 	// AllowedAppsConfigured distinguishes an absent allowed_apps field (all
 	// configured apps) from an explicitly empty list (no apps).
 	AllowedApps           []string
@@ -296,6 +301,7 @@ func LoadFromEnv() (Config, error) {
 			AllowFollowUpMessages:  providerCfg.AllowFollowUpMessages,
 			AllowMessageReactions:  providerCfg.AllowMessageReactions,
 			AllowLegacyCommands:    providerCfg.AllowLegacyCommands,
+			AllowCoTProgress:       providerCfg.AllowCoTProgress,
 			AllowedApps:            allowedApps,
 			AllowedAppsConfigured:  allowedAppsConfigured,
 		}
@@ -399,6 +405,7 @@ type fileAgentProviderConfig struct {
 	AllowFollowUpMessages  bool               `json:"allow_follow_up_messages"`
 	AllowMessageReactions  bool               `json:"allow_message_reactions"`
 	AllowLegacyCommands    bool               `json:"allow_legacy_commands"`
+	AllowCoTProgress       bool               `json:"allow_cot_progress"`
 }
 
 // optionalStringList preserves the security-relevant distinction between an
@@ -1062,6 +1069,7 @@ func normalizeAgentProviderConfigs(in map[string]fileAgentProviderConfig) (map[s
 			AllowFollowUpMessages:  providerCfg.AllowFollowUpMessages,
 			AllowMessageReactions:  providerCfg.AllowMessageReactions,
 			AllowLegacyCommands:    providerCfg.AllowLegacyCommands,
+			AllowCoTProgress:       providerCfg.AllowCoTProgress,
 		}
 	}
 	return out, nil

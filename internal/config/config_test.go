@@ -477,6 +477,130 @@ func TestLoadFromConfigFileAgentProviderReactionScopeRequiresStateDir(t *testing
 	}
 }
 
+// The native chain-of-thought progress surface needs its own tenant
+// permission, so it is granted separately from the collapsible-panel timeline
+// every provider already has. It stays off until an operator names it.
+func TestLoadFromConfigFileAgentProviderCoTProgressScope(t *testing.T) {
+	for _, testCase := range []struct {
+		name  string
+		entry string
+		want  bool
+	}{
+		{name: "omitted defaults to off", want: false},
+		{name: "explicitly disabled", entry: `,"allow_cot_progress":false`, want: false},
+		{name: "explicitly enabled", entry: `,"allow_cot_progress":true`, want: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			clearConfigEnv(t)
+			dir := t.TempDir()
+			tokenPath := filepath.Join(dir, "agent-token")
+			const token = "fixture-agent-token-0123456789abcdef0123456789"
+			if err := os.WriteFile(tokenPath, []byte(token+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			configPath := filepath.Join(dir, "feishu-botd.json")
+			configJSON := `{
+  "feishu": {"app_id":"app_fixture","app_secret":"secret_fixture"},
+  "listeners": {"grpc_socket":"/tmp/feishu-botd.fixture.sock"},
+  "commands": {"enabled":true},
+  "agent_providers": {
+    "fixture-agent": {
+      "auth_token_file":"` + tokenPath + `",
+      "allow_unmatched_messages":true` + testCase.entry + `
+    }
+  }
+}`
+			if err := os.WriteFile(configPath, []byte(configJSON), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("FEISHU_BOTD_CONFIG", configPath)
+
+			cfg, err := LoadFromEnv()
+			if err != nil {
+				t.Fatalf("load provider config: %v", err)
+			}
+			if got := cfg.AgentProviders["fixture-agent"].AllowCoTProgress; got != testCase.want {
+				t.Fatalf("allow_cot_progress = %t, want %t", got, testCase.want)
+			}
+			if cfg.AgentProviders["unknown-provider"].AllowCoTProgress {
+				t.Fatal("unconfigured provider inherited CoT progress access")
+			}
+		})
+	}
+}
+
+// Capability grants stay independent in both directions: no neighbouring grant
+// implies CoT progress, and CoT progress widens nothing else.
+func TestLoadFromConfigFileAgentProviderCoTProgressIsIndependentGrant(t *testing.T) {
+	for _, testCase := range []struct {
+		name            string
+		entry           string
+		wantCoTProgress bool
+		wantNeighbours  bool
+	}{
+		{
+			name:            "neighbouring grants do not imply CoT progress",
+			entry:           `,"allow_card_actions":true,"allow_attached_context":true,"allow_follow_up_messages":true`,
+			wantCoTProgress: false,
+			wantNeighbours:  true,
+		},
+		{
+			name:            "CoT progress does not widen its neighbours",
+			entry:           `,"allow_cot_progress":true`,
+			wantCoTProgress: true,
+			wantNeighbours:  false,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			clearConfigEnv(t)
+			dir := t.TempDir()
+			tokenPath := filepath.Join(dir, "agent-token")
+			const token = "fixture-agent-token-0123456789abcdef0123456789"
+			if err := os.WriteFile(tokenPath, []byte(token+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			configPath := filepath.Join(dir, "feishu-botd.json")
+			configJSON := `{
+  "feishu": {"app_id":"app_fixture","app_secret":"secret_fixture"},
+  "listeners": {"grpc_socket":"/tmp/feishu-botd.fixture.sock"},
+  "commands": {"enabled":true},
+  "agent_providers": {
+    "fixture-agent": {
+      "auth_token_file":"` + tokenPath + `",
+      "allow_unmatched_messages":true` + testCase.entry + `
+    }
+  }
+}`
+			if err := os.WriteFile(configPath, []byte(configJSON), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("FEISHU_BOTD_CONFIG", configPath)
+
+			cfg, err := LoadFromEnv()
+			if err != nil {
+				t.Fatalf("load provider config: %v", err)
+			}
+			provider := cfg.AgentProviders["fixture-agent"]
+			if provider.AllowCoTProgress != testCase.wantCoTProgress {
+				t.Fatalf("allow_cot_progress = %t, want %t", provider.AllowCoTProgress, testCase.wantCoTProgress)
+			}
+			for name, got := range map[string]bool{
+				"allow_card_actions":       provider.AllowCardActions,
+				"allow_attached_context":   provider.AllowAttachedContext,
+				"allow_follow_up_messages": provider.AllowFollowUpMessages,
+			} {
+				if got != testCase.wantNeighbours {
+					t.Fatalf("%s = %t, want %t", name, got, testCase.wantNeighbours)
+				}
+			}
+			if provider.AllowMessageReactions || provider.AllowLegacyCommands {
+				t.Fatalf("unrequested grants leaked: reactions=%t legacy=%t",
+					provider.AllowMessageReactions, provider.AllowLegacyCommands)
+			}
+		})
+	}
+}
+
 func TestLoadFromConfigFileLoadsGeneralTokenForScopedUnixHTTP(t *testing.T) {
 	clearConfigEnv(t)
 	dir := t.TempDir()
