@@ -32,10 +32,42 @@ type fakeAgentBackend struct {
 	contentUpdates  []feishu.CardContentUpdate
 	settingsUpdates []feishu.CardSettingsUpdate
 	batchUpdates    []feishu.CardBatchUpdate
+
+	cotID        string
+	cotMessageID string
+
+	cotCreateErr   error
+	cotAppendErr   error
+	cotCompleteErr error
+
+	cotCreates   []feishu.CoTCreateRequest
+	cotAppends   []feishu.CoTAppendRequest
+	cotCompletes []feishu.CoTCompleteRequest
 }
 
 func newFakeAgentBackend() *fakeAgentBackend {
-	return &fakeAgentBackend{cardID: "card_agent_1", messageID: "om_agent_1"}
+	return &fakeAgentBackend{
+		cardID: "card_agent_1", messageID: "om_agent_1",
+		cotID: "cot_agent_1", cotMessageID: "om_cot_agent_1",
+	}
+}
+
+func (f *fakeAgentBackend) Create(_ context.Context, req feishu.CoTCreateRequest) (string, string, error) {
+	f.cotCreates = append(f.cotCreates, req)
+	if f.cotCreateErr != nil {
+		return "", "", f.cotCreateErr
+	}
+	return f.cotID, f.cotMessageID, nil
+}
+
+func (f *fakeAgentBackend) AppendEvents(_ context.Context, req feishu.CoTAppendRequest) error {
+	f.cotAppends = append(f.cotAppends, req)
+	return f.cotAppendErr
+}
+
+func (f *fakeAgentBackend) Complete(_ context.Context, req feishu.CoTCompleteRequest) error {
+	f.cotCompletes = append(f.cotCompletes, req)
+	return f.cotCompleteErr
 }
 
 func (f *fakeAgentBackend) Ready(context.Context) error { return nil }

@@ -27,6 +27,7 @@ type providerPrincipal struct {
 	allowFollowUpMessages  bool
 	allowMessageReactions  bool
 	allowLegacyCommands    bool
+	allowCoTProgress       bool
 }
 
 type providerCredential struct {
@@ -69,6 +70,7 @@ func newProviderAuthenticator(providers map[string]config.AgentProviderConfig) p
 				allowFollowUpMessages:  providerCfg.AllowFollowUpMessages,
 				allowMessageReactions:  providerCfg.AllowMessageReactions,
 				allowLegacyCommands:    providerCfg.AllowLegacyCommands,
+				allowCoTProgress:       providerCfg.AllowCoTProgress,
 			},
 			digest: sha256.Sum256([]byte(providerCfg.AuthToken)),
 		})

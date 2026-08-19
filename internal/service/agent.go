@@ -120,6 +120,34 @@ type AgentResponseContent struct {
 	// provider that sends neither gets exactly the card it got before.
 	TimelineMarkdown string
 	TimelineTitle    string
+	// TimelineSteps is optional and independent of TimelineMarkdown/Title. A
+	// non-empty Start carries a native Feishu CoT progress message for the
+	// response's whole lifetime, gated separately by the provider's
+	// AllowCoTProgress grant (checked before this reaches the service, so a
+	// provider without it simply never has a CoT here). A provider that sends
+	// no steps here gets exactly the response it got before this field
+	// existed.
+	TimelineSteps []AgentTimelineStep
+}
+
+// AgentTimelineStepState is one step's position in its own start/finish
+// transition. It says nothing about the run as a whole.
+type AgentTimelineStepState int
+
+const (
+	AgentTimelineStepStateUnspecified AgentTimelineStepState = iota
+	AgentTimelineStepStateStarted
+	AgentTimelineStepStateFinished
+)
+
+// AgentTimelineStep is one discrete unit of work inside a run, the CoT analog
+// of the collapsible-panel timeline's markdown lines. A submitted list is
+// always the complete accumulated set of steps so far, exactly like
+// TimelineMarkdown; steps correlate across calls by StepID.
+type AgentTimelineStep struct {
+	StepID string
+	Label  string
+	State  AgentTimelineStepState
 }
 
 // agentTimelineParts are the timeline halves of an Update or Finish request.
@@ -172,6 +200,7 @@ type UpdateAgentResponseInput struct {
 	Markdown         string
 	TimelineMarkdown string
 	TimelineTitle    string
+	TimelineSteps    []AgentTimelineStep
 }
 
 type FinishAgentResponseInput struct {
@@ -184,6 +213,7 @@ type FinishAgentResponseInput struct {
 	Summary          string
 	TimelineMarkdown string
 	TimelineTitle    string
+	TimelineSteps    []AgentTimelineStep
 }
 
 // AgentCardActionInput is the daemon-private callback handoff. MessageID is
@@ -377,11 +407,19 @@ type agentResponse struct {
 	phase          AgentResponsePhase
 	markdown       string
 	timeline       agentTimelineState
-	nextSequence   int32
-	lastMutationAt time.Time
-	pendingOp      string
-	operations     map[string]*agentOperation
-	expiresAt      time.Time
+	// cotID and cotMessageID identify the native Feishu CoT progress message
+	// bound to this response, if one exists. cotStepFinished is nil until
+	// Create succeeds, and every CoT helper treats nil as "no active CoT" —
+	// including the fresh-fail case, where Create failed and the daemon gives
+	// up on CoT for the rest of this response's lifetime rather than retrying.
+	cotID           string
+	cotMessageID    string
+	cotStepFinished map[string]bool
+	nextSequence    int32
+	lastMutationAt  time.Time
+	pendingOp       string
+	operations      map[string]*agentOperation
+	expiresAt       time.Time
 }
 
 type appStateKey struct {
@@ -687,8 +725,14 @@ func (s *Service) StartAgentResponse(ctx context.Context, in StartAgentResponseI
 		}
 		delivery.cardID = cardID
 	}
+	// chatID and replyToMessageID are declared here, outside the block that
+	// normally sets them, so the CoT create call below can still see them
+	// after the block runs. On the rare retry where delivery.messageID is
+	// already set from an earlier attempt, the block is skipped and both stay
+	// empty — startAgentCoT treats that as nothing to attempt rather than
+	// re-deriving routing state a second time.
+	var chatID, replyToMessageID string
 	if delivery.messageID == "" {
-		chatID := ""
 		if delivery.input.ChatAlias == "direct" || delivery.input.UnconfiguredGroup {
 			chatID = delivery.input.ChatID
 			if chatID == "" {
@@ -703,7 +747,7 @@ func (s *Service) StartAgentResponse(ctx context.Context, in StartAgentResponseI
 			}
 			chatID = routeChatID
 		}
-		replyToMessageID := delivery.input.Metadata["message_id"]
+		replyToMessageID = delivery.input.Metadata["message_id"]
 		sendRequest := feishu.CardSendRequest{
 			ReplyToMessageID: replyToMessageID,
 			CardID:           delivery.cardID,
@@ -756,6 +800,9 @@ func (s *Service) StartAgentResponse(ctx context.Context, in StartAgentResponseI
 		timeline:       card.timeline,
 		operations:     make(map[string]*agentOperation),
 		expiresAt:      time.Now().Add(b.ttl),
+	}
+	if backend.cotMessages != nil {
+		s.startAgentCoT(callCtx, backend.cotMessages, response, chatID, replyToMessageID, in.Content.TimelineSteps)
 	}
 	delivery.response = response
 	delivery.state = agentDeliveryStreaming
@@ -811,18 +858,21 @@ func (s *Service) UpdateAgentResponse(ctx context.Context, in UpdateAgentRespons
 		Expected uint64
 		Markdown string
 		Timeline agentTimelineParts
-	}{in.ExpectedRevision, in.Markdown, timeline})
-	return s.applyAgentUpdate(ctx, backend.dynamicCards, response, operationID, fingerprint, in.ExpectedRevision, in.Markdown, timeline)
+		Steps    []AgentTimelineStep
+	}{in.ExpectedRevision, in.Markdown, timeline, in.TimelineSteps})
+	return s.applyAgentUpdate(ctx, backend.dynamicCards, backend.cotMessages, response, operationID, fingerprint, in.ExpectedRevision, in.Markdown, timeline, in.TimelineSteps)
 }
 
 func (s *Service) applyAgentUpdate(
 	ctx context.Context,
 	dynamicCards feishu.DynamicCards,
+	cotMessages feishu.CoTMessages,
 	response *agentResponse,
 	operationID, fingerprint string,
 	expected uint64,
 	markdown string,
 	timeline agentTimelineParts,
+	steps []AgentTimelineStep,
 ) (AgentResponseReceipt, *notify.APIError) {
 	response.mu.Lock()
 	defer response.mu.Unlock()
@@ -852,6 +902,10 @@ func (s *Service) applyAgentUpdate(
 	if apiErr := s.applyAgentTimeline(callCtx, dynamicCards, response, op, operationID); apiErr != nil {
 		return AgentResponseReceipt{}, apiErr
 	}
+	// CoT progress advances only once the card update it describes has
+	// actually committed, so the native surface never runs ahead of the card
+	// a reader is looking at.
+	s.diffAgentCoTSteps(callCtx, cotMessages, response, steps)
 	op.complete = true
 	response.revision++
 	op.revision = response.revision
@@ -1061,19 +1115,22 @@ func (s *Service) FinishAgentResponse(ctx context.Context, in FinishAgentRespons
 		Markdown string
 		Summary  string
 		Timeline agentTimelineParts
-	}{in.ExpectedRevision, phase, in.Markdown, in.Summary, timeline})
-	return s.applyAgentFinish(ctx, backend.dynamicCards, response, operationID, fingerprint, in.ExpectedRevision, phase, in.Markdown, in.Summary, timeline)
+		Steps    []AgentTimelineStep
+	}{in.ExpectedRevision, phase, in.Markdown, in.Summary, timeline, in.TimelineSteps})
+	return s.applyAgentFinish(ctx, backend.dynamicCards, backend.cotMessages, response, operationID, fingerprint, in.ExpectedRevision, phase, in.Markdown, in.Summary, timeline, in.TimelineSteps)
 }
 
 func (s *Service) applyAgentFinish(
 	ctx context.Context,
 	dynamicCards feishu.DynamicCards,
+	cotMessages feishu.CoTMessages,
 	response *agentResponse,
 	operationID, fingerprint string,
 	expected uint64,
 	phase AgentResponsePhase,
 	markdown, summary string,
 	timeline agentTimelineParts,
+	steps []AgentTimelineStep,
 ) (AgentResponseReceipt, *notify.APIError) {
 	response.mu.Lock()
 	defer response.mu.Unlock()
@@ -1133,6 +1190,9 @@ func (s *Service) applyAgentFinish(
 		op.settingsDone = true
 		response.nextSequence = op.settingsSeq
 	}
+	// The card has committed its terminal state above; close out any active
+	// CoT to match before the response itself is marked terminal.
+	s.finishAgentCoT(callCtx, cotMessages, response, steps, phase)
 	op.complete = true
 	response.markdown = markdown
 	response.phase = phase

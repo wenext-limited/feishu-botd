@@ -127,6 +127,39 @@ type fakeAgentSender struct {
 	batchUpdates    []feishu.CardBatchUpdate
 	attachedContext feishu.AttachedContext
 	attachedCalls   int
+
+	cotCreates   []feishu.CoTCreateRequest
+	cotAppends   []feishu.CoTAppendRequest
+	cotCompletes []feishu.CoTCompleteRequest
+}
+
+func (f *fakeAgentSender) Create(_ context.Context, req feishu.CoTCreateRequest) (string, string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.cotCreates = append(f.cotCreates, req)
+	return "cot_fixture", "om_cot_fixture", nil
+}
+
+func (f *fakeAgentSender) AppendEvents(_ context.Context, req feishu.CoTAppendRequest) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.cotAppends = append(f.cotAppends, req)
+	return nil
+}
+
+func (f *fakeAgentSender) Complete(_ context.Context, req feishu.CoTCompleteRequest) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.cotCompletes = append(f.cotCompletes, req)
+	return nil
+}
+
+func (f *fakeAgentSender) cotSnapshot() ([]feishu.CoTCreateRequest, []feishu.CoTAppendRequest, []feishu.CoTCompleteRequest) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]feishu.CoTCreateRequest(nil), f.cotCreates...),
+		append([]feishu.CoTAppendRequest(nil), f.cotAppends...),
+		append([]feishu.CoTCompleteRequest(nil), f.cotCompletes...)
 }
 
 func (f *fakeAgentSender) LookupAttachedContext(_ context.Context, _ feishu.AttachedContextRequest) (feishu.AttachedContext, error) {

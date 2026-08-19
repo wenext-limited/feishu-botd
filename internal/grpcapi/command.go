@@ -110,11 +110,14 @@ func (c *commandServer) StartAgentResponse(ctx context.Context, in *pb.StartAgen
 	if in.GetContent() == nil {
 		return nil, grpcError(notify.BadRequest("missing_content", "agent response content is required"), requestIDFromContext(ctx))
 	}
+	principal, _ := authenticatedProvider(ctx)
+	content := agentContentFromProto(in.GetContent())
+	content.TimelineSteps = agentTimelineStepsFromProto(principal.allowCoTProgress, in.GetTimelineSteps())
 	receipt, apiErr := c.svc.StartAgentResponse(ctx, service.StartAgentResponseInput{
 		Provider:    in.GetProvider(),
 		DeliveryID:  in.GetDeliveryId(),
 		OperationID: in.GetOperationId(),
-		Content:     agentContentFromProto(in.GetContent()),
+		Content:     content,
 	})
 	if apiErr != nil {
 		return nil, grpcError(apiErr, requestIDFromContext(ctx))
@@ -126,6 +129,7 @@ func (c *commandServer) UpdateAgentResponse(ctx context.Context, in *pb.UpdateAg
 	if err := requireProviderIdentity(ctx, in.GetProvider()); err != nil {
 		return nil, err
 	}
+	principal, _ := authenticatedProvider(ctx)
 	receipt, apiErr := c.svc.UpdateAgentResponse(ctx, service.UpdateAgentResponseInput{
 		Provider:         in.GetProvider(),
 		ResponseID:       in.GetResponseId(),
@@ -134,6 +138,7 @@ func (c *commandServer) UpdateAgentResponse(ctx context.Context, in *pb.UpdateAg
 		Markdown:         in.GetMarkdown(),
 		TimelineMarkdown: in.GetTimelineMarkdown(),
 		TimelineTitle:    in.GetTimelineTitle(),
+		TimelineSteps:    agentTimelineStepsFromProto(principal.allowCoTProgress, in.GetTimelineSteps()),
 	})
 	if apiErr != nil {
 		return nil, grpcError(apiErr, requestIDFromContext(ctx))
@@ -145,6 +150,7 @@ func (c *commandServer) FinishAgentResponse(ctx context.Context, in *pb.FinishAg
 	if err := requireProviderIdentity(ctx, in.GetProvider()); err != nil {
 		return nil, err
 	}
+	principal, _ := authenticatedProvider(ctx)
 	receipt, apiErr := c.svc.FinishAgentResponse(ctx, service.FinishAgentResponseInput{
 		Provider:         in.GetProvider(),
 		ResponseID:       in.GetResponseId(),
@@ -155,6 +161,7 @@ func (c *commandServer) FinishAgentResponse(ctx context.Context, in *pb.FinishAg
 		Summary:          in.GetSummary(),
 		TimelineMarkdown: in.GetTimelineMarkdown(),
 		TimelineTitle:    in.GetTimelineTitle(),
+		TimelineSteps:    agentTimelineStepsFromProto(principal.allowCoTProgress, in.GetTimelineSteps()),
 	})
 	if apiErr != nil {
 		return nil, grpcError(apiErr, requestIDFromContext(ctx))
@@ -242,6 +249,10 @@ func agentEventToProto(event service.AgentEvent) *pb.SubscribeAgentEventsRespons
 	return &pb.SubscribeAgentEventsResponse{Event: out}
 }
 
+// agentContentFromProto translates the card body only. TimelineSteps lives on
+// StartAgentResponseRequest itself, not on AgentResponseContent (see the
+// proto's own comment), so a caller that wants steps sets
+// service.AgentResponseContent.TimelineSteps separately after this returns.
 func agentContentFromProto(in *pb.AgentResponseContent) service.AgentResponseContent {
 	out := service.AgentResponseContent{
 		Title:            in.GetTitle(),
@@ -256,6 +267,38 @@ func agentContentFromProto(in *pb.AgentResponseContent) service.AgentResponseCon
 		})
 	}
 	return out
+}
+
+// agentTimelineStepsFromProto translates the wire steps into the service's
+// own domain type. A provider without the CoT capability grant has its steps
+// dropped here rather than rejected: the base card update this call also
+// carries must never fail for a missing CoT grant, so an unauthorized
+// provider that sends steps anyway simply gets the response it would have
+// gotten without them.
+func agentTimelineStepsFromProto(allowCoTProgress bool, steps []*pb.AgentTimelineStep) []service.AgentTimelineStep {
+	if !allowCoTProgress || len(steps) == 0 {
+		return nil
+	}
+	out := make([]service.AgentTimelineStep, 0, len(steps))
+	for _, step := range steps {
+		out = append(out, service.AgentTimelineStep{
+			StepID: step.GetStepId(),
+			Label:  step.GetLabel(),
+			State:  agentTimelineStepStateFromProto(step.GetState()),
+		})
+	}
+	return out
+}
+
+func agentTimelineStepStateFromProto(state pb.AgentTimelineStepState) service.AgentTimelineStepState {
+	switch state {
+	case pb.AgentTimelineStepState_AGENT_TIMELINE_STEP_STATE_STARTED:
+		return service.AgentTimelineStepStateStarted
+	case pb.AgentTimelineStepState_AGENT_TIMELINE_STEP_STATE_FINISHED:
+		return service.AgentTimelineStepStateFinished
+	default:
+		return service.AgentTimelineStepStateUnspecified
+	}
 }
 
 func agentActionStyleFromProto(in pb.AgentResponseActionStyle) service.AgentResponseActionStyle {
