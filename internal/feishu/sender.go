@@ -92,7 +92,12 @@ type ChannelSender struct {
 	elementAPI      cardKitElementAPI
 	messageAPI      cardKitMessageAPI
 	reactionAPI     reactionAPI
+	contactUserAPI  contactUserAPI
 	attachedContext AttachedContextLookup
+
+	// contactNameCache memoizes DisplayName lookups; see its doc comment in
+	// contact.go for why an unbounded, un-expiring cache is the right call.
+	contactNameCache sync.Map
 
 	retryMaxAttempts int
 	retryBase        time.Duration
@@ -120,6 +125,7 @@ func NewChannelSender(appID, appSecret string, logger *slog.Logger) *ChannelSend
 		elementAPI:      client.Cardkit.V1.CardElement,
 		messageAPI:      client.Im.V1.Message,
 		reactionAPI:     client.Im.V1.MessageReaction,
+		contactUserAPI:  client.Contact.V3.User,
 		attachedContext: newSDKAttachedContextLookup(client.Im.V1.Message, client.Im.V1.MessageResource),
 	}
 }

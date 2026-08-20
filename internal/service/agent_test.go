@@ -52,6 +52,14 @@ type fakeAgentBackend struct {
 	addedReactions   []feishu.AddReactionRequest
 	removedReactions []feishu.RemoveReactionRequest
 
+	// contactNames maps a sender id to the display name DisplayName resolves
+	// it to; an unmapped id resolves to "", which never matches a configured
+	// override (config rejects empty override names) and so behaves as "no
+	// override matched" rather than an error.
+	contactNames map[string]string
+	contactErr   error
+	contactCalls []string
+
 	// callOrder tags each of the calls above ("send_card", "cot_create", ...)
 	// in the order they actually happened, so a test can assert relative
 	// ordering across the otherwise-separate per-method slices above.
@@ -79,6 +87,15 @@ func (f *fakeAgentBackend) RemoveReaction(_ context.Context, req feishu.RemoveRe
 	f.callOrder = append(f.callOrder, "reaction_remove")
 	f.removedReactions = append(f.removedReactions, req)
 	return f.removeReactionErr
+}
+
+func (f *fakeAgentBackend) DisplayName(_ context.Context, userID string) (string, error) {
+	f.callOrder = append(f.callOrder, "contact_lookup")
+	f.contactCalls = append(f.contactCalls, userID)
+	if f.contactErr != nil {
+		return "", f.contactErr
+	}
+	return f.contactNames[userID], nil
 }
 
 func (f *fakeAgentBackend) Create(_ context.Context, req feishu.CoTCreateRequest) (string, string, error) {

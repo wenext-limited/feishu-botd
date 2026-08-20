@@ -849,7 +849,8 @@ func (s *Service) StartAgentResponse(ctx context.Context, in StartAgentResponseI
 		s.advanceAgentCoT(callCtx, backend.cotMessages, &response.cot, response.responseID, response.cotChatID, response.cotOriginMessageID, in.Content.TimelineSteps)
 	}
 	if backend.reactions != nil {
-		s.addAgentWorkingReaction(callCtx, backend.reactions, response, replyToMessageID, s.cfg.AgentWorkingReaction(provider))
+		emoji := s.resolveAgentWorkingReactionEmoji(callCtx, backend.contactUsers, response, provider, delivery.input.SenderID)
+		s.addAgentWorkingReaction(callCtx, backend.reactions, response, replyToMessageID, emoji)
 	}
 	delivery.response = response
 	delivery.state = agentDeliveryStreaming

@@ -7,6 +7,36 @@ import (
 	"feishu-botd/internal/feishu"
 )
 
+// resolveAgentWorkingReactionEmoji picks the working-reaction emoji for one
+// response: the provider's configured default, unless the provider also
+// configures per-sender overrides and the triggering message's sender
+// resolves — via a live Contact API call, since Feishu's message events carry
+// only an id, never a name — to a display name one of those overrides
+// matches. No overrides configured is the common case and skips the Contact
+// API call entirely, so a provider that never needed per-sender behavior
+// pays no extra latency or API quota for it.
+func (s *Service) resolveAgentWorkingReactionEmoji(
+	ctx context.Context,
+	contactUsers feishu.ContactUsers,
+	response *agentResponse,
+	provider, senderID string,
+) string {
+	defaultEmoji := s.cfg.AgentWorkingReaction(provider)
+	overrides := s.cfg.AgentWorkingReactionOverrides(provider)
+	if len(overrides) == 0 || contactUsers == nil || senderID == "" {
+		return defaultEmoji
+	}
+	name, err := contactUsers.DisplayName(ctx, senderID)
+	if err != nil {
+		s.logAgentReactionFailure("contact lookup", response.responseID, err)
+		return defaultEmoji
+	}
+	if emoji, ok := overrides[name]; ok && emoji != "" {
+		return emoji
+	}
+	return defaultEmoji
+}
+
 // addAgentWorkingReaction places the configured "working" reaction on the
 // message that triggered this response, if the provider has one configured
 // and there is a message to place it on. Best effort: any failure here just

@@ -89,6 +89,13 @@ type AgentProviderConfig struct {
 	// provider does not request or control it per response. Empty disables
 	// the behavior for this provider.
 	WorkingReactionEmoji string
+	// WorkingReactionOverrides maps a sender's Feishu display name to a
+	// working reaction emoji that takes precedence over WorkingReactionEmoji
+	// for messages from that sender specifically. Resolving a name from the
+	// triggering message's sender id requires a live Contact API call — see
+	// feishu.ContactUsers — because Feishu's message-receive event carries
+	// only an id, never a name. Empty or absent skips that call entirely.
+	WorkingReactionOverrides map[string]string
 	// AllowedAppsConfigured distinguishes an absent allowed_apps field (all
 	// configured apps) from an explicitly empty list (no apps).
 	AllowedApps           []string
@@ -239,6 +246,17 @@ func (c Config) AgentWorkingReaction(provider string) string {
 	return strings.TrimSpace(providerCfg.WorkingReactionEmoji)
 }
 
+// AgentWorkingReactionOverrides returns a defensive copy of this provider's
+// display-name-to-emoji overrides, or nil if none are configured. Callers use
+// an empty result to skip the Contact API lookup entirely.
+func (c Config) AgentWorkingReactionOverrides(provider string) map[string]string {
+	providerCfg, configured := c.AgentProviders[strings.TrimSpace(provider)]
+	if !configured || len(providerCfg.WorkingReactionOverrides) == 0 {
+		return nil
+	}
+	return cloneStringMap(providerCfg.WorkingReactionOverrides)
+}
+
 func LoadFromEnv() (Config, error) {
 	fileCfg, err := loadFileConfig(strings.TrimSpace(os.Getenv("FEISHU_BOTD_CONFIG")))
 	if err != nil {
@@ -311,18 +329,19 @@ func LoadFromEnv() (Config, error) {
 			allowedApps = append([]string{}, providerCfg.AllowedApps.Values...)
 		}
 		cfg.AgentProviders[provider] = AgentProviderConfig{
-			AuthToken:              token,
-			AllowedCommands:        append([]string(nil), providerCfg.AllowedCommands...),
-			AllowUnmatchedMessages: providerCfg.AllowUnmatchedMessages,
-			AllowCardActions:       providerCfg.AllowCardActions,
-			AllowAttachedContext:   providerCfg.AllowAttachedContext,
-			AllowFollowUpMessages:  providerCfg.AllowFollowUpMessages,
-			AllowMessageReactions:  providerCfg.AllowMessageReactions,
-			AllowLegacyCommands:    providerCfg.AllowLegacyCommands,
-			AllowCoTProgress:       providerCfg.AllowCoTProgress,
-			WorkingReactionEmoji:   providerCfg.WorkingReactionEmoji,
-			AllowedApps:            allowedApps,
-			AllowedAppsConfigured:  allowedAppsConfigured,
+			AuthToken:                token,
+			AllowedCommands:          append([]string(nil), providerCfg.AllowedCommands...),
+			AllowUnmatchedMessages:   providerCfg.AllowUnmatchedMessages,
+			AllowCardActions:         providerCfg.AllowCardActions,
+			AllowAttachedContext:     providerCfg.AllowAttachedContext,
+			AllowFollowUpMessages:    providerCfg.AllowFollowUpMessages,
+			AllowMessageReactions:    providerCfg.AllowMessageReactions,
+			AllowLegacyCommands:      providerCfg.AllowLegacyCommands,
+			AllowCoTProgress:         providerCfg.AllowCoTProgress,
+			WorkingReactionEmoji:     providerCfg.WorkingReactionEmoji,
+			WorkingReactionOverrides: providerCfg.WorkingReactionSenderOverrides,
+			AllowedApps:              allowedApps,
+			AllowedAppsConfigured:    allowedAppsConfigured,
 		}
 	}
 	if err := validateAgentProviderApps(cfg.AgentProviders, cfg.Apps); err != nil {
@@ -426,6 +445,10 @@ type fileAgentProviderConfig struct {
 	AllowLegacyCommands    bool               `json:"allow_legacy_commands"`
 	AllowCoTProgress       bool               `json:"allow_cot_progress"`
 	WorkingReactionEmoji   string             `json:"working_reaction_emoji"`
+	// WorkingReactionSenderOverrides maps a sender's Feishu display name to a
+	// working reaction emoji, resolved via a live Contact API call — see
+	// AgentProviderConfig.WorkingReactionOverrides.
+	WorkingReactionSenderOverrides map[string]string `json:"working_reaction_sender_overrides"`
 }
 
 // optionalStringList preserves the security-relevant distinction between an
@@ -1079,19 +1102,52 @@ func normalizeAgentProviderConfigs(in map[string]fileAgentProviderConfig) (map[s
 			}
 			allowedApps = optionalStringList{Values: apps, Set: true}
 		}
-		out[provider] = fileAgentProviderConfig{
-			AuthTokenFile:          tokenFile,
-			AllowedCommands:        commands,
-			AllowedApps:            allowedApps,
-			AllowUnmatchedMessages: providerCfg.AllowUnmatchedMessages,
-			AllowCardActions:       providerCfg.AllowCardActions,
-			AllowAttachedContext:   providerCfg.AllowAttachedContext,
-			AllowFollowUpMessages:  providerCfg.AllowFollowUpMessages,
-			AllowMessageReactions:  providerCfg.AllowMessageReactions,
-			AllowLegacyCommands:    providerCfg.AllowLegacyCommands,
-			AllowCoTProgress:       providerCfg.AllowCoTProgress,
-			WorkingReactionEmoji:   providerCfg.WorkingReactionEmoji,
+		reactionOverrides, err := normalizeProviderWorkingReactionOverrides(providerCfg.WorkingReactionSenderOverrides)
+		if err != nil {
+			return nil, fmt.Errorf("provider %q: %w", provider, err)
 		}
+		out[provider] = fileAgentProviderConfig{
+			AuthTokenFile:                  tokenFile,
+			AllowedCommands:                commands,
+			AllowedApps:                    allowedApps,
+			AllowUnmatchedMessages:         providerCfg.AllowUnmatchedMessages,
+			AllowCardActions:               providerCfg.AllowCardActions,
+			AllowAttachedContext:           providerCfg.AllowAttachedContext,
+			AllowFollowUpMessages:          providerCfg.AllowFollowUpMessages,
+			AllowMessageReactions:          providerCfg.AllowMessageReactions,
+			AllowLegacyCommands:            providerCfg.AllowLegacyCommands,
+			AllowCoTProgress:               providerCfg.AllowCoTProgress,
+			WorkingReactionEmoji:           providerCfg.WorkingReactionEmoji,
+			WorkingReactionSenderOverrides: reactionOverrides,
+		}
+	}
+	return out, nil
+}
+
+// normalizeProviderWorkingReactionOverrides trims and validates one
+// provider's display-name-to-emoji map. An absent or empty map is not an
+// error — it just means the provider never pays for the Contact API lookup.
+func normalizeProviderWorkingReactionOverrides(in map[string]string) (map[string]string, error) {
+	if len(in) == 0 {
+		return nil, nil
+	}
+	out := make(map[string]string, len(in))
+	for rawName, rawEmoji := range in {
+		name := strings.TrimSpace(rawName)
+		if name == "" {
+			return nil, errors.New("working_reaction_sender_overrides contains an empty sender name")
+		}
+		if len(name) > 128 {
+			return nil, fmt.Errorf("working_reaction_sender_overrides name %q exceeds 128 bytes", name)
+		}
+		emoji := strings.TrimSpace(rawEmoji)
+		if emoji == "" {
+			return nil, fmt.Errorf("working_reaction_sender_overrides entry %q has an empty emoji", name)
+		}
+		if len(emoji) > 64 {
+			return nil, fmt.Errorf("working_reaction_sender_overrides entry %q emoji exceeds 64 bytes", name)
+		}
+		out[name] = emoji
 	}
 	return out, nil
 }

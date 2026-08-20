@@ -25,6 +25,111 @@ func newAgentTestServiceWithWorkingReaction(backend *fakeAgentBackend, emoji str
 	return NewService(cfg, backend, dedupe.NewMemoryStore(time.Hour), slog.Default())
 }
 
+func newAgentTestServiceWithWorkingReactionOverrides(backend *fakeAgentBackend, emoji string, overrides map[string]string) *Service {
+	cfg := config.Config{
+		AppID:       "cli_test",
+		AppSecret:   "secret",
+		Channels:    map[string]string{"ops": "oc_test", "ci": "oc_ci"},
+		DedupeTTL:   time.Hour,
+		SendTimeout: time.Second,
+		AgentProviders: map[string]config.AgentProviderConfig{
+			"agent": {WorkingReactionEmoji: emoji, WorkingReactionOverrides: overrides},
+		},
+	}
+	return NewService(cfg, backend, dedupe.NewMemoryStore(time.Hour), slog.Default())
+}
+
+func TestAgentWorkingReactionOverrideAppliesWhenSenderNameMatches(t *testing.T) {
+	backend := newFakeAgentBackend()
+	backend.contactNames = map[string]string{"ou_sender_1": "王鑫禹"}
+	svc := newAgentTestServiceWithWorkingReactionOverrides(backend, "OnIt", map[string]string{"王鑫禹": "HEART"})
+	mustSubscribeAgent(t, svc, AgentSubscribeOptions{Provider: "agent", Commands: []string{"ask"}})
+	mustDispatchAgentPrompt(t, svc, CommandInput{
+		DeliveryID: "evt_reaction_override", Command: "ask", Prompt: "ask", ChatAlias: "ops",
+		SenderID: "ou_sender_1",
+		Metadata: map[string]string{"message_id": "om_trigger"},
+	})
+
+	startAgentResponse(t, svc, "agent", "evt_reaction_override", AgentResponseContent{Markdown: "working"})
+
+	if len(backend.addedReactions) != 1 {
+		t.Fatalf("added reactions = %d, want 1", len(backend.addedReactions))
+	}
+	if got := backend.addedReactions[0].EmojiType; got != "HEART" {
+		t.Fatalf("emoji = %q, want HEART", got)
+	}
+}
+
+func TestAgentWorkingReactionOverrideFallsBackWhenNameDoesNotMatch(t *testing.T) {
+	backend := newFakeAgentBackend()
+	backend.contactNames = map[string]string{"ou_sender_2": "someone else"}
+	svc := newAgentTestServiceWithWorkingReactionOverrides(backend, "OnIt", map[string]string{"王鑫禹": "HEART"})
+	mustSubscribeAgent(t, svc, AgentSubscribeOptions{Provider: "agent", Commands: []string{"ask"}})
+	mustDispatchAgentPrompt(t, svc, CommandInput{
+		DeliveryID: "evt_reaction_nomatch", Command: "ask", Prompt: "ask", ChatAlias: "ops",
+		SenderID: "ou_sender_2",
+		Metadata: map[string]string{"message_id": "om_trigger"},
+	})
+
+	startAgentResponse(t, svc, "agent", "evt_reaction_nomatch", AgentResponseContent{Markdown: "working"})
+
+	if len(backend.addedReactions) != 1 {
+		t.Fatalf("added reactions = %d, want 1", len(backend.addedReactions))
+	}
+	if got := backend.addedReactions[0].EmojiType; got != "OnIt" {
+		t.Fatalf("emoji = %q, want the provider default OnIt", got)
+	}
+}
+
+func TestAgentWorkingReactionOverrideSkipsContactLookupWhenNoOverridesConfigured(t *testing.T) {
+	backend := newFakeAgentBackend()
+	svc := newAgentTestServiceWithWorkingReaction(backend, "OnIt") // no overrides configured
+	mustSubscribeAgent(t, svc, AgentSubscribeOptions{Provider: "agent", Commands: []string{"ask"}})
+	mustDispatchAgentPrompt(t, svc, CommandInput{
+		DeliveryID: "evt_reaction_nooverride", Command: "ask", Prompt: "ask", ChatAlias: "ops",
+		SenderID: "ou_sender_1",
+		Metadata: map[string]string{"message_id": "om_trigger"},
+	})
+
+	startAgentResponse(t, svc, "agent", "evt_reaction_nooverride", AgentResponseContent{Markdown: "working"})
+
+	if len(backend.contactCalls) != 0 {
+		t.Fatalf("contact lookups = %d, want 0: no overrides configured means no reason to call Contact", len(backend.contactCalls))
+	}
+	if got := backend.addedReactions[0].EmojiType; got != "OnIt" {
+		t.Fatalf("emoji = %q, want the provider default OnIt", got)
+	}
+}
+
+func TestAgentWorkingReactionOverrideFallsBackOnContactLookupFailure(t *testing.T) {
+	backend := newFakeAgentBackend()
+	backend.contactErr = errors.New("missing scope")
+	svc := newAgentTestServiceWithWorkingReactionOverrides(backend, "OnIt", map[string]string{"王鑫禹": "HEART"})
+	mustSubscribeAgent(t, svc, AgentSubscribeOptions{Provider: "agent", Commands: []string{"ask"}})
+	mustDispatchAgentPrompt(t, svc, CommandInput{
+		DeliveryID: "evt_reaction_contactfail", Command: "ask", Prompt: "ask", ChatAlias: "ops",
+		SenderID: "ou_sender_1",
+		Metadata: map[string]string{"message_id": "om_trigger"},
+	})
+
+	receipt, apiErr := svc.StartAgentResponse(context.Background(), StartAgentResponseInput{
+		Provider: "agent", DeliveryID: "evt_reaction_contactfail", OperationID: "start-1",
+		Content: AgentResponseContent{Markdown: "working"},
+	})
+	if apiErr != nil {
+		t.Fatalf("start agent response failed the RPC on a contact lookup failure: %v", apiErr)
+	}
+	if receipt.ResponseID == "" {
+		t.Fatal("start agent response returned no response id")
+	}
+	if len(backend.addedReactions) != 1 {
+		t.Fatalf("added reactions = %d, want 1", len(backend.addedReactions))
+	}
+	if got := backend.addedReactions[0].EmojiType; got != "OnIt" {
+		t.Fatalf("emoji = %q, want the provider default OnIt when the lookup fails", got)
+	}
+}
+
 func TestAgentWorkingReactionAddedAtStartAndRemovedAtFinish(t *testing.T) {
 	backend := newFakeAgentBackend()
 	svc := newAgentTestServiceWithWorkingReaction(backend, "OnIt")

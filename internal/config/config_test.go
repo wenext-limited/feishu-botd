@@ -601,6 +601,121 @@ func TestLoadFromConfigFileAgentProviderCoTProgressIsIndependentGrant(t *testing
 	}
 }
 
+func TestLoadFromConfigFileWorkingReactionSenderOverrides(t *testing.T) {
+	clearConfigEnv(t)
+	dir := t.TempDir()
+	tokenPath := filepath.Join(dir, "agent-token")
+	const token = "fixture-agent-token-0123456789abcdef0123456789"
+	if err := os.WriteFile(tokenPath, []byte(token+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(dir, "feishu-botd.json")
+	configJSON := `{
+  "feishu": {"app_id":"app_fixture","app_secret":"secret_fixture"},
+  "listeners": {"grpc_socket":"/tmp/feishu-botd.fixture.sock"},
+  "commands": {"enabled":true},
+  "agent_providers": {
+    "fixture-agent": {
+      "auth_token_file":"` + tokenPath + `",
+      "allow_unmatched_messages":true,
+      "working_reaction_emoji":"OnIt",
+      "working_reaction_sender_overrides":{"王鑫禹":"HEART"}
+    }
+  }
+}`
+	if err := os.WriteFile(configPath, []byte(configJSON), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FEISHU_BOTD_CONFIG", configPath)
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("load provider config: %v", err)
+	}
+	if got := cfg.AgentProviders["fixture-agent"].WorkingReactionOverrides["王鑫禹"]; got != "HEART" {
+		t.Fatalf("working reaction override = %q, want HEART", got)
+	}
+	if got := cfg.AgentWorkingReactionOverrides("fixture-agent")["王鑫禹"]; got != "HEART" {
+		t.Fatalf("AgentWorkingReactionOverrides() = %q, want HEART", got)
+	}
+	// The default stays available for every other sender.
+	if got := cfg.AgentWorkingReaction("fixture-agent"); got != "OnIt" {
+		t.Fatalf("AgentWorkingReaction() = %q, want OnIt", got)
+	}
+	if overrides := cfg.AgentWorkingReactionOverrides("unknown-provider"); overrides != nil {
+		t.Fatalf("unconfigured provider returned overrides: %#v", overrides)
+	}
+}
+
+func TestLoadFromConfigFileWorkingReactionSenderOverridesRejectsEmptyName(t *testing.T) {
+	clearConfigEnv(t)
+	dir := t.TempDir()
+	tokenPath := filepath.Join(dir, "agent-token")
+	const token = "fixture-agent-token-0123456789abcdef0123456789"
+	if err := os.WriteFile(tokenPath, []byte(token+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(dir, "feishu-botd.json")
+	configJSON := `{
+  "feishu": {"app_id":"app_fixture","app_secret":"secret_fixture"},
+  "listeners": {"grpc_socket":"/tmp/feishu-botd.fixture.sock"},
+  "commands": {"enabled":true},
+  "agent_providers": {
+    "fixture-agent": {
+      "auth_token_file":"` + tokenPath + `",
+      "allow_unmatched_messages":true,
+      "working_reaction_sender_overrides":{"  ":"HEART"}
+    }
+  }
+}`
+	if err := os.WriteFile(configPath, []byte(configJSON), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FEISHU_BOTD_CONFIG", configPath)
+
+	if _, err := LoadFromEnv(); err == nil {
+		t.Fatal("empty sender name: want an error")
+	}
+}
+
+func TestLoadFromConfigFileWorkingReactionSenderOverridesRejectsEmptyEmoji(t *testing.T) {
+	clearConfigEnv(t)
+	dir := t.TempDir()
+	tokenPath := filepath.Join(dir, "agent-token")
+	const token = "fixture-agent-token-0123456789abcdef0123456789"
+	if err := os.WriteFile(tokenPath, []byte(token+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(dir, "feishu-botd.json")
+	configJSON := `{
+  "feishu": {"app_id":"app_fixture","app_secret":"secret_fixture"},
+  "listeners": {"grpc_socket":"/tmp/feishu-botd.fixture.sock"},
+  "commands": {"enabled":true},
+  "agent_providers": {
+    "fixture-agent": {
+      "auth_token_file":"` + tokenPath + `",
+      "allow_unmatched_messages":true,
+      "working_reaction_sender_overrides":{"王鑫禹":"  "}
+    }
+  }
+}`
+	if err := os.WriteFile(configPath, []byte(configJSON), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FEISHU_BOTD_CONFIG", configPath)
+
+	if _, err := LoadFromEnv(); err == nil {
+		t.Fatal("empty emoji: want an error")
+	}
+}
+
+func TestAgentWorkingReactionOverridesReturnsNilWhenUnconfigured(t *testing.T) {
+	cfg := Config{}
+	if overrides := cfg.AgentWorkingReactionOverrides("fixture-agent"); overrides != nil {
+		t.Fatalf("overrides = %#v, want nil", overrides)
+	}
+}
+
 func TestLoadFromConfigFileLoadsGeneralTokenForScopedUnixHTTP(t *testing.T) {
 	clearConfigEnv(t)
 	dir := t.TempDir()
