@@ -190,6 +190,16 @@ type StartAgentResponseInput struct {
 	DeliveryID  string
 	OperationID string
 	Content     AgentResponseContent
+	// AllowCoTProgress is the provider's CoT grant, set by grpcapi from the
+	// same authenticated principal that gates whether TimelineSteps survives
+	// translation at all. It exists as its own field, rather than being
+	// inferred from Content.TimelineSteps being non-empty, because CoT
+	// creation is unconditional here: a provider cannot know at Start time
+	// whether it will ever have a step to report, so an ungranted provider
+	// sending an empty snapshot is not distinguishable from a granted one in
+	// the same state — the grant itself is the only thing this layer can
+	// still gate on.
+	AllowCoTProgress bool
 }
 
 type UpdateAgentResponseInput struct {
@@ -411,23 +421,22 @@ type agentResponse struct {
 	// exactly the resolution Start already does for the card send — even
 	// when Start's own snapshot has no steps yet, so a later Update or
 	// Finish that discovers the first one still has something to bind a
-	// lazily created CoT to. cotAttempted is set the first time any call
-	// tries to create one, success or failure, so a response never retries
-	// a failed (or unbindable) create on every subsequent write. cotID and
-	// cotMessageID identify the created CoT message, if one exists.
-	// cotStepFinished is nil until Create succeeds, and every CoT helper
-	// treats nil as "no active CoT".
+	// lazily created CoT to. cot is the response's CoT bookkeeping; see
+	// agentCoTState.
 	cotChatID          string
 	cotOriginMessageID string
-	cotAttempted       bool
-	cotID              string
-	cotMessageID       string
-	cotStepFinished    map[string]bool
-	nextSequence       int32
-	lastMutationAt     time.Time
-	pendingOp          string
-	operations         map[string]*agentOperation
-	expiresAt          time.Time
+	cot                agentCoTState
+	// reactionMessageID is the triggering message the working reaction was
+	// placed on, and reactionID is what AddReaction returned — both empty
+	// means no reaction is active for this response, either because none was
+	// configured or because the add attempt failed.
+	reactionMessageID string
+	reactionID        string
+	nextSequence      int32
+	lastMutationAt    time.Time
+	pendingOp         string
+	operations        map[string]*agentOperation
+	expiresAt         time.Time
 }
 
 type appStateKey struct {
@@ -736,10 +745,15 @@ func (s *Service) StartAgentResponse(ctx context.Context, in StartAgentResponseI
 	// chatID and replyToMessageID are declared here, outside the block that
 	// normally sets them, so the CoT create call below can still see them
 	// after the block runs. On the rare retry where delivery.messageID is
-	// already set from an earlier attempt, the block is skipped and both stay
-	// empty — startAgentCoT treats that as nothing to attempt rather than
-	// re-deriving routing state a second time.
+	// already set from an earlier attempt — SendCard succeeded but the
+	// function did not reach response construction — the block is skipped
+	// entirely and both stay empty for this call. That loses the binding
+	// permanently: response.cotChatID/cotOriginMessageID are set from these
+	// same (now-empty) locals below, so this response never gets a CoT, not
+	// even lazily. Pre-existing and narrow enough to accept rather than
+	// thread routing state through delivery for.
 	var chatID, replyToMessageID string
+	var cot agentCoTState
 	if delivery.messageID == "" {
 		if delivery.input.ChatAlias == "direct" || delivery.input.UnconfiguredGroup {
 			chatID = delivery.input.ChatID
@@ -756,6 +770,16 @@ func (s *Service) StartAgentResponse(ctx context.Context, in StartAgentResponseI
 			chatID = routeChatID
 		}
 		replyToMessageID = delivery.input.Metadata["message_id"]
+		// Attempted before the card is sent, unconditionally, so a CoT
+		// message — when the provider is granted one — always has an
+		// earlier timestamp than the card and therefore always appears
+		// first in the chat. A provider that has not run any tools yet
+		// (the common case: nothing has happened before Start) still opens
+		// a CoT here, with RUN_STARTED alone; steps stream in afterward via
+		// UpdateAgentResponse.
+		if backend.cotMessages != nil && in.AllowCoTProgress {
+			s.createAgentCoT(callCtx, backend.cotMessages, &cot, delivery.responseID, chatID, replyToMessageID, in.Content.TimelineSteps)
+		}
 		sendRequest := feishu.CardSendRequest{
 			ReplyToMessageID: replyToMessageID,
 			CardID:           delivery.cardID,
@@ -814,9 +838,18 @@ func (s *Service) StartAgentResponse(ctx context.Context, in StartAgentResponseI
 		// life where these are resolved.
 		cotChatID:          chatID,
 		cotOriginMessageID: replyToMessageID,
+		cot:                cot,
 	}
 	if backend.cotMessages != nil {
-		s.advanceAgentCoT(callCtx, backend.cotMessages, response, in.Content.TimelineSteps)
+		// Covers the two cases createAgentCoT above did not: a retry where
+		// the eager attempt was skipped entirely (delivery.messageID was
+		// already set), and the ordinary case where Start had no steps yet
+		// and the eager attempt only opened RUN_STARTED — this folds in any
+		// steps Start's own snapshot carried on top of that.
+		s.advanceAgentCoT(callCtx, backend.cotMessages, &response.cot, response.responseID, response.cotChatID, response.cotOriginMessageID, in.Content.TimelineSteps)
+	}
+	if backend.reactions != nil {
+		s.addAgentWorkingReaction(callCtx, backend.reactions, response, replyToMessageID, s.cfg.AgentWorkingReaction(provider))
 	}
 	delivery.response = response
 	delivery.state = agentDeliveryStreaming
@@ -920,7 +953,7 @@ func (s *Service) applyAgentUpdate(
 	// actually committed, so the native surface never runs ahead of the card
 	// a reader is looking at. This may be the first call to carry any steps
 	// at all, in which case it creates the CoT rather than diffing one.
-	s.advanceAgentCoT(callCtx, cotMessages, response, steps)
+	s.advanceAgentCoT(callCtx, cotMessages, &response.cot, response.responseID, response.cotChatID, response.cotOriginMessageID, steps)
 	op.complete = true
 	response.revision++
 	op.revision = response.revision
@@ -1132,13 +1165,14 @@ func (s *Service) FinishAgentResponse(ctx context.Context, in FinishAgentRespons
 		Timeline agentTimelineParts
 		Steps    []AgentTimelineStep
 	}{in.ExpectedRevision, phase, in.Markdown, in.Summary, timeline, in.TimelineSteps})
-	return s.applyAgentFinish(ctx, backend.dynamicCards, backend.cotMessages, response, operationID, fingerprint, in.ExpectedRevision, phase, in.Markdown, in.Summary, timeline, in.TimelineSteps)
+	return s.applyAgentFinish(ctx, backend.dynamicCards, backend.cotMessages, backend.reactions, response, operationID, fingerprint, in.ExpectedRevision, phase, in.Markdown, in.Summary, timeline, in.TimelineSteps)
 }
 
 func (s *Service) applyAgentFinish(
 	ctx context.Context,
 	dynamicCards feishu.DynamicCards,
 	cotMessages feishu.CoTMessages,
+	reactions feishu.ReactionMessages,
 	response *agentResponse,
 	operationID, fingerprint string,
 	expected uint64,
@@ -1209,8 +1243,9 @@ func (s *Service) applyAgentFinish(
 	// CoT to match before the response itself is marked terminal. A run too
 	// short to coalesce even one Update call reaches advanceAgentCoT here for
 	// the first time, so it still gets a CoT rather than none at all.
-	s.advanceAgentCoT(callCtx, cotMessages, response, steps)
-	s.finishAgentCoT(callCtx, cotMessages, response, phase)
+	s.advanceAgentCoT(callCtx, cotMessages, &response.cot, response.responseID, response.cotChatID, response.cotOriginMessageID, steps)
+	s.finishAgentCoT(callCtx, cotMessages, &response.cot, response.responseID, phase)
+	s.removeAgentWorkingReaction(callCtx, reactions, response)
 	op.complete = true
 	response.markdown = markdown
 	response.phase = phase

@@ -9,6 +9,22 @@ import (
 	"feishu-botd/internal/feishu"
 )
 
+// startAgentResponseWithCoT mirrors startAgentResponse but grants the CoT
+// capability grpcapi would otherwise attach from the authenticated
+// principal — every test in this file is specifically about CoT behavior, so
+// it needs the grant on to exercise anything past the boundary check.
+func startAgentResponseWithCoT(t *testing.T, svc *Service, provider, deliveryID string, content AgentResponseContent) AgentResponseReceipt {
+	t.Helper()
+	receipt, apiErr := svc.StartAgentResponse(context.Background(), StartAgentResponseInput{
+		Provider: provider, DeliveryID: deliveryID, OperationID: "start-1", Content: content,
+		AllowCoTProgress: true,
+	})
+	if apiErr != nil {
+		t.Fatalf("start agent response: %v", apiErr)
+	}
+	return receipt
+}
+
 // cotEventContents decodes every event's Content field for assertions that
 // care about the AG-UI payload shape, not just the event type.
 func cotEventContents(t *testing.T, events []feishu.CoTEvent) []map[string]any {
@@ -47,6 +63,7 @@ func TestAgentCoTStartCreatesRunAndOpensStartedSteps(t *testing.T) {
 			Markdown: "working", TimelineMarkdown: "step 1", TimelineTitle: "step 1",
 			TimelineSteps: []AgentTimelineStep{{StepID: "s1", Label: "识别问题", State: AgentTimelineStepStateStarted}},
 		},
+		AllowCoTProgress: true,
 	})
 	if apiErr != nil {
 		t.Fatalf("start agent response: %v", apiErr)
@@ -88,7 +105,13 @@ func TestAgentCoTStartCreatesRunAndOpensStartedSteps(t *testing.T) {
 	}
 }
 
-func TestAgentCoTStartWithoutStepsSkipsCreate(t *testing.T) {
+// TestAgentCoTStartWithoutStepsStillCreatesEagerly pins the fix for the bug
+// found live: a provider cannot know at Start time whether it will run any
+// tools, so gating creation on Start's own (necessarily empty) snapshot meant
+// no CoT was ever created for such a provider. Creation is now unconditional
+// whenever there is an origin message to bind to, opening with RUN_STARTED
+// alone when there are no steps yet.
+func TestAgentCoTStartWithoutStepsStillCreatesEagerly(t *testing.T) {
 	backend := newFakeAgentBackend()
 	svc := newAgentTestService(backend)
 	mustSubscribeAgent(t, svc, AgentSubscribeOptions{Provider: "agent", Commands: []string{"ask"}})
@@ -97,10 +120,54 @@ func TestAgentCoTStartWithoutStepsSkipsCreate(t *testing.T) {
 		Metadata: map[string]string{"message_id": "om_trigger"},
 	})
 
-	startAgentResponse(t, svc, "agent", "evt_cot_nosteps", AgentResponseContent{Markdown: "answer"})
+	startAgentResponseWithCoT(t, svc, "agent", "evt_cot_nosteps", AgentResponseContent{Markdown: "answer"})
 
-	if len(backend.cotCreates) != 0 {
-		t.Fatalf("cot creates = %d, want 0 for a response with no timeline steps", len(backend.cotCreates))
+	if len(backend.cotCreates) != 1 {
+		t.Fatalf("cot creates = %d, want 1 even with no timeline steps yet", len(backend.cotCreates))
+	}
+	if len(backend.cotAppends) != 1 {
+		t.Fatalf("cot appends = %d, want 1", len(backend.cotAppends))
+	}
+	gotTypes := cotEventTypes(backend.cotAppends[0].Events)
+	if len(gotTypes) != 1 || gotTypes[0] != feishu.CoTEventRunStarted {
+		t.Fatalf("opening events = %v, want just [RUN_STARTED]", gotTypes)
+	}
+}
+
+// TestAgentCoTCreationPrecedesTheCardSend is the ordering guarantee this
+// whole redesign exists for: the CoT message must have an earlier timestamp
+// than the card, so it always appears first in the chat. That requires
+// Create to actually be called before SendCard, not merely before the
+// response object exists.
+func TestAgentCoTCreationPrecedesTheCardSend(t *testing.T) {
+	backend := newFakeAgentBackend()
+	svc := newAgentTestService(backend)
+	mustSubscribeAgent(t, svc, AgentSubscribeOptions{Provider: "agent", Commands: []string{"ask"}})
+	mustDispatchAgentPrompt(t, svc, CommandInput{
+		DeliveryID: "evt_cot_order", Command: "ask", Prompt: "ask", ChatAlias: "ops",
+		Metadata: map[string]string{"message_id": "om_trigger"},
+	})
+
+	startAgentResponseWithCoT(t, svc, "agent", "evt_cot_order", AgentResponseContent{Markdown: "answer"})
+
+	cotIndex, cardIndex := -1, -1
+	for i, call := range backend.callOrder {
+		switch call {
+		case "cot_create":
+			if cotIndex == -1 {
+				cotIndex = i
+			}
+		case "send_card":
+			if cardIndex == -1 {
+				cardIndex = i
+			}
+		}
+	}
+	if cotIndex == -1 || cardIndex == -1 {
+		t.Fatalf("call order = %v, want both cot_create and send_card", backend.callOrder)
+	}
+	if cotIndex >= cardIndex {
+		t.Fatalf("call order = %v, want cot_create before send_card", backend.callOrder)
 	}
 }
 
@@ -119,6 +186,7 @@ func TestAgentCoTStartWithoutOriginMessageSkipsCreate(t *testing.T) {
 			Markdown:      "answer",
 			TimelineSteps: []AgentTimelineStep{{StepID: "s1", Label: "step", State: AgentTimelineStepStateStarted}},
 		},
+		AllowCoTProgress: true,
 	})
 	if apiErr != nil {
 		t.Fatalf("start agent response: %v", apiErr)
@@ -136,7 +204,7 @@ func TestAgentCoTUpdateEmitsOnlyNewTransitions(t *testing.T) {
 		DeliveryID: "evt_cot_update", Command: "ask", Prompt: "ask", ChatAlias: "ops",
 		Metadata: map[string]string{"message_id": "om_trigger"},
 	})
-	receipt := startAgentResponse(t, svc, "agent", "evt_cot_update", AgentResponseContent{
+	receipt := startAgentResponseWithCoT(t, svc, "agent", "evt_cot_update", AgentResponseContent{
 		Markdown:      "working",
 		TimelineSteps: []AgentTimelineStep{{StepID: "s1", Label: "step one", State: AgentTimelineStepStateStarted}},
 	})
@@ -190,6 +258,7 @@ func TestAgentCoTStepFirstSeenFinishedEmitsBothTransitions(t *testing.T) {
 			Markdown:      "working",
 			TimelineSteps: []AgentTimelineStep{{StepID: "fast", Label: "quick step", State: AgentTimelineStepStateFinished}},
 		},
+		AllowCoTProgress: true,
 	})
 	if apiErr != nil {
 		t.Fatalf("start agent response: %v", apiErr)
@@ -218,7 +287,7 @@ func TestAgentCoTFinishCompletedEmitsRunFinishedDone(t *testing.T) {
 		DeliveryID: "evt_cot_finish", Command: "ask", Prompt: "ask", ChatAlias: "ops",
 		Metadata: map[string]string{"message_id": "om_trigger"},
 	})
-	receipt := startAgentResponse(t, svc, "agent", "evt_cot_finish", AgentResponseContent{
+	receipt := startAgentResponseWithCoT(t, svc, "agent", "evt_cot_finish", AgentResponseContent{
 		Markdown:      "working",
 		TimelineSteps: []AgentTimelineStep{{StepID: "s1", Label: "step", State: AgentTimelineStepStateStarted}},
 	})
@@ -274,7 +343,7 @@ func TestAgentCoTFinishFailedOutcomeCompletesWithError(t *testing.T) {
 		DeliveryID: "evt_cot_failfinish", Command: "ask", Prompt: "ask", ChatAlias: "ops",
 		Metadata: map[string]string{"message_id": "om_trigger"},
 	})
-	receipt := startAgentResponse(t, svc, "agent", "evt_cot_failfinish", AgentResponseContent{
+	receipt := startAgentResponseWithCoT(t, svc, "agent", "evt_cot_failfinish", AgentResponseContent{
 		Markdown:      "working",
 		TimelineSteps: []AgentTimelineStep{{StepID: "s1", Label: "step", State: AgentTimelineStepStateStarted}},
 	})
@@ -314,6 +383,7 @@ func TestAgentCoTCreateFailureDoesNotBlockStart(t *testing.T) {
 			Markdown:      "answer",
 			TimelineSteps: []AgentTimelineStep{{StepID: "s1", Label: "step", State: AgentTimelineStepStateStarted}},
 		},
+		AllowCoTProgress: true,
 	})
 	if apiErr != nil {
 		t.Fatalf("start agent response failed the RPC on a CoT create failure: %v", apiErr)
@@ -345,7 +415,7 @@ func TestAgentCoTAppendFailureDoesNotBlockUpdate(t *testing.T) {
 		DeliveryID: "evt_cot_appendfail", Command: "ask", Prompt: "ask", ChatAlias: "ops",
 		Metadata: map[string]string{"message_id": "om_trigger"},
 	})
-	receipt := startAgentResponse(t, svc, "agent", "evt_cot_appendfail", AgentResponseContent{
+	receipt := startAgentResponseWithCoT(t, svc, "agent", "evt_cot_appendfail", AgentResponseContent{
 		Markdown:      "working",
 		TimelineSteps: []AgentTimelineStep{{StepID: "s1", Label: "step", State: AgentTimelineStepStateStarted}},
 	})
@@ -368,7 +438,7 @@ func TestAgentCoTCompleteFailureDoesNotBlockFinish(t *testing.T) {
 		DeliveryID: "evt_cot_completefail", Command: "ask", Prompt: "ask", ChatAlias: "ops",
 		Metadata: map[string]string{"message_id": "om_trigger"},
 	})
-	receipt := startAgentResponse(t, svc, "agent", "evt_cot_completefail", AgentResponseContent{
+	receipt := startAgentResponseWithCoT(t, svc, "agent", "evt_cot_completefail", AgentResponseContent{
 		Markdown:      "working",
 		TimelineSteps: []AgentTimelineStep{{StepID: "s1", Label: "step", State: AgentTimelineStepStateStarted}},
 	})
@@ -394,7 +464,11 @@ func TestAgentCoTCompleteFailureDoesNotBlockFinish(t *testing.T) {
 // never created — no error, no log line, nothing — across an entire live
 // deployment before it was caught. This pins the fix: Create must be
 // attempted the first time ANY call carries a non-empty snapshot.
-func TestAgentCoTCreatesLazilyOnFirstStepsWhereverTheyArrive(t *testing.T) {
+// TestAgentCoTOpensAtStartAndStepsStreamInViaUpdate proves the create/diff
+// split across the two calls: Start opens the CoT eagerly (RUN_STARTED
+// alone, since nothing has run yet), and the first Update reporting a real
+// step appends to that SAME CoT rather than creating a second one.
+func TestAgentCoTOpensAtStartAndStepsStreamInViaUpdate(t *testing.T) {
 	backend := newFakeAgentBackend()
 	svc := newAgentTestService(backend)
 	mustSubscribeAgent(t, svc, AgentSubscribeOptions{Provider: "agent", Commands: []string{"ask"}})
@@ -403,13 +477,16 @@ func TestAgentCoTCreatesLazilyOnFirstStepsWhereverTheyArrive(t *testing.T) {
 		Metadata: map[string]string{"message_id": "om_trigger"},
 	})
 
-	// Start carries no steps at all — nothing has run yet.
-	receipt := startAgentResponse(t, svc, "agent", "evt_cot_lazy", AgentResponseContent{Markdown: "working"})
-	if len(backend.cotCreates) != 0 {
-		t.Fatalf("cot creates after a step-less start = %d, want 0 yet", len(backend.cotCreates))
+	// Start carries no steps at all — nothing has run yet — but still opens
+	// the CoT immediately.
+	receipt := startAgentResponseWithCoT(t, svc, "agent", "evt_cot_lazy", AgentResponseContent{Markdown: "working"})
+	if len(backend.cotCreates) != 1 {
+		t.Fatalf("cot creates after a step-less start = %d, want 1 (eager)", len(backend.cotCreates))
+	}
+	if create := backend.cotCreates[0]; create.ChatID != "oc_test" || create.OriginMessageID != "om_trigger" {
+		t.Fatalf("cot create = %#v, want the ids resolved at start", create)
 	}
 
-	// The first Update discovers a tool call. This must be the create.
 	if _, apiErr := svc.UpdateAgentResponse(context.Background(), UpdateAgentResponseInput{
 		Provider: "agent", ResponseID: receipt.ResponseID, OperationID: "update-1", ExpectedRevision: 1,
 		Markdown:      "still working",
@@ -419,21 +496,21 @@ func TestAgentCoTCreatesLazilyOnFirstStepsWhereverTheyArrive(t *testing.T) {
 	}
 
 	if len(backend.cotCreates) != 1 {
-		t.Fatalf("cot creates = %d, want 1: the lazy create never fired", len(backend.cotCreates))
+		t.Fatalf("cot creates after update = %d, want still 1: a step must not open a second CoT", len(backend.cotCreates))
 	}
-	if create := backend.cotCreates[0]; create.ChatID != "oc_test" || create.OriginMessageID != "om_trigger" {
-		t.Fatalf("cot create = %#v, want the ids captured at start", create)
+	if len(backend.cotAppends) != 2 {
+		t.Fatalf("cot appends = %d, want 2: [RUN_STARTED] from start, [STEP_STARTED] from update", len(backend.cotAppends))
 	}
-	if len(backend.cotAppends) != 1 {
-		t.Fatalf("cot appends = %d, want 1", len(backend.cotAppends))
+	startTypes := cotEventTypes(backend.cotAppends[0].Events)
+	if len(startTypes) != 1 || startTypes[0] != feishu.CoTEventRunStarted {
+		t.Fatalf("start's append = %v, want [RUN_STARTED]", startTypes)
 	}
-	gotTypes := cotEventTypes(backend.cotAppends[0].Events)
-	wantTypes := []feishu.CoTEventType{feishu.CoTEventRunStarted, feishu.CoTEventStepStarted}
-	if len(gotTypes) != 2 || gotTypes[0] != wantTypes[0] || gotTypes[1] != wantTypes[1] {
-		t.Fatalf("lazily created run's opening events = %v, want %v", gotTypes, wantTypes)
+	updateTypes := cotEventTypes(backend.cotAppends[1].Events)
+	if len(updateTypes) != 1 || updateTypes[0] != feishu.CoTEventStepStarted {
+		t.Fatalf("update's append = %v, want [STEP_STARTED]", updateTypes)
 	}
 
-	// Finish must complete the CoT that was created lazily, not skip it.
+	// Finish must complete the CoT Start opened.
 	if _, apiErr := svc.FinishAgentResponse(context.Background(), FinishAgentResponseInput{
 		Provider: "agent", ResponseID: receipt.ResponseID, OperationID: "finish-1", ExpectedRevision: 2,
 		Outcome:  AgentResponseOutcomeCompleted,
@@ -445,7 +522,7 @@ func TestAgentCoTCreatesLazilyOnFirstStepsWhereverTheyArrive(t *testing.T) {
 		t.Fatalf("finish agent response: %v", apiErr)
 	}
 	if len(backend.cotCompletes) != 1 {
-		t.Fatalf("cot completes = %d, want 1: a lazily created CoT must still be closed", len(backend.cotCompletes))
+		t.Fatalf("cot completes = %d, want 1", len(backend.cotCompletes))
 	}
 }
 
@@ -453,7 +530,12 @@ func TestAgentCoTCreatesLazilyOnFirstStepsWhereverTheyArrive(t *testing.T) {
 // even narrower case: a run whose only steps ever reported arrive in the
 // Finish call itself, because it finished before the update coalescer's
 // timer fired even once.
-func TestAgentCoTFinishCreatesLazilyForARunTooShortToCoalesceAnUpdate(t *testing.T) {
+// TestAgentCoTFinishClosesARunTooShortToCoalesceAnUpdate covers a run whose
+// only steps ever reported arrive in the Finish call itself, because it
+// finished before the update coalescer's timer fired even once. Start still
+// opened the CoT eagerly (with zero steps), so Finish's job here is to fold
+// the run's only step in and close it — not to create anything.
+func TestAgentCoTFinishClosesARunTooShortToCoalesceAnUpdate(t *testing.T) {
 	backend := newFakeAgentBackend()
 	svc := newAgentTestService(backend)
 	mustSubscribeAgent(t, svc, AgentSubscribeOptions{Provider: "agent", Commands: []string{"ask"}})
@@ -461,7 +543,10 @@ func TestAgentCoTFinishCreatesLazilyForARunTooShortToCoalesceAnUpdate(t *testing
 		DeliveryID: "evt_cot_instant", Command: "ask", Prompt: "ask", ChatAlias: "ops",
 		Metadata: map[string]string{"message_id": "om_trigger"},
 	})
-	receipt := startAgentResponse(t, svc, "agent", "evt_cot_instant", AgentResponseContent{Markdown: "working"})
+	receipt := startAgentResponseWithCoT(t, svc, "agent", "evt_cot_instant", AgentResponseContent{Markdown: "working"})
+	if len(backend.cotCreates) != 1 {
+		t.Fatalf("cot creates after start = %d, want 1 (eager)", len(backend.cotCreates))
+	}
 
 	if _, apiErr := svc.FinishAgentResponse(context.Background(), FinishAgentResponseInput{
 		Provider: "agent", ResponseID: receipt.ResponseID, OperationID: "finish-1", ExpectedRevision: 1,
@@ -475,7 +560,7 @@ func TestAgentCoTFinishCreatesLazilyForARunTooShortToCoalesceAnUpdate(t *testing
 	}
 
 	if len(backend.cotCreates) != 1 {
-		t.Fatalf("cot creates = %d, want 1: finish is the only call that ever had steps", len(backend.cotCreates))
+		t.Fatalf("cot creates after finish = %d, want still 1: finish must not create a second CoT", len(backend.cotCreates))
 	}
 	if len(backend.cotCompletes) != 1 {
 		t.Fatalf("cot completes = %d, want 1", len(backend.cotCompletes))
@@ -485,7 +570,10 @@ func TestAgentCoTFinishCreatesLazilyForARunTooShortToCoalesceAnUpdate(t *testing
 // TestAgentCoTNeverRetriesAFailedLazyCreate proves cotAttempted latches
 // across calls, not just within one: a create failure on Update must not be
 // retried on the following Finish.
-func TestAgentCoTNeverRetriesAFailedLazyCreate(t *testing.T) {
+// TestAgentCoTNeverRetriesAFailedCreate proves cotAttempted latches across
+// every remaining call in a response's lifetime, not just within one: the
+// eager attempt at Start fails, and neither Update nor Finish tries again.
+func TestAgentCoTNeverRetriesAFailedCreate(t *testing.T) {
 	backend := newFakeAgentBackend()
 	backend.cotCreateErr = errors.New("boom")
 	svc := newAgentTestService(backend)
@@ -494,7 +582,10 @@ func TestAgentCoTNeverRetriesAFailedLazyCreate(t *testing.T) {
 		DeliveryID: "evt_cot_retry", Command: "ask", Prompt: "ask", ChatAlias: "ops",
 		Metadata: map[string]string{"message_id": "om_trigger"},
 	})
-	receipt := startAgentResponse(t, svc, "agent", "evt_cot_retry", AgentResponseContent{Markdown: "working"})
+	receipt := startAgentResponseWithCoT(t, svc, "agent", "evt_cot_retry", AgentResponseContent{Markdown: "working"})
+	if len(backend.cotCreates) != 1 {
+		t.Fatalf("cot creates after start's failing eager attempt = %d, want 1", len(backend.cotCreates))
+	}
 
 	if _, apiErr := svc.UpdateAgentResponse(context.Background(), UpdateAgentResponseInput{
 		Provider: "agent", ResponseID: receipt.ResponseID, OperationID: "update-1", ExpectedRevision: 1,
@@ -504,7 +595,7 @@ func TestAgentCoTNeverRetriesAFailedLazyCreate(t *testing.T) {
 		t.Fatalf("update agent response: %v", apiErr)
 	}
 	if len(backend.cotCreates) != 1 {
-		t.Fatalf("cot creates after the failing update = %d, want 1", len(backend.cotCreates))
+		t.Fatalf("cot creates after update = %d, want still 1: update must not retry start's failed attempt", len(backend.cotCreates))
 	}
 
 	if _, apiErr := svc.FinishAgentResponse(context.Background(), FinishAgentResponseInput{

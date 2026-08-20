@@ -43,16 +43,46 @@ type fakeAgentBackend struct {
 	cotCreates   []feishu.CoTCreateRequest
 	cotAppends   []feishu.CoTAppendRequest
 	cotCompletes []feishu.CoTCompleteRequest
+
+	reactionID string
+
+	addReactionErr    error
+	removeReactionErr error
+
+	addedReactions   []feishu.AddReactionRequest
+	removedReactions []feishu.RemoveReactionRequest
+
+	// callOrder tags each of the calls above ("send_card", "cot_create", ...)
+	// in the order they actually happened, so a test can assert relative
+	// ordering across the otherwise-separate per-method slices above.
+	callOrder []string
 }
 
 func newFakeAgentBackend() *fakeAgentBackend {
 	return &fakeAgentBackend{
 		cardID: "card_agent_1", messageID: "om_agent_1",
 		cotID: "cot_agent_1", cotMessageID: "om_cot_agent_1",
+		reactionID: "reaction_agent_1",
 	}
 }
 
+func (f *fakeAgentBackend) AddReaction(_ context.Context, req feishu.AddReactionRequest) (string, error) {
+	f.callOrder = append(f.callOrder, "reaction_add")
+	f.addedReactions = append(f.addedReactions, req)
+	if f.addReactionErr != nil {
+		return "", f.addReactionErr
+	}
+	return f.reactionID, nil
+}
+
+func (f *fakeAgentBackend) RemoveReaction(_ context.Context, req feishu.RemoveReactionRequest) error {
+	f.callOrder = append(f.callOrder, "reaction_remove")
+	f.removedReactions = append(f.removedReactions, req)
+	return f.removeReactionErr
+}
+
 func (f *fakeAgentBackend) Create(_ context.Context, req feishu.CoTCreateRequest) (string, string, error) {
+	f.callOrder = append(f.callOrder, "cot_create")
 	f.cotCreates = append(f.cotCreates, req)
 	if f.cotCreateErr != nil {
 		return "", "", f.cotCreateErr
@@ -85,6 +115,7 @@ func (f *fakeAgentBackend) CreateCard(_ context.Context, cardJSON string) (strin
 }
 
 func (f *fakeAgentBackend) SendCard(_ context.Context, req feishu.CardSendRequest) (string, error) {
+	f.callOrder = append(f.callOrder, "send_card")
 	f.sentCards = append(f.sentCards, req)
 	if f.sendErr != nil {
 		return "", f.sendErr

@@ -114,10 +114,11 @@ func (c *commandServer) StartAgentResponse(ctx context.Context, in *pb.StartAgen
 	content := agentContentFromProto(in.GetContent())
 	content.TimelineSteps = agentTimelineStepsFromProto(principal.allowCoTProgress, in.GetTimelineSteps())
 	receipt, apiErr := c.svc.StartAgentResponse(ctx, service.StartAgentResponseInput{
-		Provider:    in.GetProvider(),
-		DeliveryID:  in.GetDeliveryId(),
-		OperationID: in.GetOperationId(),
-		Content:     content,
+		Provider:         in.GetProvider(),
+		DeliveryID:       in.GetDeliveryId(),
+		OperationID:      in.GetOperationId(),
+		Content:          content,
+		AllowCoTProgress: principal.allowCoTProgress,
 	})
 	if apiErr != nil {
 		return nil, grpcError(apiErr, requestIDFromContext(ctx))

@@ -37,6 +37,7 @@ type appBackend struct {
 	dynamicCards    feishu.DynamicCards
 	attachedContext feishu.AttachedContextLookup
 	cotMessages     feishu.CoTMessages
+	reactions       feishu.ReactionMessages
 }
 
 // Service owns the send/dedupe/readiness flow. It is safe for concurrent use
@@ -108,6 +109,9 @@ func newService(
 		}
 		if cot, ok := sender.(feishu.CoTMessages); ok {
 			backend.cotMessages = cot
+		}
+		if reactions, ok := sender.(feishu.ReactionMessages); ok {
+			backend.reactions = reactions
 		}
 		backends[alias] = backend
 	}

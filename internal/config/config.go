@@ -83,6 +83,12 @@ type AgentProviderConfig struct {
 	// separate capability from the collapsible-panel timeline every provider
 	// already has, because the underlying API needs its own tenant permission.
 	AllowCoTProgress bool
+	// WorkingReactionEmoji, when non-empty, is the Feishu emoji key (e.g.
+	// "OnIt") the daemon places on the triggering message for the duration of
+	// a response and removes once it closes. Entirely daemon-driven — the
+	// provider does not request or control it per response. Empty disables
+	// the behavior for this provider.
+	WorkingReactionEmoji string
 	// AllowedAppsConfigured distinguishes an absent allowed_apps field (all
 	// configured apps) from an explicitly empty list (no apps).
 	AllowedApps           []string
@@ -221,6 +227,18 @@ func (c Config) ProviderAllowsAttachedContext(provider string) bool {
 	return configured && providerCfg.AllowAttachedContext
 }
 
+// AgentWorkingReaction returns the configured emoji key for this provider, or
+// "" if the behavior is not enabled. Unlike the Allow* grants above this is a
+// daemon-driven behavior default, not a provider capability, so callers do
+// not need a request-time signal to read it.
+func (c Config) AgentWorkingReaction(provider string) string {
+	providerCfg, configured := c.AgentProviders[strings.TrimSpace(provider)]
+	if !configured {
+		return ""
+	}
+	return strings.TrimSpace(providerCfg.WorkingReactionEmoji)
+}
+
 func LoadFromEnv() (Config, error) {
 	fileCfg, err := loadFileConfig(strings.TrimSpace(os.Getenv("FEISHU_BOTD_CONFIG")))
 	if err != nil {
@@ -302,6 +320,7 @@ func LoadFromEnv() (Config, error) {
 			AllowMessageReactions:  providerCfg.AllowMessageReactions,
 			AllowLegacyCommands:    providerCfg.AllowLegacyCommands,
 			AllowCoTProgress:       providerCfg.AllowCoTProgress,
+			WorkingReactionEmoji:   providerCfg.WorkingReactionEmoji,
 			AllowedApps:            allowedApps,
 			AllowedAppsConfigured:  allowedAppsConfigured,
 		}
@@ -406,6 +425,7 @@ type fileAgentProviderConfig struct {
 	AllowMessageReactions  bool               `json:"allow_message_reactions"`
 	AllowLegacyCommands    bool               `json:"allow_legacy_commands"`
 	AllowCoTProgress       bool               `json:"allow_cot_progress"`
+	WorkingReactionEmoji   string             `json:"working_reaction_emoji"`
 }
 
 // optionalStringList preserves the security-relevant distinction between an
@@ -1070,6 +1090,7 @@ func normalizeAgentProviderConfigs(in map[string]fileAgentProviderConfig) (map[s
 			AllowMessageReactions:  providerCfg.AllowMessageReactions,
 			AllowLegacyCommands:    providerCfg.AllowLegacyCommands,
 			AllowCoTProgress:       providerCfg.AllowCoTProgress,
+			WorkingReactionEmoji:   providerCfg.WorkingReactionEmoji,
 		}
 	}
 	return out, nil

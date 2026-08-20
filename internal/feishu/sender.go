@@ -91,6 +91,7 @@ type ChannelSender struct {
 	cardAPI         cardKitCardAPI
 	elementAPI      cardKitElementAPI
 	messageAPI      cardKitMessageAPI
+	reactionAPI     reactionAPI
 	attachedContext AttachedContextLookup
 
 	retryMaxAttempts int
@@ -118,6 +119,7 @@ func NewChannelSender(appID, appSecret string, logger *slog.Logger) *ChannelSend
 		cardAPI:         client.Cardkit.V1.Card,
 		elementAPI:      client.Cardkit.V1.CardElement,
 		messageAPI:      client.Im.V1.Message,
+		reactionAPI:     client.Im.V1.MessageReaction,
 		attachedContext: newSDKAttachedContextLookup(client.Im.V1.Message, client.Im.V1.MessageResource),
 	}
 }
