@@ -407,19 +407,27 @@ type agentResponse struct {
 	phase          AgentResponsePhase
 	markdown       string
 	timeline       agentTimelineState
-	// cotID and cotMessageID identify the native Feishu CoT progress message
-	// bound to this response, if one exists. cotStepFinished is nil until
-	// Create succeeds, and every CoT helper treats nil as "no active CoT" —
-	// including the fresh-fail case, where Create failed and the daemon gives
-	// up on CoT for the rest of this response's lifetime rather than retrying.
-	cotID           string
-	cotMessageID    string
-	cotStepFinished map[string]bool
-	nextSequence    int32
-	lastMutationAt  time.Time
-	pendingOp       string
-	operations      map[string]*agentOperation
-	expiresAt       time.Time
+	// cotChatID and cotOriginMessageID are captured once, at Start, from
+	// exactly the resolution Start already does for the card send — even
+	// when Start's own snapshot has no steps yet, so a later Update or
+	// Finish that discovers the first one still has something to bind a
+	// lazily created CoT to. cotAttempted is set the first time any call
+	// tries to create one, success or failure, so a response never retries
+	// a failed (or unbindable) create on every subsequent write. cotID and
+	// cotMessageID identify the created CoT message, if one exists.
+	// cotStepFinished is nil until Create succeeds, and every CoT helper
+	// treats nil as "no active CoT".
+	cotChatID          string
+	cotOriginMessageID string
+	cotAttempted       bool
+	cotID              string
+	cotMessageID       string
+	cotStepFinished    map[string]bool
+	nextSequence       int32
+	lastMutationAt     time.Time
+	pendingOp          string
+	operations         map[string]*agentOperation
+	expiresAt          time.Time
 }
 
 type appStateKey struct {
@@ -800,9 +808,15 @@ func (s *Service) StartAgentResponse(ctx context.Context, in StartAgentResponseI
 		timeline:       card.timeline,
 		operations:     make(map[string]*agentOperation),
 		expiresAt:      time.Now().Add(b.ttl),
+		// Captured here regardless of whether Start's own snapshot has
+		// steps: a lazily created CoT during Update or Finish still needs
+		// something to bind to, and this is the only point in the response's
+		// life where these are resolved.
+		cotChatID:          chatID,
+		cotOriginMessageID: replyToMessageID,
 	}
 	if backend.cotMessages != nil {
-		s.startAgentCoT(callCtx, backend.cotMessages, response, chatID, replyToMessageID, in.Content.TimelineSteps)
+		s.advanceAgentCoT(callCtx, backend.cotMessages, response, in.Content.TimelineSteps)
 	}
 	delivery.response = response
 	delivery.state = agentDeliveryStreaming
@@ -904,8 +918,9 @@ func (s *Service) applyAgentUpdate(
 	}
 	// CoT progress advances only once the card update it describes has
 	// actually committed, so the native surface never runs ahead of the card
-	// a reader is looking at.
-	s.diffAgentCoTSteps(callCtx, cotMessages, response, steps)
+	// a reader is looking at. This may be the first call to carry any steps
+	// at all, in which case it creates the CoT rather than diffing one.
+	s.advanceAgentCoT(callCtx, cotMessages, response, steps)
 	op.complete = true
 	response.revision++
 	op.revision = response.revision
@@ -1191,8 +1206,11 @@ func (s *Service) applyAgentFinish(
 		response.nextSequence = op.settingsSeq
 	}
 	// The card has committed its terminal state above; close out any active
-	// CoT to match before the response itself is marked terminal.
-	s.finishAgentCoT(callCtx, cotMessages, response, steps, phase)
+	// CoT to match before the response itself is marked terminal. A run too
+	// short to coalesce even one Update call reaches advanceAgentCoT here for
+	// the first time, so it still gets a CoT rather than none at all.
+	s.advanceAgentCoT(callCtx, cotMessages, response, steps)
+	s.finishAgentCoT(callCtx, cotMessages, response, phase)
 	op.complete = true
 	response.markdown = markdown
 	response.phase = phase

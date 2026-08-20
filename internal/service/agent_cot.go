@@ -17,29 +17,67 @@ func cotRunID(response *agentResponse) string {
 	return response.responseID
 }
 
-// startAgentCoT creates the native Feishu CoT progress message for a response
-// whose Start carried timeline steps, bound to the message that triggered the
-// run. Best effort throughout: any failure here just means this response has
-// no CoT, and every later diff/finish call becomes a no-op because
-// response.cotStepFinished stays nil.
+// advanceAgentCoT gets a response's CoT to reflect a new cumulative step
+// snapshot: creates it on first contact with a non-empty snapshot, or diffs
+// it against the last one once it is already active. Exactly one of the two
+// happens per call.
+//
+// Creation is deliberately NOT tied to Start. A provider cannot know at Start
+// time whether its run will call any tools — that is discovered mid-run — so
+// gating creation on Start's own steps (the first cut of this) meant no
+// provider whose tools start after its first card write could ever get a
+// CoT: Start always carried an empty snapshot, and nothing downstream ever
+// looked again. Every call that carries a non-empty snapshot is now a
+// creation opportunity, whichever one turns out to be first — Start, an
+// early Update, or even Finish for a run too short to coalesce an Update at
+// all. response.cotChatID/cotOriginMessageID are captured once, at Start,
+// specifically so a later call still has something to bind the create to.
+func (s *Service) advanceAgentCoT(
+	ctx context.Context,
+	cotMessages feishu.CoTMessages,
+	response *agentResponse,
+	steps []AgentTimelineStep,
+) {
+	if cotMessages == nil || len(steps) == 0 {
+		return
+	}
+	if response.cotStepFinished != nil {
+		events := s.agentCoTStepEvents(response, steps, time.Now())
+		s.appendAgentCoTEvents(ctx, cotMessages, response, events)
+		return
+	}
+	// Already tried once for this response and it did not stick (create
+	// failed, or there was no origin message to bind to) — never retry.
+	if response.cotAttempted {
+		return
+	}
+	s.startAgentCoT(ctx, cotMessages, response, steps)
+}
+
+// startAgentCoT creates the native Feishu CoT progress message, bound to the
+// message that triggered the run, and opens it with RUN_STARTED plus
+// whatever steps the triggering snapshot already carries. Called at most
+// once per response — every path into it already checked cotAttempted is
+// false — and always marks the attempt made, win or lose, so
+// advanceAgentCoT never calls it twice.
 func (s *Service) startAgentCoT(
 	ctx context.Context,
 	cotMessages feishu.CoTMessages,
 	response *agentResponse,
-	chatID, originMessageID string,
 	steps []AgentTimelineStep,
 ) {
-	// chatID/originMessageID come from delivery.input.Metadata, which is empty
-	// for a delivery with no triggering message to reply to (e.g. a top-level
-	// send to a channel). message_cot has no unbound form, so there is nothing
-	// useful to attempt — and no warning worth logging for an entirely
-	// predictable case.
-	if cotMessages == nil || len(steps) == 0 || chatID == "" || originMessageID == "" {
+	response.cotAttempted = true
+	// cotChatID/cotOriginMessageID are empty for a delivery with no
+	// triggering message to reply to (e.g. a top-level send to a channel).
+	// message_cot has no unbound form, so there is nothing useful to
+	// attempt — and no warning worth logging for an entirely predictable
+	// case that will never change for this response.
+	if response.cotChatID == "" || response.cotOriginMessageID == "" {
 		return
 	}
 	cotID, cotMessageID, err := cotMessages.Create(ctx, feishu.CoTCreateRequest{
-		ChatID:          chatID,
-		OriginMessageID: originMessageID,
+		ChatID:          response.cotChatID,
+		OriginMessageID: response.cotOriginMessageID,
 	})
 	if err != nil {
 		s.logAgentCoTFailure("cot create", response.responseID, err)
@@ -57,22 +95,6 @@ func (s *Service) startAgentCoT(
 		s.logAgentCoTFailure("cot run started", response.responseID, runErr)
 	}
 	events = append(events, s.agentCoTStepEvents(response, steps, now)...)
-	s.appendAgentCoTEvents(ctx, cotMessages, response, events)
-}
-
-// diffAgentCoTSteps advances an already-created CoT to match a new cumulative
-// step snapshot, emitting only the transitions since the last snapshot. A
-// response with no active CoT, or an update carrying no steps, is a no-op.
-func (s *Service) diffAgentCoTSteps(
-	ctx context.Context,
-	cotMessages feishu.CoTMessages,
-	response *agentResponse,
-	steps []AgentTimelineStep,
-) {
-	if cotMessages == nil || response.cotStepFinished == nil || len(steps) == 0 {
-		return
-	}
-	events := s.agentCoTStepEvents(response, steps, time.Now())
 	s.appendAgentCoTEvents(ctx, cotMessages, response, events)
 }
 
@@ -132,27 +154,29 @@ func (s *Service) appendAgentCoTEvents(ctx context.Context, cotMessages feishu.C
 	}
 }
 
-// finishAgentCoT closes an active CoT: a final step diff, RUN_FINISHED, then
-// Complete with the outcome mapped to the CoT's own done/error vocabulary.
-// Best effort like every other CoT call; a response with no active CoT is a
-// no-op.
+// finishAgentCoT closes an active CoT: RUN_FINISHED, then Complete with the
+// outcome mapped to the CoT's own done/error vocabulary. Any step transitions
+// in Finish's own snapshot must already be applied — the caller runs
+// advanceAgentCoT first, exactly as an Update does, so a run too short to
+// coalesce even one Update still gets its steps recorded before the run
+// closes. Best effort like every other CoT call; a response with no active
+// CoT is a no-op.
 func (s *Service) finishAgentCoT(
 	ctx context.Context,
 	cotMessages feishu.CoTMessages,
 	response *agentResponse,
-	steps []AgentTimelineStep,
 	phase AgentResponsePhase,
 ) {
 	if cotMessages == nil || response.cotStepFinished == nil {
 		return
 	}
 	now := time.Now()
-	events := s.agentCoTStepEvents(response, steps, now)
 	outcome := feishu.CoTOutcomeDone
 	if phase == AgentResponsePhaseFailed || phase == AgentResponsePhaseCancelled {
 		outcome = feishu.CoTOutcomeError
 	}
-	if run, err := feishu.NewCoTRunFinishedEvent(cotRunID(response), cotRunID(response), outcome, now.Add(time.Millisecond)); err == nil {
+	var events []feishu.CoTEvent
+	if run, err := feishu.NewCoTRunFinishedEvent(cotRunID(response), cotRunID(response), outcome, now); err == nil {
 		events = append(events, run)
 	} else {
 		s.logAgentCoTFailure("cot run finished", response.responseID, err)

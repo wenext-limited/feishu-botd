@@ -239,17 +239,23 @@ func TestAgentCoTFinishCompletedEmitsRunFinishedDone(t *testing.T) {
 		t.Fatalf("phase = %v, want completed", finished.Phase)
 	}
 
-	if len(backend.cotAppends) != 1 {
-		t.Fatalf("cot appends = %d, want 1", len(backend.cotAppends))
+	// The step diff and RUN_FINISHED travel as two separate append calls —
+	// advanceAgentCoT settles the outstanding steps first, then
+	// finishAgentCoT closes the run — rather than one batched call.
+	if len(backend.cotAppends) != 2 {
+		t.Fatalf("cot appends = %d, want 2: %#v", len(backend.cotAppends), backend.cotAppends)
 	}
-	gotTypes := cotEventTypes(backend.cotAppends[0].Events)
-	wantTypes := []feishu.CoTEventType{feishu.CoTEventStepFinished, feishu.CoTEventRunFinished}
-	if len(gotTypes) != 2 || gotTypes[0] != wantTypes[0] || gotTypes[1] != wantTypes[1] {
-		t.Fatalf("finish event types = %v, want %v", gotTypes, wantTypes)
+	stepAppend := cotEventTypes(backend.cotAppends[0].Events)
+	if len(stepAppend) != 1 || stepAppend[0] != feishu.CoTEventStepFinished {
+		t.Fatalf("first append = %v, want [STEP_FINISHED]", stepAppend)
 	}
-	contents := cotEventContents(t, backend.cotAppends[0].Events)
-	if contents[1]["status"] != "done" {
-		t.Fatalf("RUN_FINISHED content = %#v, want status=done", contents[1])
+	runAppend := cotEventTypes(backend.cotAppends[1].Events)
+	if len(runAppend) != 1 || runAppend[0] != feishu.CoTEventRunFinished {
+		t.Fatalf("second append = %v, want [RUN_FINISHED]", runAppend)
+	}
+	runContent := cotEventContents(t, backend.cotAppends[1].Events)
+	if runContent[0]["status"] != "done" {
+		t.Fatalf("RUN_FINISHED content = %#v, want status=done", runContent[0])
 	}
 
 	if len(backend.cotCompletes) != 1 {
@@ -377,5 +383,145 @@ func TestAgentCoTCompleteFailureDoesNotBlockFinish(t *testing.T) {
 	}
 	if finished.Phase != AgentResponsePhaseCompleted {
 		t.Fatalf("phase = %v, want completed despite the CoT complete failure", finished.Phase)
+	}
+}
+
+// TestAgentCoTCreatesLazilyOnFirstStepsWhereverTheyArrive reproduces the real
+// production shape: a provider (ibot) cannot know at Start time whether it
+// will run any tools, so Start always carries an empty step snapshot and the
+// first steps only show up on a later Update. A prior version of this wiring
+// only ever attempted Create from Start, so this response's CoT was silently
+// never created — no error, no log line, nothing — across an entire live
+// deployment before it was caught. This pins the fix: Create must be
+// attempted the first time ANY call carries a non-empty snapshot.
+func TestAgentCoTCreatesLazilyOnFirstStepsWhereverTheyArrive(t *testing.T) {
+	backend := newFakeAgentBackend()
+	svc := newAgentTestService(backend)
+	mustSubscribeAgent(t, svc, AgentSubscribeOptions{Provider: "agent", Commands: []string{"ask"}})
+	mustDispatchAgentPrompt(t, svc, CommandInput{
+		DeliveryID: "evt_cot_lazy", Command: "ask", Prompt: "ask", ChatAlias: "ops",
+		Metadata: map[string]string{"message_id": "om_trigger"},
+	})
+
+	// Start carries no steps at all — nothing has run yet.
+	receipt := startAgentResponse(t, svc, "agent", "evt_cot_lazy", AgentResponseContent{Markdown: "working"})
+	if len(backend.cotCreates) != 0 {
+		t.Fatalf("cot creates after a step-less start = %d, want 0 yet", len(backend.cotCreates))
+	}
+
+	// The first Update discovers a tool call. This must be the create.
+	if _, apiErr := svc.UpdateAgentResponse(context.Background(), UpdateAgentResponseInput{
+		Provider: "agent", ResponseID: receipt.ResponseID, OperationID: "update-1", ExpectedRevision: 1,
+		Markdown:      "still working",
+		TimelineSteps: []AgentTimelineStep{{StepID: "s1", Label: "step one", State: AgentTimelineStepStateStarted}},
+	}); apiErr != nil {
+		t.Fatalf("update agent response: %v", apiErr)
+	}
+
+	if len(backend.cotCreates) != 1 {
+		t.Fatalf("cot creates = %d, want 1: the lazy create never fired", len(backend.cotCreates))
+	}
+	if create := backend.cotCreates[0]; create.ChatID != "oc_test" || create.OriginMessageID != "om_trigger" {
+		t.Fatalf("cot create = %#v, want the ids captured at start", create)
+	}
+	if len(backend.cotAppends) != 1 {
+		t.Fatalf("cot appends = %d, want 1", len(backend.cotAppends))
+	}
+	gotTypes := cotEventTypes(backend.cotAppends[0].Events)
+	wantTypes := []feishu.CoTEventType{feishu.CoTEventRunStarted, feishu.CoTEventStepStarted}
+	if len(gotTypes) != 2 || gotTypes[0] != wantTypes[0] || gotTypes[1] != wantTypes[1] {
+		t.Fatalf("lazily created run's opening events = %v, want %v", gotTypes, wantTypes)
+	}
+
+	// Finish must complete the CoT that was created lazily, not skip it.
+	if _, apiErr := svc.FinishAgentResponse(context.Background(), FinishAgentResponseInput{
+		Provider: "agent", ResponseID: receipt.ResponseID, OperationID: "finish-1", ExpectedRevision: 2,
+		Outcome:  AgentResponseOutcomeCompleted,
+		Markdown: "final answer",
+		TimelineSteps: []AgentTimelineStep{
+			{StepID: "s1", Label: "step one", State: AgentTimelineStepStateFinished},
+		},
+	}); apiErr != nil {
+		t.Fatalf("finish agent response: %v", apiErr)
+	}
+	if len(backend.cotCompletes) != 1 {
+		t.Fatalf("cot completes = %d, want 1: a lazily created CoT must still be closed", len(backend.cotCompletes))
+	}
+}
+
+// TestAgentCoTFinishCreatesLazilyForARunTooShortToCoalesceAnUpdate covers the
+// even narrower case: a run whose only steps ever reported arrive in the
+// Finish call itself, because it finished before the update coalescer's
+// timer fired even once.
+func TestAgentCoTFinishCreatesLazilyForARunTooShortToCoalesceAnUpdate(t *testing.T) {
+	backend := newFakeAgentBackend()
+	svc := newAgentTestService(backend)
+	mustSubscribeAgent(t, svc, AgentSubscribeOptions{Provider: "agent", Commands: []string{"ask"}})
+	mustDispatchAgentPrompt(t, svc, CommandInput{
+		DeliveryID: "evt_cot_instant", Command: "ask", Prompt: "ask", ChatAlias: "ops",
+		Metadata: map[string]string{"message_id": "om_trigger"},
+	})
+	receipt := startAgentResponse(t, svc, "agent", "evt_cot_instant", AgentResponseContent{Markdown: "working"})
+
+	if _, apiErr := svc.FinishAgentResponse(context.Background(), FinishAgentResponseInput{
+		Provider: "agent", ResponseID: receipt.ResponseID, OperationID: "finish-1", ExpectedRevision: 1,
+		Outcome:  AgentResponseOutcomeCompleted,
+		Markdown: "answered",
+		TimelineSteps: []AgentTimelineStep{
+			{StepID: "s1", Label: "the only step", State: AgentTimelineStepStateFinished},
+		},
+	}); apiErr != nil {
+		t.Fatalf("finish agent response: %v", apiErr)
+	}
+
+	if len(backend.cotCreates) != 1 {
+		t.Fatalf("cot creates = %d, want 1: finish is the only call that ever had steps", len(backend.cotCreates))
+	}
+	if len(backend.cotCompletes) != 1 {
+		t.Fatalf("cot completes = %d, want 1", len(backend.cotCompletes))
+	}
+}
+
+// TestAgentCoTNeverRetriesAFailedLazyCreate proves cotAttempted latches
+// across calls, not just within one: a create failure on Update must not be
+// retried on the following Finish.
+func TestAgentCoTNeverRetriesAFailedLazyCreate(t *testing.T) {
+	backend := newFakeAgentBackend()
+	backend.cotCreateErr = errors.New("boom")
+	svc := newAgentTestService(backend)
+	mustSubscribeAgent(t, svc, AgentSubscribeOptions{Provider: "agent", Commands: []string{"ask"}})
+	mustDispatchAgentPrompt(t, svc, CommandInput{
+		DeliveryID: "evt_cot_retry", Command: "ask", Prompt: "ask", ChatAlias: "ops",
+		Metadata: map[string]string{"message_id": "om_trigger"},
+	})
+	receipt := startAgentResponse(t, svc, "agent", "evt_cot_retry", AgentResponseContent{Markdown: "working"})
+
+	if _, apiErr := svc.UpdateAgentResponse(context.Background(), UpdateAgentResponseInput{
+		Provider: "agent", ResponseID: receipt.ResponseID, OperationID: "update-1", ExpectedRevision: 1,
+		Markdown:      "still working",
+		TimelineSteps: []AgentTimelineStep{{StepID: "s1", Label: "step", State: AgentTimelineStepStateStarted}},
+	}); apiErr != nil {
+		t.Fatalf("update agent response: %v", apiErr)
+	}
+	if len(backend.cotCreates) != 1 {
+		t.Fatalf("cot creates after the failing update = %d, want 1", len(backend.cotCreates))
+	}
+
+	if _, apiErr := svc.FinishAgentResponse(context.Background(), FinishAgentResponseInput{
+		Provider: "agent", ResponseID: receipt.ResponseID, OperationID: "finish-1", ExpectedRevision: 2,
+		Outcome:  AgentResponseOutcomeCompleted,
+		Markdown: "final",
+		TimelineSteps: []AgentTimelineStep{
+			{StepID: "s1", Label: "step", State: AgentTimelineStepStateFinished},
+			{StepID: "s2", Label: "another step", State: AgentTimelineStepStateStarted},
+		},
+	}); apiErr != nil {
+		t.Fatalf("finish agent response: %v", apiErr)
+	}
+	if len(backend.cotCreates) != 1 {
+		t.Fatalf("cot creates after finish = %d, want still 1: a failed create must never retry", len(backend.cotCreates))
+	}
+	if len(backend.cotCompletes) != 0 {
+		t.Fatalf("cot completes = %d, want 0: there is no CoT to complete", len(backend.cotCompletes))
 	}
 }
