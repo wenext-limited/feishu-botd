@@ -27,7 +27,9 @@ const (
 	CommandService_UpdateAgentResponse_FullMethodName     = "/feishubotd.v1.CommandService/UpdateAgentResponse"
 	CommandService_FinishAgentResponse_FullMethodName     = "/feishubotd.v1.CommandService/FinishAgentResponse"
 	CommandService_ReplaceAgentResponse_FullMethodName    = "/feishubotd.v1.CommandService/ReplaceAgentResponse"
+	CommandService_UploadAgentImage_FullMethodName        = "/feishubotd.v1.CommandService/UploadAgentImage"
 	CommandService_SendAgentFollowUp_FullMethodName       = "/feishubotd.v1.CommandService/SendAgentFollowUp"
+	CommandService_AddAgentReaction_FullMethodName        = "/feishubotd.v1.CommandService/AddAgentReaction"
 )
 
 // CommandServiceClient is the client API for CommandService service.
@@ -59,10 +61,23 @@ type CommandServiceClient interface {
 	// Replaces the content of a terminal CardKit response without reopening its
 	// streaming lifecycle. Detached work uses this to settle the initial card.
 	ReplaceAgentResponse(ctx context.Context, in *ReplaceAgentResponseRequest, opts ...grpc.CallOption) (*ReplaceAgentResponseResponse, error)
+	// UploadAgentImage puts one image into Feishu under the app that delivered
+	// the event and returns the image_key a response markdown can embed. It is
+	// client-streaming for the same reason GetAgentAttachedContext is server-
+	// streaming: image bytes must not be bounded by unary gRPC message limits.
+	UploadAgentImage(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[UploadAgentImageRequest, UploadAgentImageResponse], error)
 	// SendAgentFollowUp posts one later message into a conversation that already
 	// delivered an agent event to this provider. This is the compatibility path
 	// when a terminal response handle is unavailable for in-place replacement.
 	SendAgentFollowUp(ctx context.Context, in *SendAgentFollowUpRequest, opts ...grpc.CallOption) (*SendAgentFollowUpResponse, error)
+	// AddAgentReaction places one native Feishu reaction, chosen by the
+	// provider rather than the daemon, on the message that triggered this
+	// response. Gated by its own grant, separate from AllowMessageReactions
+	// (that one is about *receiving* thumbsup/thumbsdown verdicts) and from
+	// the daemon-driven WorkingReactionEmoji: unlike that one, a reaction
+	// placed here is never auto-removed — it is a deliberate answer, not a
+	// busy signal, so it outlives the response.
+	AddAgentReaction(ctx context.Context, in *AddAgentReactionRequest, opts ...grpc.CallOption) (*AddAgentReactionResponse, error)
 }
 
 type commandServiceClient struct {
@@ -180,10 +195,33 @@ func (c *commandServiceClient) ReplaceAgentResponse(ctx context.Context, in *Rep
 	return out, nil
 }
 
+func (c *commandServiceClient) UploadAgentImage(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[UploadAgentImageRequest, UploadAgentImageResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &CommandService_ServiceDesc.Streams[3], CommandService_UploadAgentImage_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[UploadAgentImageRequest, UploadAgentImageResponse]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type CommandService_UploadAgentImageClient = grpc.ClientStreamingClient[UploadAgentImageRequest, UploadAgentImageResponse]
+
 func (c *commandServiceClient) SendAgentFollowUp(ctx context.Context, in *SendAgentFollowUpRequest, opts ...grpc.CallOption) (*SendAgentFollowUpResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(SendAgentFollowUpResponse)
 	err := c.cc.Invoke(ctx, CommandService_SendAgentFollowUp_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *commandServiceClient) AddAgentReaction(ctx context.Context, in *AddAgentReactionRequest, opts ...grpc.CallOption) (*AddAgentReactionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AddAgentReactionResponse)
+	err := c.cc.Invoke(ctx, CommandService_AddAgentReaction_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -219,10 +257,23 @@ type CommandServiceServer interface {
 	// Replaces the content of a terminal CardKit response without reopening its
 	// streaming lifecycle. Detached work uses this to settle the initial card.
 	ReplaceAgentResponse(context.Context, *ReplaceAgentResponseRequest) (*ReplaceAgentResponseResponse, error)
+	// UploadAgentImage puts one image into Feishu under the app that delivered
+	// the event and returns the image_key a response markdown can embed. It is
+	// client-streaming for the same reason GetAgentAttachedContext is server-
+	// streaming: image bytes must not be bounded by unary gRPC message limits.
+	UploadAgentImage(grpc.ClientStreamingServer[UploadAgentImageRequest, UploadAgentImageResponse]) error
 	// SendAgentFollowUp posts one later message into a conversation that already
 	// delivered an agent event to this provider. This is the compatibility path
 	// when a terminal response handle is unavailable for in-place replacement.
 	SendAgentFollowUp(context.Context, *SendAgentFollowUpRequest) (*SendAgentFollowUpResponse, error)
+	// AddAgentReaction places one native Feishu reaction, chosen by the
+	// provider rather than the daemon, on the message that triggered this
+	// response. Gated by its own grant, separate from AllowMessageReactions
+	// (that one is about *receiving* thumbsup/thumbsdown verdicts) and from
+	// the daemon-driven WorkingReactionEmoji: unlike that one, a reaction
+	// placed here is never auto-removed — it is a deliberate answer, not a
+	// busy signal, so it outlives the response.
+	AddAgentReaction(context.Context, *AddAgentReactionRequest) (*AddAgentReactionResponse, error)
 	mustEmbedUnimplementedCommandServiceServer()
 }
 
@@ -257,8 +308,14 @@ func (UnimplementedCommandServiceServer) FinishAgentResponse(context.Context, *F
 func (UnimplementedCommandServiceServer) ReplaceAgentResponse(context.Context, *ReplaceAgentResponseRequest) (*ReplaceAgentResponseResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ReplaceAgentResponse not implemented")
 }
+func (UnimplementedCommandServiceServer) UploadAgentImage(grpc.ClientStreamingServer[UploadAgentImageRequest, UploadAgentImageResponse]) error {
+	return status.Errorf(codes.Unimplemented, "method UploadAgentImage not implemented")
+}
 func (UnimplementedCommandServiceServer) SendAgentFollowUp(context.Context, *SendAgentFollowUpRequest) (*SendAgentFollowUpResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SendAgentFollowUp not implemented")
+}
+func (UnimplementedCommandServiceServer) AddAgentReaction(context.Context, *AddAgentReactionRequest) (*AddAgentReactionResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method AddAgentReaction not implemented")
 }
 func (UnimplementedCommandServiceServer) mustEmbedUnimplementedCommandServiceServer() {}
 func (UnimplementedCommandServiceServer) testEmbeddedByValue()                        {}
@@ -404,6 +461,13 @@ func _CommandService_ReplaceAgentResponse_Handler(srv interface{}, ctx context.C
 	return interceptor(ctx, in, info, handler)
 }
 
+func _CommandService_UploadAgentImage_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(CommandServiceServer).UploadAgentImage(&grpc.GenericServerStream[UploadAgentImageRequest, UploadAgentImageResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type CommandService_UploadAgentImageServer = grpc.ClientStreamingServer[UploadAgentImageRequest, UploadAgentImageResponse]
+
 func _CommandService_SendAgentFollowUp_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(SendAgentFollowUpRequest)
 	if err := dec(in); err != nil {
@@ -418,6 +482,24 @@ func _CommandService_SendAgentFollowUp_Handler(srv interface{}, ctx context.Cont
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(CommandServiceServer).SendAgentFollowUp(ctx, req.(*SendAgentFollowUpRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _CommandService_AddAgentReaction_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AddAgentReactionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CommandServiceServer).AddAgentReaction(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CommandService_AddAgentReaction_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CommandServiceServer).AddAgentReaction(ctx, req.(*AddAgentReactionRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -453,6 +535,10 @@ var CommandService_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "SendAgentFollowUp",
 			Handler:    _CommandService_SendAgentFollowUp_Handler,
 		},
+		{
+			MethodName: "AddAgentReaction",
+			Handler:    _CommandService_AddAgentReaction_Handler,
+		},
 	},
 	Streams: []grpc.StreamDesc{
 		{
@@ -469,6 +555,11 @@ var CommandService_ServiceDesc = grpc.ServiceDesc{
 			StreamName:    "GetAgentAttachedContext",
 			Handler:       _CommandService_GetAgentAttachedContext_Handler,
 			ServerStreams: true,
+		},
+		{
+			StreamName:    "UploadAgentImage",
+			Handler:       _CommandService_UploadAgentImage_Handler,
+			ClientStreams: true,
 		},
 	},
 	Metadata: "feishubotd/v1/command.proto",

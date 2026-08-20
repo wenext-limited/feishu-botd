@@ -33,10 +33,25 @@ service CommandService {
   // streaming lifecycle. Detached work uses this to settle the initial card.
   rpc ReplaceAgentResponse(ReplaceAgentResponseRequest) returns (ReplaceAgentResponseResponse);
 
+  // UploadAgentImage puts one image into Feishu under the app that delivered
+  // the event and returns the image_key a response markdown can embed. It is
+  // client-streaming for the same reason GetAgentAttachedContext is server-
+  // streaming: image bytes must not be bounded by unary gRPC message limits.
+  rpc UploadAgentImage(stream UploadAgentImageRequest) returns (UploadAgentImageResponse);
+
   // SendAgentFollowUp posts one later message into a conversation that already
   // delivered an agent event to this provider. This is the compatibility path
   // when a terminal response handle is unavailable for in-place replacement.
   rpc SendAgentFollowUp(SendAgentFollowUpRequest) returns (SendAgentFollowUpResponse);
+
+  // AddAgentReaction places one native Feishu reaction, chosen by the
+  // provider rather than the daemon, on the message that triggered this
+  // response. Gated by its own grant, separate from AllowMessageReactions
+  // (that one is about *receiving* thumbsup/thumbsdown verdicts) and from
+  // the daemon-driven WorkingReactionEmoji: unlike that one, a reaction
+  // placed here is never auto-removed — it is a deliberate answer, not a
+  // busy signal, so it outlives the response.
+  rpc AddAgentReaction(AddAgentReactionRequest) returns (AddAgentReactionResponse);
 }
 
 // ProviderService is the FUTURE pull path (botd asks a registered client to
@@ -210,6 +225,43 @@ message GetAgentAttachedContextResponse {
   }
 }
 
+// Outbound images are the mirror of the attached-context path above. A card
+// renders an image only from an image_key minted by Feishu, so a provider that
+// wants one in its answer uploads the bytes here and embeds the returned key as
+// ![alt](image_key) in markdown. External URLs never render, which is also why
+// a provider cannot simply link a picture that lives on its own network.
+message UploadAgentImageHeader {
+  string provider = 1; // must match the bearer-authenticated principal
+  // The delivery whose app uploads the image. image_key is tenant- and
+  // app-scoped, so the upload has to happen under the same app that will
+  // render it, and requiring a live delivery keeps the bot's upload quota
+  // reachable only from a conversation the provider was actually given.
+  string delivery_id = 2;
+  // Provider-generated idempotency key. Replaying it returns the first upload's
+  // image_key with duplicate=true rather than minting a second key.
+  string operation_id = 3;
+}
+
+message UploadAgentImageChunk {
+  bytes data = 1; // at most 64 KiB per frame
+}
+
+message UploadAgentImageRequest {
+  // The first frame must be the header; every later frame must be a chunk.
+  oneof frame {
+    UploadAgentImageHeader header = 1;
+    UploadAgentImageChunk chunk = 2;
+  }
+}
+
+message UploadAgentImageResponse {
+  // Embed as ![alt](image_key) inside AgentResponseContent.markdown.
+  string image_key = 1;
+  bool duplicate = 2;
+  // Image type as botd sniffed it from the bytes, not as the provider claimed.
+  string media_type = 3;
+}
+
 message InboundCardAction {
   string response_id = 1;
   string action_id = 2;
@@ -235,6 +287,8 @@ enum MessageReactionOperation {
 message AgentResponseContent {
   string title = 1;
   // Always the complete accumulated answer, never a token delta.
+  // Images render only from a Feishu image_key: upload the bytes with
+  // UploadAgentImage and embed the returned key as ![alt](image_key).
   string markdown = 2;
   repeated AgentResponseAction actions = 3;
   reserved 4 to 15;
@@ -437,6 +491,22 @@ message AgentFollowUpReceipt {
 
 message SendAgentFollowUpResponse {
   AgentFollowUpReceipt follow_up = 1;
+}
+
+message AddAgentReactionRequest {
+  string provider = 1; // must match the bearer-authenticated principal
+  string response_id = 2; // the streaming response handle from Start
+  // Provider-generated idempotency key. Reusing it returns the first call's
+  // outcome with duplicate=true rather than placing a second reaction.
+  string operation_id = 3;
+  // One of Feishu's fixed emoji keys (e.g. "OnIt", "HEART"), not free text:
+  // https://open.feishu.cn/document/server-docs/im-v1/message-reaction/emojis-introduce
+  string emoji_type = 10;
+  reserved 4 to 9, 11 to 31;
+}
+
+message AddAgentReactionResponse {
+  bool duplicate = 1;
 }
 
 message RegisterProviderRequest {

@@ -131,6 +131,8 @@ type fakeAgentSender struct {
 	cotCreates   []feishu.CoTCreateRequest
 	cotAppends   []feishu.CoTAppendRequest
 	cotCompletes []feishu.CoTCompleteRequest
+
+	addedReactions []feishu.AddReactionRequest
 }
 
 func (f *fakeAgentSender) Create(_ context.Context, req feishu.CoTCreateRequest) (string, string, error) {
@@ -160,6 +162,17 @@ func (f *fakeAgentSender) cotSnapshot() ([]feishu.CoTCreateRequest, []feishu.CoT
 	return append([]feishu.CoTCreateRequest(nil), f.cotCreates...),
 		append([]feishu.CoTAppendRequest(nil), f.cotAppends...),
 		append([]feishu.CoTCompleteRequest(nil), f.cotCompletes...)
+}
+
+func (f *fakeAgentSender) AddReaction(_ context.Context, req feishu.AddReactionRequest) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.addedReactions = append(f.addedReactions, req)
+	return "reaction_fixture", nil
+}
+
+func (f *fakeAgentSender) RemoveReaction(_ context.Context, _ feishu.RemoveReactionRequest) error {
+	return nil
 }
 
 func (f *fakeAgentSender) LookupAttachedContext(_ context.Context, _ feishu.AttachedContextRequest) (feishu.AttachedContext, error) {

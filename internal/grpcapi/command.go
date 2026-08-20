@@ -208,6 +208,22 @@ func (c *commandServer) SendAgentFollowUp(ctx context.Context, in *pb.SendAgentF
 	return &pb.SendAgentFollowUpResponse{FollowUp: agentFollowUpReceiptToProto(receipt)}, nil
 }
 
+func (c *commandServer) AddAgentReaction(ctx context.Context, in *pb.AddAgentReactionRequest) (*pb.AddAgentReactionResponse, error) {
+	if err := authorizeAgentReaction(ctx, in.GetProvider()); err != nil {
+		return nil, err
+	}
+	duplicate, apiErr := c.svc.AddAgentReaction(ctx, service.AddAgentReactionInput{
+		Provider:    in.GetProvider(),
+		ResponseID:  in.GetResponseId(),
+		OperationID: in.GetOperationId(),
+		EmojiType:   in.GetEmojiType(),
+	})
+	if apiErr != nil {
+		return nil, grpcError(apiErr, requestIDFromContext(ctx))
+	}
+	return &pb.AddAgentReactionResponse{Duplicate: duplicate}, nil
+}
+
 func commandToProto(cmd service.CommandInput) *pb.SubscribeResponse {
 	return &pb.SubscribeResponse{
 		Command: &pb.InboundCommand{

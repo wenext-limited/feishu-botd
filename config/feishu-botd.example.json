@@ -38,6 +38,7 @@
       "allow_attached_context": false,
       "allow_follow_up_messages": false,
       "allow_message_reactions": false,
+      "allow_image_upload": false,
       "allow_legacy_commands": false
     }
   },

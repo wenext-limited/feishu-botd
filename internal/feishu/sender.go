@@ -93,6 +93,7 @@ type ChannelSender struct {
 	messageAPI      cardKitMessageAPI
 	reactionAPI     reactionAPI
 	contactUserAPI  contactUserAPI
+	imageAPI        imageAPI
 	attachedContext AttachedContextLookup
 
 	// contactNameCache memoizes DisplayName lookups; see its doc comment in
@@ -126,6 +127,7 @@ func NewChannelSender(appID, appSecret string, logger *slog.Logger) *ChannelSend
 		messageAPI:      client.Im.V1.Message,
 		reactionAPI:     client.Im.V1.MessageReaction,
 		contactUserAPI:  client.Contact.V3.User,
+		imageAPI:        client.Im.V1.Image,
 		attachedContext: newSDKAttachedContextLookup(client.Im.V1.Message, client.Im.V1.MessageResource),
 	}
 }

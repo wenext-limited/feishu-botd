@@ -95,6 +95,7 @@ openssl rand -base64 32 > /run/secrets/feishu-botd-example-agent-token
       "allow_attached_context": false,
       "allow_follow_up_messages": false,
       "allow_message_reactions": true,
+      "allow_image_upload": false,
       "allow_legacy_commands": false
     }
   },
@@ -224,7 +225,10 @@ Each provider can request only the selectors authorized in its config:
 the same `allowed_commands` allowlist, and `allow_follow_up_messages` separately
 permits the follow-up send described below. `allow_attached_context` separately
 permits the sensitive topic-history and message-resource read described below;
-it defaults to false and is not implied by unmatched-message access. Requests
+it defaults to false and is not implied by unmatched-message access.
+`allow_image_upload` separately permits the outbound image upload described
+below, and likewise defaults to false: it is the only grant that writes a
+durable tenant-side object from bytes the provider supplied. Requests
 outside this scope fail before broker registration. Event selection also
 considers `allowed_apps`: a disallowed exact-command subscriber cannot suppress
 an allowed unmatched subscriber. Grant only the minimum selectors needed;
@@ -341,6 +345,37 @@ Topic history uses Feishu message history with `container_id_type=thread` and
 therefore requires the sensitive `im:message.group_msg` permission for group
 content. Image download uses the exact private `message_id` + `image_key` pair
 with resource type `image`; the bot must remain in the same conversation.
+
+## Outbound images
+
+A card renders an image only from a Feishu `image_key`. There is no URL form:
+a link to a picture on the provider's own network is not something Feishu's
+renderer can fetch, and a public URL is not accepted either. So a provider that
+wants a picture in its answer uploads the bytes and embeds the key it gets back.
+
+`UploadAgentImage` is client-streaming and mirrors `GetAgentAttachedContext` in
+the opposite direction. The first frame is a header carrying `provider`,
+`delivery_id`, and `operation_id`; every later frame is an at-most-64-KiB chunk.
+botd requires `allow_image_upload = true`, that the provider received that
+delivery, and that it is allowed to access its app — the same authorization the
+inbound path uses. The delivery is not incidental: an `image_key` is scoped to
+one Feishu app, so the upload has to happen under the app that will render it.
+
+The response carries `image_key` and the `media_type` botd detected. Embed the
+key in `AgentResponseContent.markdown` as `![alt](image_key)`, on any Start,
+Update, Finish, or Replace snapshot. The key is stable, so once a snapshot
+contains it every later cumulative snapshot can repeat it unchanged.
+
+botd sniffs the media type from the bytes and accepts only `image/png`,
+`image/jpeg`, `image/gif`, and `image/webp`. A declared type is never consulted,
+so the endpoint cannot be used to push a non-image out under the bot's identity.
+Server-owned limits are 5 MiB per image, 64 KiB per frame, and 16 images per
+delivery — the last is a refusal rather than an eviction, so a key a provider
+already holds is never quietly re-minted.
+
+`operation_id` is idempotent the way the response RPCs are: replaying it returns
+the first upload's key with `duplicate = true` instead of spending a second one,
+and reusing it for different bytes is an `operation_conflict`.
 
 ## Progressive response lifecycle
 

@@ -78,6 +78,18 @@ type AgentProviderConfig struct {
 	AllowFollowUpMessages  bool
 	AllowMessageReactions  bool
 	AllowLegacyCommands    bool
+	// AllowImageUpload permits the provider to spend the bot's identity and
+	// upload quota putting images into Feishu. It is separate from every other
+	// grant because it is the only one that writes a durable tenant-side object
+	// from provider-supplied bytes.
+	AllowImageUpload bool
+	// AllowAgentReactions permits the provider to place its own native Feishu
+	// reaction on the triggering message via AddAgentReaction — typically its
+	// model choosing to react mid-run. Separate from AllowMessageReactions
+	// (that grant is about *receiving* thumbsup/thumbsdown verdicts, not
+	// placing arbitrary emoji) and from WorkingReactionEmoji (that one is
+	// daemon-chosen and auto-removed; this one is provider-chosen and stays).
+	AllowAgentReactions bool
 	// AllowCoTProgress permits the provider to drive the native Feishu
 	// chain-of-thought progress surface with typed timeline steps. It is a
 	// separate capability from the collapsible-panel timeline every provider
@@ -234,6 +246,20 @@ func (c Config) ProviderAllowsAttachedContext(provider string) bool {
 	return configured && providerCfg.AllowAttachedContext
 }
 
+// ProviderAllowsImageUpload is an explicit outbound-write grant. Omission
+// always denies, so an existing provider gains nothing by upgrading the daemon.
+func (c Config) ProviderAllowsImageUpload(provider string) bool {
+	providerCfg, configured := c.AgentProviders[strings.TrimSpace(provider)]
+	return configured && providerCfg.AllowImageUpload
+}
+
+// ProviderAllowsAgentReactions is an explicit outbound-write grant, like
+// ProviderAllowsImageUpload. Omission always denies.
+func (c Config) ProviderAllowsAgentReactions(provider string) bool {
+	providerCfg, configured := c.AgentProviders[strings.TrimSpace(provider)]
+	return configured && providerCfg.AllowAgentReactions
+}
+
 // AgentWorkingReaction returns the configured emoji key for this provider, or
 // "" if the behavior is not enabled. Unlike the Allow* grants above this is a
 // daemon-driven behavior default, not a provider capability, so callers do
@@ -337,6 +363,8 @@ func LoadFromEnv() (Config, error) {
 			AllowFollowUpMessages:    providerCfg.AllowFollowUpMessages,
 			AllowMessageReactions:    providerCfg.AllowMessageReactions,
 			AllowLegacyCommands:      providerCfg.AllowLegacyCommands,
+			AllowImageUpload:         providerCfg.AllowImageUpload,
+			AllowAgentReactions:      providerCfg.AllowAgentReactions,
 			AllowCoTProgress:         providerCfg.AllowCoTProgress,
 			WorkingReactionEmoji:     providerCfg.WorkingReactionEmoji,
 			WorkingReactionOverrides: providerCfg.WorkingReactionSenderOverrides,
@@ -443,6 +471,8 @@ type fileAgentProviderConfig struct {
 	AllowFollowUpMessages  bool               `json:"allow_follow_up_messages"`
 	AllowMessageReactions  bool               `json:"allow_message_reactions"`
 	AllowLegacyCommands    bool               `json:"allow_legacy_commands"`
+	AllowImageUpload       bool               `json:"allow_image_upload"`
+	AllowAgentReactions    bool               `json:"allow_agent_reactions"`
 	AllowCoTProgress       bool               `json:"allow_cot_progress"`
 	WorkingReactionEmoji   string             `json:"working_reaction_emoji"`
 	// WorkingReactionSenderOverrides maps a sender's Feishu display name to a
@@ -1116,6 +1146,8 @@ func normalizeAgentProviderConfigs(in map[string]fileAgentProviderConfig) (map[s
 			AllowFollowUpMessages:          providerCfg.AllowFollowUpMessages,
 			AllowMessageReactions:          providerCfg.AllowMessageReactions,
 			AllowLegacyCommands:            providerCfg.AllowLegacyCommands,
+			AllowImageUpload:               providerCfg.AllowImageUpload,
+			AllowAgentReactions:            providerCfg.AllowAgentReactions,
 			AllowCoTProgress:               providerCfg.AllowCoTProgress,
 			WorkingReactionEmoji:           providerCfg.WorkingReactionEmoji,
 			WorkingReactionSenderOverrides: reactionOverrides,

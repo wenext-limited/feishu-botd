@@ -101,6 +101,7 @@ and per-caller defaults. This example keeps the existing top-level app as
       "allow_card_actions": true,
       "allow_attached_context": false,
       "allow_follow_up_messages": false,
+      "allow_image_upload": false,
       "allow_legacy_commands": false
     }
   },
@@ -207,6 +208,8 @@ Each subscription is limited by `allowed_commands`,
 later message into a conversation the provider has already answered in.
 `allow_attached_context` separately permits lazy reads of topic history and
 message images for an exact inbound delivery; it defaults to false.
+`allow_image_upload` separately permits uploading an image so a response can
+render it, and also defaults to false.
 `allowed_apps` optionally limits that provider to configured app aliases. When
 the field is absent, all apps are allowed; an explicit empty list allows none,
 and `null` is rejected. botd applies the allowlist before event fan-out and

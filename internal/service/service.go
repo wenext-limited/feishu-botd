@@ -39,6 +39,7 @@ type appBackend struct {
 	cotMessages     feishu.CoTMessages
 	reactions       feishu.ReactionMessages
 	contactUsers    feishu.ContactUsers
+	images          feishu.ImageUploader
 }
 
 // Service owns the send/dedupe/readiness flow. It is safe for concurrent use
@@ -116,6 +117,9 @@ func newService(
 		}
 		if contactUsers, ok := sender.(feishu.ContactUsers); ok {
 			backend.contactUsers = contactUsers
+		}
+		if images, ok := sender.(feishu.ImageUploader); ok {
+			backend.images = images
 		}
 		backends[alias] = backend
 	}

@@ -365,6 +365,11 @@ type agentDelivery struct {
 	sendRetryClosed          bool
 	sendRetryCode            string
 	response                 *agentResponse
+	// uploadedImages maps an upload operation id to the image_key it minted, so
+	// a retried upload does not spend a second one. It lives on the delivery
+	// rather than the response because an image is useful before Start and
+	// after Finish, and because the delivery is what already expires.
+	uploadedImages map[string]uploadedImage
 }
 
 type agentOperation struct {
@@ -432,6 +437,12 @@ type agentResponse struct {
 	// configured or because the add attempt failed.
 	reactionMessageID string
 	reactionID        string
+	// freeformReactions is every provider-chosen reaction (AddAgentReaction)
+	// placed on this response's triggering message, keyed by the operation id
+	// that placed it — see agentFreeformReaction. Unrelated to and never
+	// touched by reactionMessageID/reactionID above, which track only the
+	// daemon-driven working reaction.
+	freeformReactions map[string]agentFreeformReaction
 	nextSequence      int32
 	lastMutationAt    time.Time
 	pendingOp         string

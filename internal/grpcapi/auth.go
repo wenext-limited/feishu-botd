@@ -25,9 +25,11 @@ type providerPrincipal struct {
 	allowCardActions       bool
 	allowAttachedContext   bool
 	allowFollowUpMessages  bool
+	allowImageUpload       bool
 	allowMessageReactions  bool
 	allowLegacyCommands    bool
 	allowCoTProgress       bool
+	allowAgentReactions    bool
 }
 
 type providerCredential struct {
@@ -68,9 +70,11 @@ func newProviderAuthenticator(providers map[string]config.AgentProviderConfig) p
 				allowCardActions:       providerCfg.AllowCardActions,
 				allowAttachedContext:   providerCfg.AllowAttachedContext,
 				allowFollowUpMessages:  providerCfg.AllowFollowUpMessages,
+				allowImageUpload:       providerCfg.AllowImageUpload,
 				allowMessageReactions:  providerCfg.AllowMessageReactions,
 				allowLegacyCommands:    providerCfg.AllowLegacyCommands,
 				allowCoTProgress:       providerCfg.AllowCoTProgress,
+				allowAgentReactions:    providerCfg.AllowAgentReactions,
 			},
 			digest: sha256.Sum256([]byte(providerCfg.AuthToken)),
 		})
@@ -96,7 +100,9 @@ func isAgentMethod(fullMethod string) bool {
 		pb.CommandService_UpdateAgentResponse_FullMethodName,
 		pb.CommandService_FinishAgentResponse_FullMethodName,
 		pb.CommandService_ReplaceAgentResponse_FullMethodName,
-		pb.CommandService_SendAgentFollowUp_FullMethodName:
+		pb.CommandService_UploadAgentImage_FullMethodName,
+		pb.CommandService_SendAgentFollowUp_FullMethodName,
+		pb.CommandService_AddAgentReaction_FullMethodName:
 		return true
 	default:
 		return false
@@ -109,6 +115,20 @@ func authorizeAgentAttachedContext(ctx context.Context, requested string) error 
 	}
 	principal, _ := authenticatedProvider(ctx)
 	if !principal.allowAttachedContext {
+		return providerScopeDenied(ctx)
+	}
+	return nil
+}
+
+// authorizeAgentImageUpload gates the only agent RPC that writes a durable
+// object into the tenant from bytes botd did not produce, so it takes its own
+// grant rather than riding on any other provider capability.
+func authorizeAgentImageUpload(ctx context.Context, requested string) error {
+	if err := requireProviderIdentity(ctx, requested); err != nil {
+		return err
+	}
+	principal, _ := authenticatedProvider(ctx)
+	if !principal.allowImageUpload {
 		return providerScopeDenied(ctx)
 	}
 	return nil
@@ -263,6 +283,17 @@ func authorizeAgentFollowUp(ctx context.Context, requested string) error {
 	}
 	principal, _ := authenticatedProvider(ctx)
 	if !principal.allowFollowUpMessages {
+		return providerScopeDenied(ctx)
+	}
+	return nil
+}
+
+func authorizeAgentReaction(ctx context.Context, requested string) error {
+	if err := requireProviderIdentity(ctx, requested); err != nil {
+		return err
+	}
+	principal, _ := authenticatedProvider(ctx)
+	if !principal.allowAgentReactions {
 		return providerScopeDenied(ctx)
 	}
 	return nil
