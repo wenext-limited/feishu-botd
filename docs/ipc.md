@@ -138,6 +138,7 @@ is supplied.
 | `UpdateAgentResponse` | Applies a complete accumulated markdown snapshot, and any timeline part it carries, at the expected revision. |
 | `FinishAgentResponse` | Applies final content, records the outcome, and disables CardKit streaming mode. |
 | `ReplaceAgentResponse` | Replaces a terminal card's answer and timeline at the exact final revision without reopening streaming mode. |
+| `UploadAgentImage` | Uploads one image under the app that owns either a live inbound delivery or a conversation the provider already received an event from, and returns the `image_key` a card or follow-up can embed. |
 | `SendAgentFollowUp` | Posts one later, standalone message into a conversation the provider has already received an agent event from. |
 
 Inbound Feishu events are dispatched only for an app whose `commands.enabled`

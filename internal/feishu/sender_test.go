@@ -140,6 +140,34 @@ func TestOrdinaryMessagePartsPrependNativeMention(t *testing.T) {
 	}
 }
 
+func TestOrdinaryMessagePartsRenderMarkdownImagesAsNativePostImages(t *testing.T) {
+	parts, err := ordinaryMessageParts(notify.Request{
+		Title:    "wyak-ios #571 SUCCESS",
+		Markdown: "安装二维码拿去～\n\n![e8fa089b091506c0-3524.png](img_v3_qr)\n",
+	})
+	if err != nil || len(parts) != 1 {
+		t.Fatalf("parts = %#v, err=%v", parts, err)
+	}
+
+	var post ordinaryPost
+	if err := json.Unmarshal([]byte(parts[0].content), &post); err != nil {
+		t.Fatalf("decode post content: %v", err)
+	}
+	if len(post.ZhCn.Content) != 1 || len(post.ZhCn.Content[0]) != 2 {
+		t.Fatalf("content = %#v", post.ZhCn.Content)
+	}
+	text, image := post.ZhCn.Content[0][0], post.ZhCn.Content[0][1]
+	if text.Tag != "md" || !strings.Contains(text.Text, "安装二维码拿去～") {
+		t.Fatalf("text element = %#v", text)
+	}
+	if image.Tag != "img" || image.ImageKey != "img_v3_qr" {
+		t.Fatalf("image element = %#v", image)
+	}
+	if strings.Contains(parts[0].fallbackText, "img_v3_qr") || strings.Contains(parts[0].fallbackText, "![") {
+		t.Fatalf("fallback still names the picture: %q", parts[0].fallbackText)
+	}
+}
+
 func TestChannelSenderSendsCardJSONAsInteractiveReply(t *testing.T) {
 	messageID := "om_new"
 	api := &fakeCardKitMessageAPI{replyResp: &larkim.ReplyMessageResp{

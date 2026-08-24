@@ -54,7 +54,11 @@ type agentConversationRoute struct {
 	// a provider can only follow up where it was spoken to.
 	providers  map[string]time.Time
 	operations map[string]*agentFollowUpOperation
-	expiresAt  time.Time
+	// uploadedImages is the conversation-scoped twin of agentDelivery's
+	// ledger: a later message has no inbound delivery, but it still has to
+	// replay an upload under the same operation id.
+	uploadedImages map[string]uploadedImage
+	expiresAt      time.Time
 }
 
 type agentFollowUpOperation struct {
@@ -329,6 +333,45 @@ func (b *agentBroker) lookupAndPinConversation(
 		route.expiresAt = retainUntil
 	}
 	return route, route.appAlias, route.chatAlias, route.chatID, route.threadReplyTo, route.unconfiguredGroup, true
+}
+
+// lookupAndPinConversationImage is the upload twin of
+// lookupAndPinConversation. A replay of an already-minted image stays
+// addressable after the original grant expires, the same way a follow-up
+// replay does; a new upload still needs a live grant.
+func (b *agentBroker) lookupAndPinConversationImage(
+	conversationID, provider, operationID string,
+	appAllowed func(string) bool,
+	now time.Time,
+	sendTimeout time.Duration,
+) (route *agentConversationRoute, appAlias string, ok bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.pruneLocked(now)
+	route = b.conversations[strings.TrimSpace(conversationID)]
+	if route == nil {
+		return nil, "", false
+	}
+
+	route.mu.Lock()
+	defer route.mu.Unlock()
+	if appAllowed != nil && !appAllowed(route.appAlias) {
+		return nil, "", false
+	}
+	_, uploaded := route.uploadedImages[strings.TrimSpace(operationID)]
+	grantedUntil, granted := route.providers[provider]
+	if !uploaded && (!granted || !now.Before(grantedUntil)) {
+		return nil, "", false
+	}
+
+	retainFor := b.ttl
+	if retainFor < sendTimeout {
+		retainFor = sendTimeout
+	}
+	if retainUntil := now.Add(retainFor); route.expiresAt.Before(retainUntil) {
+		route.expiresAt = retainUntil
+	}
+	return route, route.appAlias, true
 }
 
 func (b *agentBroker) conversationAppConflictLocked(conversationID, appAlias string) bool {

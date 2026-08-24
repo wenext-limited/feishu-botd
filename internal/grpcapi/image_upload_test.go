@@ -289,3 +289,48 @@ func TestUploadAgentImageReplayReturnsTheSameKey(t *testing.T) {
 		t.Fatalf("replay minted a second key: uploads=%d", len(uploads))
 	}
 }
+
+func sendConversationImageUpload(
+	t *testing.T, client pb.CommandServiceClient, operationID string, chunks [][]byte,
+) (*pb.UploadAgentImageResponse, error) {
+	t.Helper()
+	stream, err := client.UploadAgentImage(context.Background())
+	if err != nil {
+		t.Fatalf("open upload stream: %v", err)
+	}
+	header := &pb.UploadAgentImageRequest{
+		Frame: &pb.UploadAgentImageRequest_Header{Header: &pb.UploadAgentImageHeader{
+			Provider: "fixture-agent", ConversationId: "conversation_fixture", OperationId: operationID,
+		}},
+	}
+	if sendErr := stream.Send(header); sendErr != nil {
+		return stream.CloseAndRecv()
+	}
+	for _, chunk := range chunks {
+		frame := &pb.UploadAgentImageRequest{
+			Frame: &pb.UploadAgentImageRequest_Chunk{Chunk: &pb.UploadAgentImageChunk{Data: chunk}},
+		}
+		if sendErr := stream.Send(frame); sendErr != nil {
+			return stream.CloseAndRecv()
+		}
+	}
+	return stream.CloseAndRecv()
+}
+
+func TestUploadAgentImageAcceptsAConversationGrant(t *testing.T) {
+	sender := newUploadingSender("img_v3_qr")
+	conn, svc := startImageUploadServer(t, sender, true)
+	client := pb.NewCommandServiceClient(conn)
+	seedImageUploadDelivery(t, svc, client)
+
+	resp, err := sendConversationImageUpload(t, client, "op_later", [][]byte{pngFixture(16)})
+	if err != nil {
+		t.Fatalf("upload: %v", err)
+	}
+	if resp.GetImageKey() != "img_v3_qr" || resp.GetDuplicate() {
+		t.Fatalf("response = %#v", resp)
+	}
+	if uploads := sender.uploadSnapshot(); len(uploads) != 1 {
+		t.Fatalf("uploads=%d", len(uploads))
+	}
+}

@@ -234,12 +234,18 @@ message UploadAgentImageHeader {
   string provider = 1; // must match the bearer-authenticated principal
   // The delivery whose app uploads the image. image_key is tenant- and
   // app-scoped, so the upload has to happen under the same app that will
-  // render it, and requiring a live delivery keeps the bot's upload quota
-  // reachable only from a conversation the provider was actually given.
+  // render it. Set this, or conversation_id, never both.
   string delivery_id = 2;
   // Provider-generated idempotency key. Replaying it returns the first upload's
   // image_key with duplicate=true rather than minting a second key.
   string operation_id = 3;
+  // Conversation-scoped alternative to delivery_id. Same authorization as
+  // SendAgentFollowUp: the provider must have received an agent event in this
+  // conversation inside the dedupe TTL. A later message — a build result, a
+  // Nous answer — has no inbound delivery to pin an upload to, but it still
+  // has to show a picture, and the conversation grant is the same bound that
+  // already lets it speak.
+  string conversation_id = 4;
 }
 
 message UploadAgentImageChunk {
@@ -255,7 +261,9 @@ message UploadAgentImageRequest {
 }
 
 message UploadAgentImageResponse {
-  // Embed as ![alt](image_key) inside AgentResponseContent.markdown.
+  // Embed as ![alt](image_key) inside AgentResponseContent.markdown, or as a
+  // native post `img` element in a follow-up. Cards and ordinary messages
+  // both render only from this key.
   string image_key = 1;
   bool duplicate = 2;
   // Image type as botd sniffed it from the bytes, not as the provider claimed.

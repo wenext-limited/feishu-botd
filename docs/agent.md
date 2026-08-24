@@ -355,23 +355,29 @@ wants a picture in its answer uploads the bytes and embeds the key it gets back.
 
 `UploadAgentImage` is client-streaming and mirrors `GetAgentAttachedContext` in
 the opposite direction. The first frame is a header carrying `provider`,
-`delivery_id`, and `operation_id`; every later frame is an at-most-64-KiB chunk.
-botd requires `allow_image_upload = true`, that the provider received that
-delivery, and that it is allowed to access its app — the same authorization the
-inbound path uses. The delivery is not incidental: an `image_key` is scoped to
-one Feishu app, so the upload has to happen under the app that will render it.
+`operation_id`, and exactly one of `delivery_id` or `conversation_id`; every
+later frame is an at-most-64-KiB chunk. botd requires `allow_image_upload =
+true` and that the provider is allowed to access the app that will render the
+key. A live inbound delivery is the card path. A conversation is the later-
+message path, authorized the same way `SendAgentFollowUp` is: the provider must
+have received an agent event in that conversation inside the dedupe TTL. The
+scope is not incidental: an `image_key` is tenant- and app-scoped, so the
+upload has to happen under the app that will render it.
 
 The response carries `image_key` and the `media_type` botd detected. Embed the
 key in `AgentResponseContent.markdown` as `![alt](image_key)`, on any Start,
-Update, Finish, or Replace snapshot. The key is stable, so once a snapshot
-contains it every later cumulative snapshot can repeat it unchanged.
+Update, Finish, or Replace snapshot. A follow-up that carries the same form is
+rewritten into a native post `img` element — ordinary Feishu posts do not
+render markdown images, so leaving the key as `![alt](key)` would print a
+filename. The key is stable, so once a snapshot contains it every later
+cumulative snapshot can repeat it unchanged.
 
 botd sniffs the media type from the bytes and accepts only `image/png`,
 `image/jpeg`, `image/gif`, and `image/webp`. A declared type is never consulted,
 so the endpoint cannot be used to push a non-image out under the bot's identity.
 Server-owned limits are 5 MiB per image, 64 KiB per frame, and 16 images per
-delivery — the last is a refusal rather than an eviction, so a key a provider
-already holds is never quietly re-minted.
+delivery or conversation grant — the last is a refusal rather than an eviction,
+so a key a provider already holds is never quietly re-minted.
 
 `operation_id` is idempotent the way the response RPCs are: replaying it returns
 the first upload's key with `duplicate = true` instead of spending a second one,

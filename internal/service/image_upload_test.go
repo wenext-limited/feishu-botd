@@ -84,6 +84,12 @@ func uploadInput(operationID string, data []byte) AgentImageUploadInput {
 	}
 }
 
+func conversationUploadInput(operationID string, data []byte) AgentImageUploadInput {
+	return AgentImageUploadInput{
+		Provider: "ibot", ConversationID: "conv_qr", OperationID: operationID, Data: data,
+	}
+}
+
 func TestUploadAgentImageReturnsKeyForAnAuthorizedDelivery(t *testing.T) {
 	backend := &imageUploadTestBackend{
 		fakeSender: &fakeSender{messageID: "om_answer"},
@@ -238,9 +244,12 @@ func TestUploadAgentImageRejectsIncompleteRequests(t *testing.T) {
 		code  string
 	}{
 		{"no provider", AgentImageUploadInput{DeliveryID: "delivery_qr", OperationID: "op", Data: pngBytes}, "missing_provider"},
-		{"no delivery", AgentImageUploadInput{Provider: "ibot", OperationID: "op", Data: pngBytes}, "missing_delivery_id"},
+		{"no scope", AgentImageUploadInput{Provider: "ibot", OperationID: "op", Data: pngBytes}, "missing_image_scope"},
 		{"no operation", AgentImageUploadInput{Provider: "ibot", DeliveryID: "delivery_qr", Data: pngBytes}, "missing_operation_id"},
 		{"no bytes", AgentImageUploadInput{Provider: "ibot", DeliveryID: "delivery_qr", OperationID: "op"}, "missing_image"},
+		{"both scopes", AgentImageUploadInput{
+			Provider: "ibot", DeliveryID: "delivery_qr", ConversationID: "conv_qr", OperationID: "op", Data: pngBytes,
+		}, "ambiguous_image_scope"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			_, apiErr := svc.UploadAgentImage(context.Background(), testCase.input)
@@ -251,6 +260,81 @@ func TestUploadAgentImageRejectsIncompleteRequests(t *testing.T) {
 	}
 	if backend.calls != 0 {
 		t.Fatalf("invalid request reached Feishu: calls=%d", backend.calls)
+	}
+}
+
+func TestUploadAgentImageAcceptsAConversationGrant(t *testing.T) {
+	backend := &imageUploadTestBackend{
+		fakeSender: &fakeSender{messageID: "om_answer"},
+		imageKey:   "img_v3_qr", mediaType: "image/png",
+	}
+	svc := newSeededImageUploadService(t, backend)
+
+	got, apiErr := svc.UploadAgentImage(context.Background(), conversationUploadInput("op_later", pngBytes))
+	if apiErr != nil {
+		t.Fatalf("upload: %v", apiErr)
+	}
+	if got.ImageKey != "img_v3_qr" || got.MediaType != "image/png" || got.Duplicate {
+		t.Fatalf("result = %#v", got)
+	}
+	if backend.calls != 1 {
+		t.Fatalf("calls=%d", backend.calls)
+	}
+}
+
+func TestUploadAgentImageConversationReplayReturnsTheFirstKey(t *testing.T) {
+	backend := &imageUploadTestBackend{
+		fakeSender: &fakeSender{messageID: "om_answer"}, imageKey: "img_v3_qr",
+	}
+	svc := newSeededImageUploadService(t, backend)
+
+	first, apiErr := svc.UploadAgentImage(context.Background(), conversationUploadInput("op_later", pngBytes))
+	if apiErr != nil {
+		t.Fatalf("first upload: %v", apiErr)
+	}
+	second, apiErr := svc.UploadAgentImage(context.Background(), conversationUploadInput("op_later", pngBytes))
+	if apiErr != nil {
+		t.Fatalf("replayed upload: %v", apiErr)
+	}
+	if second.ImageKey != first.ImageKey || !second.Duplicate {
+		t.Fatalf("replay = %#v, first = %#v", second, first)
+	}
+	if backend.calls != 1 {
+		t.Fatalf("replay minted a second key: calls=%d", backend.calls)
+	}
+}
+
+func TestUploadAgentImageDoesNotCrossConversationOwnership(t *testing.T) {
+	backend := &imageUploadTestBackend{fakeSender: &fakeSender{messageID: "om_answer"}}
+	svc := newSeededImageUploadService(t, backend)
+
+	_, apiErr := svc.UploadAgentImage(context.Background(), AgentImageUploadInput{
+		Provider: "ibot", ConversationID: "conv_elsewhere", OperationID: "op_1", Data: pngBytes,
+	})
+	if apiErr == nil || apiErr.Code != "unknown_conversation" {
+		t.Fatalf("error = %v", apiErr)
+	}
+	if backend.calls != 0 {
+		t.Fatalf("unauthorized upload reached Feishu: calls=%d", backend.calls)
+	}
+}
+
+func TestUploadAgentImageBoundsHowManyImagesOneConversationCanMint(t *testing.T) {
+	backend := &imageUploadTestBackend{fakeSender: &fakeSender{messageID: "om_answer"}}
+	svc := newSeededImageUploadService(t, backend)
+
+	for index := 0; index < maxConversationImages; index++ {
+		data := append(append([]byte(nil), pngBytes...), byte(index))
+		if _, apiErr := svc.UploadAgentImage(context.Background(), conversationUploadInput(string(rune('a'+index)), data)); apiErr != nil {
+			t.Fatalf("upload %d: %v", index, apiErr)
+		}
+	}
+	_, apiErr := svc.UploadAgentImage(context.Background(), conversationUploadInput("overflow", pngBytes))
+	if apiErr == nil || apiErr.Code != "too_many_images" {
+		t.Fatalf("error = %v", apiErr)
+	}
+	if backend.calls != maxConversationImages {
+		t.Fatalf("calls=%d", backend.calls)
 	}
 }
 

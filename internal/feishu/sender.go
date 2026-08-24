@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -82,6 +83,7 @@ type ordinaryPostElement struct {
 	Text     string `json:"text,omitempty"`
 	UserID   string `json:"user_id,omitempty"`
 	UserName string `json:"user_name,omitempty"`
+	ImageKey string `json:"image_key,omitempty"`
 }
 
 type ChannelSender struct {
@@ -218,14 +220,11 @@ func ordinaryMessageParts(req notify.Request) ([]ordinaryMessagePart, *MessageSe
 	parts := make([]ordinaryMessagePart, 0, len(chunks))
 	mentionUserID := strings.TrimSpace(req.MentionUserID)
 	for index, chunk := range chunks {
-		elements := []ordinaryPostElement{{Tag: "md", Text: chunk}}
-		fallbackText := chunk
+		elements := postElementsForMarkdown(chunk)
+		fallbackText := fallbackTextForPost(chunk)
 		if index == 0 && mentionUserID != "" {
-			elements = []ordinaryPostElement{
-				{Tag: "at", UserID: mentionUserID},
-				{Tag: "md", Text: chunk},
-			}
-			fallbackText = "@" + mentionUserID + " " + chunk
+			elements = append([]ordinaryPostElement{{Tag: "at", UserID: mentionUserID}}, elements...)
+			fallbackText = "@" + mentionUserID + " " + fallbackText
 		}
 		content, err := json.Marshal(ordinaryPost{ZhCn: ordinaryPostLanguage{
 			Title:   req.Title,
@@ -398,3 +397,42 @@ func ordinaryMessageUUID(seed []byte, part int) string {
 }
 
 func isMessageFormatError(code int) bool { return code == 230001 }
+
+// markdownImage is one `![alt](key)` occurrence. Feishu cards already render
+// that form from an image_key; ordinary post messages do not, so a later
+// message that embeds a key as markdown would otherwise print the filename.
+var markdownImage = regexp.MustCompile(`!\[([^\]]*)\]\(([^)]+)\)`)
+
+func postElementsForMarkdown(chunk string) []ordinaryPostElement {
+	matches := markdownImage.FindAllStringSubmatchIndex(chunk, -1)
+	if len(matches) == 0 {
+		return []ordinaryPostElement{{Tag: "md", Text: chunk}}
+	}
+	elements := make([]ordinaryPostElement, 0, len(matches)*2+1)
+	cursor := 0
+	for _, loc := range matches {
+		if loc[0] > cursor {
+			if text := chunk[cursor:loc[0]]; strings.TrimSpace(text) != "" {
+				elements = append(elements, ordinaryPostElement{Tag: "md", Text: text})
+			}
+		}
+		key := strings.TrimSpace(chunk[loc[4]:loc[5]])
+		if key != "" {
+			elements = append(elements, ordinaryPostElement{Tag: "img", ImageKey: key})
+		}
+		cursor = loc[1]
+	}
+	if cursor < len(chunk) {
+		if text := chunk[cursor:]; strings.TrimSpace(text) != "" {
+			elements = append(elements, ordinaryPostElement{Tag: "md", Text: text})
+		}
+	}
+	if len(elements) == 0 {
+		return []ordinaryPostElement{{Tag: "md", Text: chunk}}
+	}
+	return elements
+}
+
+func fallbackTextForPost(chunk string) string {
+	return strings.TrimSpace(markdownImage.ReplaceAllString(chunk, ""))
+}

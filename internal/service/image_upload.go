@@ -18,13 +18,24 @@ import (
 // and a run that wants a seventeenth picture is a run worth interrupting.
 const maxDeliveryImages = 16
 
+// maxConversationImages is the same ceiling, applied to one conversation
+// grant rather than one inbound delivery. A later message that shows a QR
+// code should not be able to mint unbounded tenant-side images just because
+// it has no delivery to pin them to.
+const maxConversationImages = 16
+
 // AgentImageUploadInput is one complete image, already reassembled from its
 // transport frames. The service layer never sees a partial upload.
+//
+// Exactly one of DeliveryID or ConversationID must be set. A live inbound
+// delivery is the card path; a conversation is the later-message path, and
+// it is authorized the same way SendAgentFollowUp is.
 type AgentImageUploadInput struct {
-	Provider    string
-	DeliveryID  string
-	OperationID string
-	Data        []byte
+	Provider       string
+	DeliveryID     string
+	ConversationID string
+	OperationID    string
+	Data           []byte
 }
 
 type AgentImageUploadResult struct {
@@ -41,22 +52,33 @@ type uploadedImage struct {
 	fingerprint string
 }
 
+// imageUploadTarget is the app and ledger one authorized upload writes through.
+type imageUploadTarget struct {
+	appAlias string
+	label    string
+	lookup   func(operationID, fingerprint string) (*uploadedImage, *notify.APIError)
+	remember func(operationID string, image uploadedImage) uploadedImage
+}
+
 // UploadAgentImage puts provider-supplied bytes into Feishu under the app that
 // delivered the event, and returns the image_key a response markdown embeds as
-// ![alt](image_key). Cards render images only from such a key, so this is the
-// only way an agent answer can contain a picture.
+// ![alt](image_key). Cards and ordinary follow-up posts both render images only
+// from such a key, so this is the only way an agent answer can contain a picture.
 func (s *Service) UploadAgentImage(ctx context.Context, in AgentImageUploadInput) (AgentImageUploadResult, *notify.APIError) {
 	provider := strings.TrimSpace(in.Provider)
 	deliveryID := strings.TrimSpace(in.DeliveryID)
+	conversationID := strings.TrimSpace(in.ConversationID)
 	operationID := strings.TrimSpace(in.OperationID)
 	switch {
 	case provider == "":
 		return AgentImageUploadResult{}, notify.BadRequest("missing_provider", "provider is required")
-	case deliveryID == "":
-		return AgentImageUploadResult{}, notify.BadRequest("missing_delivery_id", "delivery_id is required")
+	case deliveryID != "" && conversationID != "":
+		return AgentImageUploadResult{}, notify.BadRequest("ambiguous_image_scope", "set delivery_id or conversation_id, not both")
+	case deliveryID == "" && conversationID == "":
+		return AgentImageUploadResult{}, notify.BadRequest("missing_image_scope", "delivery_id or conversation_id is required")
 	case operationID == "":
 		return AgentImageUploadResult{}, notify.BadRequest("missing_operation_id", "operation_id is required")
-	case len(provider) > 64 || len(deliveryID) > 160 || len(operationID) > 160:
+	case len(provider) > 64 || len(deliveryID) > 160 || len(conversationID) > 160 || len(operationID) > 160:
 		return AgentImageUploadResult{}, notify.BadRequest("field_too_large", "one or more fields are too large")
 	case len(in.Data) == 0:
 		return AgentImageUploadResult{}, notify.BadRequest("missing_image", "image bytes are required")
@@ -66,11 +88,11 @@ func (s *Service) UploadAgentImage(ctx context.Context, in AgentImageUploadInput
 	}
 
 	now := time.Now()
-	delivery, ok := s.lookupAndPinAgentDelivery(provider, deliveryID, now, now.Add(s.agentBroker.ttl))
-	if !ok {
-		return AgentImageUploadResult{}, notify.NewAPIError(404, "unknown_delivery", "unknown delivery", false)
+	target, apiErr := s.resolveImageUploadTarget(provider, deliveryID, conversationID, operationID, now)
+	if apiErr != nil {
+		return AgentImageUploadResult{}, apiErr
 	}
-	backend, ok := s.backendForApp(delivery.appAlias)
+	backend, ok := s.backendForApp(target.appAlias)
 	uploader, capable := backend.images, false
 	if ok && uploader != nil {
 		capable = true
@@ -80,7 +102,7 @@ func (s *Service) UploadAgentImage(ctx context.Context, in AgentImageUploadInput
 	}
 
 	fingerprint := imageFingerprint(in.Data)
-	if existing, apiErr := delivery.lookupUploadedImage(operationID, fingerprint); apiErr != nil {
+	if existing, apiErr := target.lookup(operationID, fingerprint); apiErr != nil {
 		return AgentImageUploadResult{}, apiErr
 	} else if existing != nil {
 		return AgentImageUploadResult{
@@ -98,14 +120,49 @@ func (s *Service) UploadAgentImage(ctx context.Context, in AgentImageUploadInput
 			// never will, so this is not retryable.
 			return AgentImageUploadResult{}, notify.NewAPIError(400, "invalid_image", rejected.Reason, false)
 		}
-		s.logAgentCardFailure("image upload", deliveryID, err)
+		s.logAgentCardFailure("image upload", target.label, err)
 		return AgentImageUploadResult{}, agentCardCallError(err, "Feishu image upload failed")
 	}
 
-	stored := delivery.rememberUploadedImage(operationID, uploadedImage{
+	stored := target.remember(operationID, uploadedImage{
 		imageKey: imageKey, mediaType: mediaType, fingerprint: fingerprint,
 	})
 	return AgentImageUploadResult{ImageKey: stored.imageKey, MediaType: stored.mediaType}, nil
+}
+
+func (s *Service) resolveImageUploadTarget(
+	provider, deliveryID, conversationID, operationID string, now time.Time,
+) (imageUploadTarget, *notify.APIError) {
+	if deliveryID != "" {
+		delivery, ok := s.lookupAndPinAgentDelivery(provider, deliveryID, now, now.Add(s.agentBroker.ttl))
+		if !ok {
+			return imageUploadTarget{}, notify.NewAPIError(404, "unknown_delivery", "unknown delivery", false)
+		}
+		return imageUploadTarget{
+			appAlias: delivery.appAlias,
+			label:    deliveryID,
+			lookup:   delivery.lookupUploadedImage,
+			remember: delivery.rememberUploadedImage,
+		}, nil
+	}
+
+	route, appAlias, ok := s.agentBroker.lookupAndPinConversationImage(
+		conversationID,
+		provider,
+		operationID,
+		func(resolvedApp string) bool { return s.appAllowed(provider, resolvedApp) },
+		now,
+		s.cfg.SendTimeout,
+	)
+	if !ok {
+		return imageUploadTarget{}, unknownConversationError()
+	}
+	return imageUploadTarget{
+		appAlias: appAlias,
+		label:    conversationID,
+		lookup:   route.lookupUploadedImage,
+		remember: route.rememberUploadedImage,
+	}, nil
 }
 
 // lookupUploadedImage returns a prior upload for this operation id, or nil when
@@ -140,6 +197,34 @@ func (d *agentDelivery) rememberUploadedImage(operationID string, image uploaded
 		d.uploadedImages = make(map[string]uploadedImage, 1)
 	}
 	d.uploadedImages[operationID] = image
+	return image
+}
+
+func (r *agentConversationRoute) lookupUploadedImage(operationID, fingerprint string) (*uploadedImage, *notify.APIError) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if existing, ok := r.uploadedImages[operationID]; ok {
+		if existing.fingerprint != fingerprint {
+			return nil, notify.NewAPIError(409, "operation_conflict", "operation id reused with different content", false)
+		}
+		return &existing, nil
+	}
+	if len(r.uploadedImages) >= maxConversationImages {
+		return nil, notify.NewAPIError(429, "too_many_images", "this conversation has uploaded too many images", false)
+	}
+	return nil, nil
+}
+
+func (r *agentConversationRoute) rememberUploadedImage(operationID string, image uploadedImage) uploadedImage {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if existing, ok := r.uploadedImages[operationID]; ok {
+		return existing
+	}
+	if r.uploadedImages == nil {
+		r.uploadedImages = make(map[string]uploadedImage, 1)
+	}
+	r.uploadedImages[operationID] = image
 	return image
 }
 

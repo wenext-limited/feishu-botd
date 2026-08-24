@@ -35,10 +35,11 @@ func (c *commandServer) UploadAgentImage(stream pb.CommandService_UploadAgentIma
 	}
 
 	result, apiErr := c.svc.UploadAgentImage(ctx, service.AgentImageUploadInput{
-		Provider:    header.GetProvider(),
-		DeliveryID:  header.GetDeliveryId(),
-		OperationID: header.GetOperationId(),
-		Data:        data,
+		Provider:       header.GetProvider(),
+		DeliveryID:     header.GetDeliveryId(),
+		ConversationID: header.GetConversationId(),
+		OperationID:    header.GetOperationId(),
+		Data:           data,
 	})
 	if apiErr != nil {
 		return grpcError(apiErr, requestID)

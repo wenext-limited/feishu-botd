@@ -1549,14 +1549,20 @@ type UploadAgentImageHeader struct {
 	Provider string                 `protobuf:"bytes,1,opt,name=provider,proto3" json:"provider,omitempty"` // must match the bearer-authenticated principal
 	// The delivery whose app uploads the image. image_key is tenant- and
 	// app-scoped, so the upload has to happen under the same app that will
-	// render it, and requiring a live delivery keeps the bot's upload quota
-	// reachable only from a conversation the provider was actually given.
+	// render it. Set this, or conversation_id, never both.
 	DeliveryId string `protobuf:"bytes,2,opt,name=delivery_id,json=deliveryId,proto3" json:"delivery_id,omitempty"`
 	// Provider-generated idempotency key. Replaying it returns the first upload's
 	// image_key with duplicate=true rather than minting a second key.
-	OperationId   string `protobuf:"bytes,3,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	OperationId string `protobuf:"bytes,3,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
+	// Conversation-scoped alternative to delivery_id. Same authorization as
+	// SendAgentFollowUp: the provider must have received an agent event in this
+	// conversation inside the dedupe TTL. A later message — a build result, a
+	// Nous answer — has no inbound delivery to pin an upload to, but it still
+	// has to show a picture, and the conversation grant is the same bound that
+	// already lets it speak.
+	ConversationId string `protobuf:"bytes,4,opt,name=conversation_id,json=conversationId,proto3" json:"conversation_id,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *UploadAgentImageHeader) Reset() {
@@ -1606,6 +1612,13 @@ func (x *UploadAgentImageHeader) GetDeliveryId() string {
 func (x *UploadAgentImageHeader) GetOperationId() string {
 	if x != nil {
 		return x.OperationId
+	}
+	return ""
+}
+
+func (x *UploadAgentImageHeader) GetConversationId() string {
+	if x != nil {
+		return x.ConversationId
 	}
 	return ""
 }
@@ -1740,7 +1753,9 @@ func (*UploadAgentImageRequest_Chunk) isUploadAgentImageRequest_Frame() {}
 
 type UploadAgentImageResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Embed as ![alt](image_key) inside AgentResponseContent.markdown.
+	// Embed as ![alt](image_key) inside AgentResponseContent.markdown, or as a
+	// native post `img` element in a follow-up. Cards and ordinary messages
+	// both render only from this key.
 	ImageKey  string `protobuf:"bytes,1,opt,name=image_key,json=imageKey,proto3" json:"image_key,omitempty"`
 	Duplicate bool   `protobuf:"varint,2,opt,name=duplicate,proto3" json:"duplicate,omitempty"`
 	// Image type as botd sniffed it from the bytes, not as the provider claimed.
@@ -3324,12 +3339,13 @@ const file_feishubotd_v1_command_proto_rawDesc = "" +
 	"\x06header\x18\x01 \x01(\v2).feishubotd.v1.AgentAttachedContextHeaderH\x00R\x06header\x12P\n" +
 	"\vimage_chunk\x18\x02 \x01(\v2-.feishubotd.v1.AgentAttachedContextImageChunkH\x00R\n" +
 	"imageChunkB\a\n" +
-	"\x05frame\"x\n" +
+	"\x05frame\"\xa1\x01\n" +
 	"\x16UploadAgentImageHeader\x12\x1a\n" +
 	"\bprovider\x18\x01 \x01(\tR\bprovider\x12\x1f\n" +
 	"\vdelivery_id\x18\x02 \x01(\tR\n" +
 	"deliveryId\x12!\n" +
-	"\foperation_id\x18\x03 \x01(\tR\voperationId\"+\n" +
+	"\foperation_id\x18\x03 \x01(\tR\voperationId\x12'\n" +
+	"\x0fconversation_id\x18\x04 \x01(\tR\x0econversationId\"+\n" +
 	"\x15UploadAgentImageChunk\x12\x12\n" +
 	"\x04data\x18\x01 \x01(\fR\x04data\"\xa1\x01\n" +
 	"\x17UploadAgentImageRequest\x12?\n" +
