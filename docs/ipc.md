@@ -276,7 +276,8 @@ image keys never cross the boundary.
 
 botd lists the triggering Feishu thread newest-first until it finds the exact
 trigger message, then returns only older content, plus non-video media attached
-to the trigger itself. Guide text and messages posted after the trigger are
+to the trigger itself. A delivery with no thread still returns the trigger's
+own images. Guide text and messages posted after the trigger are
 excluded. Failure to find the trigger within 256 scanned messages is
 `UNREADABLE`, never an approximate snapshot. Limits are 64 prior messages,
 64 KiB normalized text, eight images, 5 MiB per image, and 16 MiB total image

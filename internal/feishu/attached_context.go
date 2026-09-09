@@ -110,6 +110,7 @@ type AttachedContextLookup interface {
 
 type threadMessageAPI interface {
 	List(context.Context, *larkim.ListMessageReq, ...larkcore.RequestOptionFunc) (*larkim.ListMessageResp, error)
+	Get(context.Context, *larkim.GetMessageReq, ...larkcore.RequestOptionFunc) (*larkim.GetMessageResp, error)
 }
 
 type messageResourceAPI interface {
@@ -134,11 +135,11 @@ func (s *sdkAttachedContextLookup) LookupAttachedContext(ctx context.Context, in
 	in.ThreadID = strings.TrimSpace(in.ThreadID)
 	in.TriggerMessageID = strings.TrimSpace(in.TriggerMessageID)
 	in.TriggerCreateTime = strings.TrimSpace(in.TriggerCreateTime)
-	if in.ThreadID == "" {
-		return attachedContextWithIssue(AttachedContextMissing, AttachedContextIssueNoThread), nil
-	}
 	if in.TriggerMessageID == "" || s == nil || s.history == nil {
 		return attachedContextWithIssue(AttachedContextUnreadable, AttachedContextIssueBoundaryNotFound), nil
+	}
+	if in.ThreadID == "" {
+		return s.lookupTriggerOnly(ctx, in.TriggerMessageID)
 	}
 
 	candidates, issues, truncated, historyUnreadable := s.snapshotCandidates(ctx, in)
@@ -146,7 +147,45 @@ func (s *sdkAttachedContextLookup) LookupAttachedContext(ctx context.Context, in
 		issues = appendOrIncrementAttachedContextIssue(issues, AttachedContextIssueBoundaryNotFound)
 		return AttachedContext{Status: AttachedContextUnreadable, Issues: issues, Truncated: truncated}, nil
 	}
+	return s.assemble(ctx, candidates, issues, truncated, historyUnreadable)
+}
 
+// lookupTriggerOnly downloads images on the triggering message when there is
+// no topic thread to list. A plain group or DM still flattens those pictures
+// to "[image]" in the prompt; this is the only path that can replace that
+// placeholder with bytes. It does not walk the room.
+func (s *sdkAttachedContextLookup) lookupTriggerOnly(ctx context.Context, triggerMessageID string) (AttachedContext, error) {
+	req := larkim.NewGetMessageReqBuilder().MessageId(triggerMessageID).Build()
+	resp, err := s.history.Get(ctx, req)
+	if err != nil || resp == nil || !resp.Success() || resp.Data == nil {
+		return attachedContextWithIssue(AttachedContextUnreadable, AttachedContextIssueHistoryUnreadable), nil
+	}
+	var trigger *larkim.Message
+	for _, item := range resp.Data.Items {
+		if item == nil {
+			continue
+		}
+		if strings.TrimSpace(deref(item.MessageId)) == triggerMessageID {
+			trigger = item
+			break
+		}
+		if trigger == nil {
+			trigger = item
+		}
+	}
+	if trigger == nil {
+		return attachedContextWithIssue(AttachedContextUnreadable, AttachedContextIssueBoundaryNotFound), nil
+	}
+	return s.assemble(ctx, []attachedContextCandidate{{message: trigger, isTrigger: true}}, nil, false, false)
+}
+
+func (s *sdkAttachedContextLookup) assemble(
+	ctx context.Context,
+	candidates []attachedContextCandidate,
+	issues []AttachedContextIssue,
+	truncated bool,
+	historyUnreadable bool,
+) (AttachedContext, error) {
 	result := AttachedContext{Issues: issues, Truncated: truncated}
 	unreadableContent := historyUnreadable
 	totalTextBytes := 0

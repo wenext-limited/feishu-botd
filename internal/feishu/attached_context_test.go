@@ -71,6 +71,16 @@ func (f *fakeThreadMessageAPI) List(context.Context, *larkim.ListMessageReq, ...
 	return response, nil
 }
 
+func (f *fakeThreadMessageAPI) Get(context.Context, *larkim.GetMessageReq, ...larkcore.RequestOptionFunc) (*larkim.GetMessageResp, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	if len(f.responses) == 0 || f.responses[0] == nil || f.responses[0].Data == nil {
+		return nil, nil
+	}
+	return &larkim.GetMessageResp{Data: &larkim.GetMessageRespData{Items: f.responses[0].Data.Items}}, nil
+}
+
 func TestAttachedContextLookupReturnsSnapshotBeforeTriggerOldestFirst(t *testing.T) {
 	triggerID := "om_guide"
 	history := &fakeThreadMessageAPI{responses: []*larkim.ListMessageResp{listMessageResponse(false, "",
@@ -197,8 +207,8 @@ func TestAttachedContextLookupDistinguishesMissingAndUnreadable(t *testing.T) {
 		issue   AttachedContextIssueCode
 	}{
 		{
-			name: "no thread", request: AttachedContextRequest{TriggerMessageID: "om_guide"},
-			history: &fakeThreadMessageAPI{}, status: AttachedContextMissing, issue: AttachedContextIssueNoThread,
+			name: "no thread and no trigger body", request: AttachedContextRequest{TriggerMessageID: "om_guide"},
+			history: &fakeThreadMessageAPI{}, status: AttachedContextUnreadable, issue: AttachedContextIssueHistoryUnreadable,
 		},
 		{
 			name:    "permission or api failure",
@@ -227,6 +237,31 @@ func TestAttachedContextLookupDistinguishesMissingAndUnreadable(t *testing.T) {
 				t.Fatalf("context = %#v", got)
 			}
 		})
+	}
+}
+
+func TestAttachedContextLookupDownloadsTriggerImagesWithoutAThread(t *testing.T) {
+	png := append([]byte("\x89PNG\r\n\x1a\n"), bytes.Repeat([]byte{0}, 32)...)
+	history := &fakeThreadMessageAPI{responses: []*larkim.ListMessageResp{listMessageResponse(false, "",
+		threadMessage("om_guide", "post", `{"title":"","content":[[{"tag":"text","text":"看看这个"},{"tag":"img","image_key":"img_one"},{"tag":"img","image_key":"img_two"}]]}`, "2000", "ou_guide", "user"),
+	)}}
+	resources := &orderedFakeMessageResourceAPI{data: [][]byte{png, png}}
+	lookup := newSDKAttachedContextLookup(history, resources)
+
+	got, err := lookup.LookupAttachedContext(context.Background(), AttachedContextRequest{
+		TriggerMessageID: "om_guide",
+	})
+	if err != nil {
+		t.Fatalf("lookup: %v", err)
+	}
+	if got.Status != AttachedContextFound {
+		t.Fatalf("status = %v, want found", got.Status)
+	}
+	if len(got.Messages) != 1 || got.Messages[0].Text != "" || len(got.Messages[0].Images) != 2 {
+		t.Fatalf("messages = %#v, want trigger images and no guide text", got.Messages)
+	}
+	if history.calls != 0 {
+		t.Fatalf("thread list was called %d times; a group message has no thread to list", history.calls)
 	}
 }
 

@@ -323,7 +323,9 @@ oldest-first normalized messages, snapshot-local `participant-N` labels,
 image descriptors, typed issues, and a truncation flag. Image bytes then arrive
 as at-most-64-KiB chunks in descriptor order. The snapshot stops at the exact
 triggering event: its guide text and all later messages are excluded, while an
-image in the trigger's rich content is retained. If botd cannot find that exact
+image in the trigger's rich content is retained. A delivery with no topic
+thread still downloads those trigger images — a group or DM that flattened
+them to `[image]` in the prompt has nowhere else to get the bytes. If botd cannot find that exact
 boundary within its bounded scan, it returns `UNREADABLE`; it never guesses.
 
 Server-owned limits are 64 prior messages, 64 KiB normalized text, eight
