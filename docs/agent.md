@@ -93,6 +93,7 @@ openssl rand -base64 32 > /run/secrets/feishu-botd-example-agent-token
       "allow_unmatched_messages": true,
       "allow_card_actions": true,
       "allow_attached_context": false,
+      "allow_attached_video": false,
       "allow_follow_up_messages": false,
       "allow_message_reactions": true,
       "allow_image_upload": false,
@@ -226,6 +227,11 @@ the same `allowed_commands` allowlist, and `allow_follow_up_messages` separately
 permits the follow-up send described below. `allow_attached_context` separately
 permits the sensitive topic-history and message-resource read described below;
 it defaults to false and is not implied by unmatched-message access.
+`allow_attached_video` layers on top of `allow_attached_context` (ADR-0126):
+it additionally permits downloaded, bounded video bytes in that same
+snapshot instead of the `[unsupported video file]` placeholder. It defaults
+to false and is inert without `allow_attached_context` also set — it is not
+an independent grant.
 `allow_image_upload` separately permits the outbound image upload described
 below, and likewise defaults to false: it is the only grant that writes a
 durable tenant-side object from bytes the provider supplied. Requests
@@ -333,20 +339,56 @@ images, 5 MiB per image, and 16 MiB total image payload bytes. A separate
 256-message scan limit protects exact-boundary discovery. Every limit and every
 partial image/message failure produces a typed issue. Content the daemon
 cannot carry degrades to an inline text placeholder at its position in the
-snapshot rather than disappearing behind the counter alone: a video message or
-a post's embedded video becomes `[unsupported video file]` (still counted as
-`VIDEO_OMITTED`), a file message becomes `[unsupported file: <name>]`, and
-audio/sticker/other kinds become typed `[unsupported …]` rows (counted as
-`UNSUPPORTED_MESSAGE`) — so a topic whose only content is a video still
-resolves `FOUND` and the provider can address the question around it. MIME
-types are detected from bytes and allowlisted rather than
-trusted from message metadata. Provider-visible output contains no Feishu
-message id, thread id, image key, or stable participant id.
+snapshot rather than disappearing behind the counter alone: without
+`allow_attached_video`, a video message or a post's embedded video becomes
+`[unsupported video file]` (counted as `VIDEO_OMITTED`; see "Attached video"
+below for the granted case), a file message becomes
+`[unsupported file: <name>]`, and audio/sticker/other kinds become typed
+`[unsupported …]` rows (counted as `UNSUPPORTED_MESSAGE`) — so a topic whose
+only content is a video still resolves `FOUND` and the provider can address
+the question around it. MIME types are detected from bytes and allowlisted
+rather than trusted from message metadata. Provider-visible output contains no
+Feishu message id, thread id, image key, or stable participant id.
 
 Topic history uses Feishu message history with `container_id_type=thread` and
 therefore requires the sensitive `im:message.group_msg` permission for group
 content. Image download uses the exact private `message_id` + `image_key` pair
 with resource type `image`; the bot must remain in the same conversation.
+
+## Attached video
+
+With `allow_attached_video = true` (ADR-0126), the same snapshot also carries
+video bytes: a standalone video message downloads with no placeholder text (the
+whole message was the video), and a post's embedded video keeps an inline
+`[video]` token at its position so the surrounding prose still refers to it.
+Without the grant, both degrade to the pre-existing `[unsupported video file]`
+placeholder and `VIDEO_OMITTED` — byte-for-byte unchanged. The grant is inert
+without `allow_attached_context` also set.
+
+Each accepted video appears in its message's `videos` field as a descriptor
+(`video_index`, server-detected `media_type`, `byte_size`, Feishu-declared
+`duration_ms` and `file_name`) and streams as `video_chunk` frames — the same
+at-most-64-KiB, monotonic-`offset`, `final`-terminated framing as image
+chunks. Video chunks for every video follow all image chunks in the stream,
+in `video_index` order. Only an accepted video gets a descriptor; a declined
+or failed one keeps its message's placeholder text and a typed issue instead.
+
+The type is detected strictly from magic bytes, never from the Feishu-declared
+file name: an `ftyp` box naming an allowlisted brand (`isom`, `iso2`, `iso4`,
+`iso5`, `iso6`, `mp41`, `mp42`, `avc1`, `hvc1`, `hev1`, `M4V `, `M4A `, `dash`)
+is `video/mp4`; brand `qt  ` is `video/quicktime`; an EBML header (`1A 45 DF
+A3`) is `video/webm`. Anything else is `VIDEO_TYPE_UNSUPPORTED`. Download uses
+the same `GetMessageResource` call as images, with resource type `file` (the
+Feishu SDK covers files, audio, and video under that one type).
+
+Server-owned video limits are two videos per snapshot (`VIDEO_LIMIT`), 64 MiB
+per video (`VIDEO_TOO_LARGE`), 96 MiB total video payload bytes
+(`VIDEO_LIMIT`), and 600,000 ms (10 minutes) of Feishu-declared duration
+(`VIDEO_TOO_LONG`, checked before any download is attempted). A declared file
+name is silently truncated to 256 bytes with no issue. A download or
+transport failure is `VIDEO_UNREADABLE`. Every one of these failures keeps the
+message's placeholder text and records its issue — a video never fails the
+snapshot itself.
 
 ## Outbound images
 
