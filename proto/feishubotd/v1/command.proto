@@ -181,6 +181,14 @@ enum AgentAttachedContextIssueCode {
   AGENT_ATTACHED_CONTEXT_ISSUE_CODE_VIDEO_OMITTED = 12;
   AGENT_ATTACHED_CONTEXT_ISSUE_CODE_UNSUPPORTED_MESSAGE = 13;
   AGENT_ATTACHED_CONTEXT_ISSUE_CODE_MALFORMED_MESSAGE = 14;
+  // Video carry (ADR-0126). VIDEO_OMITTED (12) now means the provider has no
+  // allow_attached_video grant; the codes below describe a granted video that
+  // could not be delivered.
+  AGENT_ATTACHED_CONTEXT_ISSUE_CODE_VIDEO_LIMIT = 15;
+  AGENT_ATTACHED_CONTEXT_ISSUE_CODE_VIDEO_TOO_LARGE = 16;
+  AGENT_ATTACHED_CONTEXT_ISSUE_CODE_VIDEO_UNREADABLE = 17;
+  AGENT_ATTACHED_CONTEXT_ISSUE_CODE_VIDEO_TYPE_UNSUPPORTED = 18;
+  AGENT_ATTACHED_CONTEXT_ISSUE_CODE_VIDEO_TOO_LONG = 19;
 }
 
 message AgentAttachedContextIssue {
@@ -195,6 +203,18 @@ message AgentAttachedContextImageDescriptor {
   uint64 byte_size = 3;
 }
 
+// A video the daemon downloaded and bounded but never decoded (ADR-0126).
+// The provider turns it into frames itself; only accepted videos get a
+// descriptor, a declined one keeps its placeholder text and an issue.
+message AgentAttachedContextVideoDescriptor {
+  // Monotonic across the snapshot and referenced by video chunk frames.
+  uint32 video_index = 1;
+  string media_type = 2; // server-detected allowlisted video MIME type
+  uint64 byte_size = 3;
+  uint64 duration_ms = 4; // Feishu-declared; 0 when unknown
+  string file_name = 5; // Feishu-declared, bounded to 256 bytes; may be empty
+}
+
 message AgentAttachedContextMessage {
   // Oldest-first topic order. participant-N labels are snapshot-local and do
   // not encode a stable Feishu identity.
@@ -202,6 +222,7 @@ message AgentAttachedContextMessage {
   string author_type = 2;
   string text = 3;
   repeated AgentAttachedContextImageDescriptor images = 4;
+  repeated AgentAttachedContextVideoDescriptor videos = 5;
 }
 
 message AgentAttachedContextHeader {
@@ -218,10 +239,20 @@ message AgentAttachedContextImageChunk {
   bool final = 4;
 }
 
+// Video bytes follow every image chunk, in video_index order, with the same
+// offset/final contract as image chunks.
+message AgentAttachedContextVideoChunk {
+  uint32 video_index = 1;
+  uint64 offset = 2;
+  bytes data = 3; // at most 64 KiB per frame
+  bool final = 4;
+}
+
 message GetAgentAttachedContextResponse {
   oneof frame {
     AgentAttachedContextHeader header = 1;
     AgentAttachedContextImageChunk image_chunk = 2;
+    AgentAttachedContextVideoChunk video_chunk = 3;
   }
 }
 
