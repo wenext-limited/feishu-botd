@@ -269,19 +269,30 @@ messages that mention the bot.
 server stream. The exact delivery is the only lookup capability; it expires
 after 10 minutes, must have been delivered to that provider, and remains scoped
 by `allowed_apps`. The first frame reports `FOUND`, `MISSING`, or `UNREADABLE`,
-oldest-first text, snapshot-local participant labels, image descriptors, typed
-issues, and explicit truncation. Later frames carry at most 64 KiB of one image
-and identify its descriptor index and byte offset. Raw message/thread ids and
-image keys never cross the boundary.
+oldest-first text, snapshot-local participant labels, image descriptors, video
+descriptors, typed issues, and explicit truncation. Later frames carry at most
+64 KiB of one image or one video and identify its descriptor index and byte
+offset; video chunks always follow every image chunk, in descriptor order. Raw
+message/thread ids and image/video keys never cross the boundary.
 
 botd lists the triggering Feishu thread newest-first until it finds the exact
-trigger message, then returns only older content, plus non-video media attached
-to the trigger itself. A delivery with no thread still returns the trigger's
-own images. Guide text and messages posted after the trigger are
-excluded. Failure to find the trigger within 256 scanned messages is
-`UNREADABLE`, never an approximate snapshot. Limits are 64 prior messages,
-64 KiB normalized text, eight images, 5 MiB per image, and 16 MiB total image
-bytes. Limit hits and partial failures are typed; video is explicitly omitted.
+trigger message, then returns only older content, plus media attached to the
+trigger itself. A delivery with no thread still returns the trigger's own
+images (and, with the grant below, its own video). Guide text and messages
+posted after the trigger are excluded. Failure to find the trigger within 256
+scanned messages is `UNREADABLE`, never an approximate snapshot. Limits are 64
+prior messages, 64 KiB normalized text, eight images, 5 MiB per image, and
+16 MiB total image bytes. Limit hits and partial failures are typed.
+
+Video is omitted by default (`VIDEO_OMITTED`, kept as a placeholder) unless the
+provider also has the `allow_attached_video` grant (ADR-0126), layered on top
+of `allow_attached_context` and inert without it. Granted video downloads,
+bounds, and type-detects (never decodes) the same way images do: two videos
+per snapshot, 64 MiB per video, 96 MiB total, 600,000 ms declared duration, a
+256-byte file name (silently truncated). A video that fails any bound keeps
+its placeholder and a typed issue (`VIDEO_LIMIT`, `VIDEO_TOO_LARGE`,
+`VIDEO_UNREADABLE`, `VIDEO_TYPE_UNSUPPORTED`, `VIDEO_TOO_LONG`) instead of
+failing the snapshot.
 
 Native reaction events contain `message_ref`, exact `reaction_type`
 (`THUMBSUP` or `ThumbsDown`), and `ADDED` or `REMOVED`. They route only to the
