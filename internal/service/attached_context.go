@@ -50,6 +50,13 @@ func (s *Service) GetAgentAttachedContext(ctx context.Context, in AgentAttachedC
 		return unreadableAgentAttachedContext(), nil
 	}
 
+	// Resolved once, here: the lookup must know whether THIS provider may
+	// receive video before it parses a single message. ProviderAllowsAttachedVideo
+	// is already conjoined with ProviderAllowsAttachedContext, so a provider
+	// that only has allow_attached_video (misconfigured, since it is inert
+	// alone) still gets the pre-video-carry placeholder behavior.
+	request.AllowVideo = s.cfg.ProviderAllowsAttachedVideo(provider)
+
 	result, err := backend.attachedContext.LookupAttachedContext(ctx, request)
 	if err != nil {
 		s.logger.Warn("attached context lookup failed",
