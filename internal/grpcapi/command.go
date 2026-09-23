@@ -123,7 +123,13 @@ func (c *commandServer) StartAgentResponse(ctx context.Context, in *pb.StartAgen
 	if apiErr != nil {
 		return nil, grpcError(apiErr, requestIDFromContext(ctx))
 	}
-	return &pb.StartAgentResponseResponse{Response: agentReceiptToProto(receipt)}, nil
+	// Start alone: the label is settled when the response opens, and
+	// agentReceiptToProto deliberately does not carry it, so Update, Finish
+	// and Replace cannot restate it as though it were per-revision.
+	return &pb.StartAgentResponseResponse{
+		Response:           agentReceiptToProto(receipt),
+		MatchedSenderLabel: receipt.MatchedSenderLabel,
+	}, nil
 }
 
 func (c *commandServer) UpdateAgentResponse(ctx context.Context, in *pb.UpdateAgentResponseRequest) (*pb.UpdateAgentResponseResponse, error) {

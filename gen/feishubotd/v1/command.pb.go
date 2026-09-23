@@ -2755,10 +2755,27 @@ func (x *AgentResponseReceipt) GetMessageRef() string {
 }
 
 type StartAgentResponseResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Response      *AgentResponseReceipt  `protobuf:"bytes,1,opt,name=response,proto3" json:"response,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Response *AgentResponseReceipt  `protobuf:"bytes,1,opt,name=response,proto3" json:"response,omitempty"`
+	// The sender's Feishu display name, and only when this provider's own
+	// configuration singles that sender out by name — today that means a
+	// working_reaction_sender_overrides entry matched them. Empty for every
+	// other sender, and empty always for a provider that configures no
+	// overrides, which is also the only case where no contact lookup happens
+	// at all. It is the name the Contact API answered with, not the config key
+	// that matched it.
+	//
+	// It sits here and not on AgentResponseReceipt because it is a fact about
+	// the delivery, settled once when the response opens; the receipt is
+	// returned by Update, Finish and Replace as well, and re-sending it there
+	// would read as a per-revision fact.
+	//
+	// A label, never an identity: it addresses no message, looks nobody up,
+	// and is the same string this provider already wrote in its own config.
+	// Feishu ids remain private, as everywhere else on this service.
+	MatchedSenderLabel string `protobuf:"bytes,2,opt,name=matched_sender_label,json=matchedSenderLabel,proto3" json:"matched_sender_label,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *StartAgentResponseResponse) Reset() {
@@ -2796,6 +2813,13 @@ func (x *StartAgentResponseResponse) GetResponse() *AgentResponseReceipt {
 		return x.Response
 	}
 	return nil
+}
+
+func (x *StartAgentResponseResponse) GetMatchedSenderLabel() string {
+	if x != nil {
+		return x.MatchedSenderLabel
+	}
+	return ""
 }
 
 type UpdateAgentResponseResponse struct {
@@ -3634,9 +3658,10 @@ const file_feishubotd_v1_command_proto_rawDesc = "" +
 	"\x05phase\x18\x03 \x01(\x0e2!.feishubotd.v1.AgentResponsePhaseR\x05phase\x12\x1c\n" +
 	"\tduplicate\x18\x04 \x01(\bR\tduplicate\x12\x1f\n" +
 	"\vmessage_ref\x18\x05 \x01(\tR\n" +
-	"messageRef\"]\n" +
+	"messageRef\"\x8f\x01\n" +
 	"\x1aStartAgentResponseResponse\x12?\n" +
-	"\bresponse\x18\x01 \x01(\v2#.feishubotd.v1.AgentResponseReceiptR\bresponse\"^\n" +
+	"\bresponse\x18\x01 \x01(\v2#.feishubotd.v1.AgentResponseReceiptR\bresponse\x120\n" +
+	"\x14matched_sender_label\x18\x02 \x01(\tR\x12matchedSenderLabel\"^\n" +
 	"\x1bUpdateAgentResponseResponse\x12?\n" +
 	"\bresponse\x18\x01 \x01(\v2#.feishubotd.v1.AgentResponseReceiptR\bresponse\"^\n" +
 	"\x1bFinishAgentResponseResponse\x12?\n" +
