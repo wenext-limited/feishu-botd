@@ -264,3 +264,92 @@ func TestAgentWorkingReactionRemoveFailureDoesNotBlockFinish(t *testing.T) {
 		t.Fatalf("phase = %v, want completed despite the reaction remove failure", finished.Phase)
 	}
 }
+
+// The label is the one fact about who is speaking that this daemon hands a
+// provider, and it rides on Start so the provider knows before it composes a
+// prompt. It is set only when an override actually matched.
+func TestAgentStartReportsTheMatchedSenderLabel(t *testing.T) {
+	backend := newFakeAgentBackend()
+	backend.contactNames = map[string]string{"ou_sender_1": "王鑫禹"}
+	svc := newAgentTestServiceWithWorkingReactionOverrides(backend, "OnIt", map[string]string{"王鑫禹": "HEART"})
+	mustSubscribeAgent(t, svc, AgentSubscribeOptions{Provider: "agent", Commands: []string{"ask"}})
+	mustDispatchAgentPrompt(t, svc, CommandInput{
+		DeliveryID: "evt_label_match", Command: "ask", Prompt: "ask", ChatAlias: "ops",
+		SenderID: "ou_sender_1",
+		Metadata: map[string]string{"message_id": "om_trigger"},
+	})
+
+	receipt := startAgentResponse(t, svc, "agent", "evt_label_match", AgentResponseContent{Markdown: "working"})
+
+	if got := receipt.MatchedSenderLabel; got != "王鑫禹" {
+		t.Fatalf("matched sender label = %q, want 王鑫禹", got)
+	}
+}
+
+func TestAgentStartReportsNoLabelForAnyoneTheOverridesDoNotName(t *testing.T) {
+	backend := newFakeAgentBackend()
+	backend.contactNames = map[string]string{"ou_sender_2": "someone else"}
+	svc := newAgentTestServiceWithWorkingReactionOverrides(backend, "OnIt", map[string]string{"王鑫禹": "HEART"})
+	mustSubscribeAgent(t, svc, AgentSubscribeOptions{Provider: "agent", Commands: []string{"ask"}})
+	mustDispatchAgentPrompt(t, svc, CommandInput{
+		DeliveryID: "evt_label_nomatch", Command: "ask", Prompt: "ask", ChatAlias: "ops",
+		SenderID: "ou_sender_2",
+		Metadata: map[string]string{"message_id": "om_trigger"},
+	})
+
+	receipt := startAgentResponse(t, svc, "agent", "evt_label_nomatch", AgentResponseContent{Markdown: "working"})
+
+	if got := receipt.MatchedSenderLabel; got != "" {
+		t.Fatalf("matched sender label = %q, want empty: a resolved name is not a reason to hand it over", got)
+	}
+}
+
+// A provider that configures no overrides pays for no Contact call, so there
+// is no name to hand over even though one exists.
+func TestAgentStartReportsNoLabelWithoutOverrides(t *testing.T) {
+	backend := newFakeAgentBackend()
+	backend.contactNames = map[string]string{"ou_sender_1": "王鑫禹"}
+	svc := newAgentTestServiceWithWorkingReaction(backend, "OnIt")
+	mustSubscribeAgent(t, svc, AgentSubscribeOptions{Provider: "agent", Commands: []string{"ask"}})
+	mustDispatchAgentPrompt(t, svc, CommandInput{
+		DeliveryID: "evt_label_nooverride", Command: "ask", Prompt: "ask", ChatAlias: "ops",
+		SenderID: "ou_sender_1",
+		Metadata: map[string]string{"message_id": "om_trigger"},
+	})
+
+	receipt := startAgentResponse(t, svc, "agent", "evt_label_nooverride", AgentResponseContent{Markdown: "working"})
+
+	if got := receipt.MatchedSenderLabel; got != "" {
+		t.Fatalf("matched sender label = %q, want empty", got)
+	}
+}
+
+// A retried Start answers duplicate=true without resolving anything again;
+// the provider that retried still has to learn who is asking.
+func TestAgentDuplicateStartRepeatsTheMatchedSenderLabel(t *testing.T) {
+	backend := newFakeAgentBackend()
+	backend.contactNames = map[string]string{"ou_sender_1": "王鑫禹"}
+	svc := newAgentTestServiceWithWorkingReactionOverrides(backend, "OnIt", map[string]string{"王鑫禹": "HEART"})
+	mustSubscribeAgent(t, svc, AgentSubscribeOptions{Provider: "agent", Commands: []string{"ask"}})
+	mustDispatchAgentPrompt(t, svc, CommandInput{
+		DeliveryID: "evt_label_retry", Command: "ask", Prompt: "ask", ChatAlias: "ops",
+		SenderID: "ou_sender_1",
+		Metadata: map[string]string{"message_id": "om_trigger"},
+	})
+	startAgentResponse(t, svc, "agent", "evt_label_retry", AgentResponseContent{Markdown: "working"})
+
+	again, apiErr := svc.StartAgentResponse(context.Background(), StartAgentResponseInput{
+		Provider: "agent", DeliveryID: "evt_label_retry", OperationID: "start-1",
+		Content: AgentResponseContent{Markdown: "working"},
+	})
+	if apiErr != nil {
+		t.Fatalf("retried start: %v", apiErr)
+	}
+
+	if !again.Duplicate {
+		t.Fatalf("retried start should report duplicate")
+	}
+	if got := again.MatchedSenderLabel; got != "王鑫禹" {
+		t.Fatalf("matched sender label on retry = %q, want 王鑫禹", got)
+	}
+}

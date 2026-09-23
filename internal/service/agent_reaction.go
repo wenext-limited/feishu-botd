@@ -15,26 +15,34 @@ import (
 // matches. No overrides configured is the common case and skips the Contact
 // API call entirely, so a provider that never needed per-sender behavior
 // pays no extra latency or API quota for it.
+//
+// The second return value is that display name, and only when an override
+// actually matched it. It is the one fact about who is speaking that this
+// daemon is willing to hand a provider (StartAgentResponseResponse's
+// matched_sender_label), and it is free here: the lookup has already been
+// paid for, and the provider that configured the override wrote the same
+// string itself. Empty whenever the emoji is the plain default, which
+// includes every sender on a provider with no overrides at all.
 func (s *Service) resolveAgentWorkingReactionEmoji(
 	ctx context.Context,
 	contactUsers feishu.ContactUsers,
 	response *agentResponse,
 	provider, senderID string,
-) string {
+) (string, string) {
 	defaultEmoji := s.cfg.AgentWorkingReaction(provider)
 	overrides := s.cfg.AgentWorkingReactionOverrides(provider)
 	if len(overrides) == 0 || contactUsers == nil || senderID == "" {
-		return defaultEmoji
+		return defaultEmoji, ""
 	}
 	name, err := contactUsers.DisplayName(ctx, senderID)
 	if err != nil {
 		s.logAgentReactionFailure("contact lookup", response.responseID, err)
-		return defaultEmoji
+		return defaultEmoji, ""
 	}
 	if emoji, ok := overrides[name]; ok && emoji != "" {
-		return emoji
+		return emoji, name
 	}
-	return defaultEmoji
+	return defaultEmoji, ""
 }
 
 // addAgentWorkingReaction places the configured "working" reaction on the

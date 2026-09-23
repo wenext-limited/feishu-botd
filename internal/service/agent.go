@@ -183,6 +183,11 @@ type AgentResponseReceipt struct {
 	Phase      AgentResponsePhase
 	Duplicate  bool
 	MessageRef string
+	// MatchedSenderLabel is carried to the provider on Start alone. It is
+	// settled when the response opens and never changes, so Update, Finish
+	// and Replace leave it off the wire rather than restate it — see
+	// StartAgentResponseResponse.matched_sender_label.
+	MatchedSenderLabel string
 }
 
 type StartAgentResponseInput struct {
@@ -437,6 +442,12 @@ type agentResponse struct {
 	// configured or because the add attempt failed.
 	reactionMessageID string
 	reactionID        string
+	// matchedSenderLabel is the sender's display name when this provider's
+	// own working_reaction_sender_overrides singled them out, and empty
+	// otherwise. Kept on the response rather than returned once so that a
+	// retried Start — which answers duplicate=true without resolving
+	// anything again — tells the provider the same thing the first one did.
+	matchedSenderLabel string
 	// freeformReactions is every provider-chosen reaction (AddAgentReaction)
 	// placed on this response's triggering message, keyed by the operation id
 	// that placed it — see agentFreeformReaction. Unrelated to and never
@@ -860,7 +871,8 @@ func (s *Service) StartAgentResponse(ctx context.Context, in StartAgentResponseI
 		s.advanceAgentCoT(callCtx, backend.cotMessages, &response.cot, response.responseID, response.cotChatID, response.cotOriginMessageID, in.Content.TimelineSteps)
 	}
 	if backend.reactions != nil {
-		emoji := s.resolveAgentWorkingReactionEmoji(callCtx, backend.contactUsers, response, provider, delivery.input.SenderID)
+		emoji, matchedLabel := s.resolveAgentWorkingReactionEmoji(callCtx, backend.contactUsers, response, provider, delivery.input.SenderID)
+		response.matchedSenderLabel = matchedLabel
 		s.addAgentWorkingReaction(callCtx, backend.reactions, response, replyToMessageID, emoji)
 	}
 	delivery.response = response
@@ -1738,7 +1750,7 @@ func phaseForOutcome(outcome AgentResponseOutcome) AgentResponsePhase {
 }
 
 func receiptFor(response *agentResponse, duplicate bool) AgentResponseReceipt {
-	return AgentResponseReceipt{ResponseID: response.responseID, Revision: response.revision, Phase: response.phase, Duplicate: duplicate, MessageRef: response.messageRef}
+	return AgentResponseReceipt{ResponseID: response.responseID, Revision: response.revision, Phase: response.phase, Duplicate: duplicate, MessageRef: response.messageRef, MatchedSenderLabel: response.matchedSenderLabel}
 }
 
 func operationReceipt(response *agentResponse, op *agentOperation, duplicate bool) AgentResponseReceipt {
