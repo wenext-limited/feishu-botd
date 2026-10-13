@@ -89,8 +89,9 @@ func agentAttachedContextHeaderToProto(
 	in feishu.AttachedContext,
 ) (*pb.AgentAttachedContextHeader, []attachedContextStreamImage, []attachedContextStreamVideo) {
 	header := &pb.AgentAttachedContextHeader{
-		Status:    agentAttachedContextStatusToProto(in.Status),
-		Truncated: in.Truncated,
+		RequesterLabel: in.RequesterLabel,
+		Status:         agentAttachedContextStatusToProto(in.Status),
+		Truncated:      in.Truncated,
 	}
 	for _, issue := range in.Issues {
 		header.Issues = append(header.Issues, &pb.AgentAttachedContextIssue{

@@ -226,6 +226,9 @@ message AgentAttachedContextMessage {
 }
 
 message AgentAttachedContextHeader {
+  // Snapshot-local participant label of the triggering sender; empty if unknown.
+  // No raw sender identity crosses the provider boundary.
+  string requester_label = 5;
   AgentAttachedContextStatus status = 1;
   repeated AgentAttachedContextMessage messages = 2;
   repeated AgentAttachedContextIssue issues = 3;

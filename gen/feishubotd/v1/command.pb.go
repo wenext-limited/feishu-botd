@@ -1428,13 +1428,16 @@ func (x *AgentAttachedContextMessage) GetVideos() []*AgentAttachedContextVideoDe
 }
 
 type AgentAttachedContextHeader struct {
-	state         protoimpl.MessageState         `protogen:"open.v1"`
-	Status        AgentAttachedContextStatus     `protobuf:"varint,1,opt,name=status,proto3,enum=feishubotd.v1.AgentAttachedContextStatus" json:"status,omitempty"`
-	Messages      []*AgentAttachedContextMessage `protobuf:"bytes,2,rep,name=messages,proto3" json:"messages,omitempty"`
-	Issues        []*AgentAttachedContextIssue   `protobuf:"bytes,3,rep,name=issues,proto3" json:"issues,omitempty"`
-	Truncated     bool                           `protobuf:"varint,4,opt,name=truncated,proto3" json:"truncated,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Snapshot-local participant label of the triggering sender; empty if unknown.
+	// No raw sender identity crosses the provider boundary.
+	RequesterLabel string                         `protobuf:"bytes,5,opt,name=requester_label,json=requesterLabel,proto3" json:"requester_label,omitempty"`
+	Status         AgentAttachedContextStatus     `protobuf:"varint,1,opt,name=status,proto3,enum=feishubotd.v1.AgentAttachedContextStatus" json:"status,omitempty"`
+	Messages       []*AgentAttachedContextMessage `protobuf:"bytes,2,rep,name=messages,proto3" json:"messages,omitempty"`
+	Issues         []*AgentAttachedContextIssue   `protobuf:"bytes,3,rep,name=issues,proto3" json:"issues,omitempty"`
+	Truncated      bool                           `protobuf:"varint,4,opt,name=truncated,proto3" json:"truncated,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *AgentAttachedContextHeader) Reset() {
@@ -1465,6 +1468,13 @@ func (x *AgentAttachedContextHeader) ProtoReflect() protoreflect.Message {
 // Deprecated: Use AgentAttachedContextHeader.ProtoReflect.Descriptor instead.
 func (*AgentAttachedContextHeader) Descriptor() ([]byte, []int) {
 	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *AgentAttachedContextHeader) GetRequesterLabel() string {
+	if x != nil {
+		return x.RequesterLabel
+	}
+	return ""
 }
 
 func (x *AgentAttachedContextHeader) GetStatus() AgentAttachedContextStatus {
@@ -3549,8 +3559,9 @@ const file_feishubotd_v1_command_proto_rawDesc = "" +
 	"authorType\x12\x12\n" +
 	"\x04text\x18\x03 \x01(\tR\x04text\x12J\n" +
 	"\x06images\x18\x04 \x03(\v22.feishubotd.v1.AgentAttachedContextImageDescriptorR\x06images\x12J\n" +
-	"\x06videos\x18\x05 \x03(\v22.feishubotd.v1.AgentAttachedContextVideoDescriptorR\x06videos\"\x87\x02\n" +
-	"\x1aAgentAttachedContextHeader\x12A\n" +
+	"\x06videos\x18\x05 \x03(\v22.feishubotd.v1.AgentAttachedContextVideoDescriptorR\x06videos\"\xb0\x02\n" +
+	"\x1aAgentAttachedContextHeader\x12'\n" +
+	"\x0frequester_label\x18\x05 \x01(\tR\x0erequesterLabel\x12A\n" +
 	"\x06status\x18\x01 \x01(\x0e2).feishubotd.v1.AgentAttachedContextStatusR\x06status\x12F\n" +
 	"\bmessages\x18\x02 \x03(\v2*.feishubotd.v1.AgentAttachedContextMessageR\bmessages\x12@\n" +
 	"\x06issues\x18\x03 \x03(\v2(.feishubotd.v1.AgentAttachedContextIssueR\x06issues\x12\x1c\n" +
