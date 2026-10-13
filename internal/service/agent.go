@@ -370,6 +370,10 @@ type agentDelivery struct {
 	sendRetryClosed          bool
 	sendRetryCode            string
 	response                 *agentResponse
+
+	// Retain only the private lookup keys when response start drops input.
+	attachedContext feishu.AttachedContextRequest
+
 	// uploadedImages maps an upload operation id to the image_key it minted, so
 	// a retried upload does not spend a second one. It lives on the delivery
 	// rather than the response because an image is useful before Start and
@@ -653,8 +657,13 @@ func (b *agentBroker) dispatchMessageForProvider(in CommandInput, provider strin
 			allowedProviders:         allowed,
 			expiresAt:                now.Add(b.ttl),
 			attachedContextExpiresAt: now.Add(agentAttachedContextTTL),
-			state:                    agentDeliveryOpen,
-			messageDedupeKey:         messageDedupeKey,
+			attachedContext: feishu.AttachedContextRequest{
+				ThreadID:          strings.TrimSpace(in.Metadata["thread_id"]),
+				TriggerMessageID:  strings.TrimSpace(in.Metadata["message_id"]),
+				TriggerCreateTime: strings.TrimSpace(in.Metadata["create_time"]),
+			},
+			state:            agentDeliveryOpen,
+			messageDedupeKey: messageDedupeKey,
 		}
 		b.recordConversationLocked(in, allowed, now)
 		if messageDedupeKey != "" {

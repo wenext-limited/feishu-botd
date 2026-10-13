@@ -166,3 +166,36 @@ func TestGetAgentAttachedContextMapsBackendFailureToTypedUnreadable(t *testing.T
 		t.Fatalf("result = %#v", got)
 	}
 }
+
+func TestGetAgentAttachedContextSurvivesResponseStartCompaction(t *testing.T) {
+	backend := &attachedContextTestBackend{fakeSender: &fakeSender{messageID: "om_answer"},
+		result: feishu.AttachedContext{Status: feishu.AttachedContextFound}}
+	svc := newAttachedContextTestService(backend)
+	app := svc.backends["default"]
+	app.dynamicCards = newFakeAgentBackend()
+	svc.backends["default"] = app
+	seedAttachedContextDelivery(t, svc, "nous", "delivery_topic")
+	startAgentResponse(t, svc, "nous", "delivery_topic", AgentResponseContent{Markdown: "Reading topic"})
+	delivery := svc.agentBroker.deliveries["delivery_topic"]
+	if delivery.input.Prompt != "" || delivery.input.Metadata != nil {
+		t.Fatal("response start must still release the inbound payload")
+	}
+	_, apiErr := svc.GetAgentAttachedContext(context.Background(), AgentAttachedContextInput{Provider: "nous", DeliveryID: "delivery_topic"})
+	if apiErr != nil {
+		t.Fatalf("read after start: %v", apiErr)
+	}
+	want := feishu.AttachedContextRequest{ThreadID: "omt_topic", TriggerMessageID: "om_guide", TriggerCreateTime: "1754380800123"}
+	if len(backend.requests) != 1 || backend.requests[0] != want {
+		t.Fatalf("lookup after start = %#v, want %#v", backend.requests, want)
+	}
+	if _, e := svc.GetAgentAttachedContext(context.Background(), AgentAttachedContextInput{Provider: "other", DeliveryID: "delivery_topic"}); e == nil || e.Code != "unknown_delivery" {
+		t.Fatalf("other provider after start: %v", e)
+	}
+	delivery.attachedContextExpiresAt = time.Now().Add(-time.Second)
+	if _, e := svc.GetAgentAttachedContext(context.Background(), AgentAttachedContextInput{Provider: "nous", DeliveryID: "delivery_topic"}); e == nil || e.Code != "unknown_delivery" {
+		t.Fatalf("expired after start: %v", e)
+	}
+	if len(backend.requests) != 1 {
+		t.Fatal("unauthorized or expired read reached backend")
+	}
+}

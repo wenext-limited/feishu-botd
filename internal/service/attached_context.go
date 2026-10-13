@@ -92,12 +92,7 @@ func (b *agentBroker) attachedContextRequest(
 	if delivery.attachedContextExpiresAt.IsZero() || now.After(delivery.attachedContextExpiresAt) {
 		return "", feishu.AttachedContextRequest{}, false
 	}
-	request := feishu.AttachedContextRequest{
-		ThreadID:          strings.TrimSpace(delivery.input.Metadata["thread_id"]),
-		TriggerMessageID:  strings.TrimSpace(delivery.input.Metadata["message_id"]),
-		TriggerCreateTime: strings.TrimSpace(delivery.input.Metadata["create_time"]),
-	}
-	return delivery.appAlias, request, true
+	return delivery.appAlias, delivery.attachedContext, true
 }
 
 func unreadableAgentAttachedContext() feishu.AttachedContext {
