@@ -52,6 +52,15 @@ service CommandService {
   // placed here is never auto-removed — it is a deliberate answer, not a
   // busy signal, so it outlives the response.
   rpc AddAgentReaction(AddAgentReactionRequest) returns (AddAgentReactionResponse);
+
+  // PostAgentMessage posts one ordinary message that no inbound delivery
+  // triggered: a new root message in a chat the provider is granted, or a
+  // reply (optionally in a Feishu thread) to a message_ref botd delivered or
+  // authored. Every posted message is agent-owned by this provider, so an
+  // unmentioned reply to it routes back exactly like a reply to a response
+  // card. Gated by allow_proactive_messages and the provider's
+  // proactive_chat_aliases allowlist.
+  rpc PostAgentMessage(PostAgentMessageRequest) returns (PostAgentMessageResponse);
 }
 
 // ProviderService is the FUTURE pull path (botd asks a registered client to
@@ -115,7 +124,16 @@ message SubscribeAgentEventsRequest {
   // Native Feishu reactions attached to agent-authored messages. This is a
   // separate permission and event family from interactive card actions.
   bool include_message_reactions = 5;
-  reserved 6 to 15;
+  // Ambient group messages: every human text message in a group chat this
+  // provider is granted (allow_ambient_messages plus ambient_chat_aliases),
+  // whether or not it mentions the bot. Delivered as InboundAgentMessage with
+  // addressing = AMBIENT. An ambient event is an observation, not a prompt:
+  // it carries no response capability, so Start/Follow-up on its delivery_id
+  // are rejected. A message that is also addressed (mention or reply to an
+  // agent-owned message) is delivered once, with the addressed variant.
+  // Requires the app's im:message.group_msg scope.
+  bool include_ambient_messages = 6;
+  reserved 7 to 15;
 }
 
 message SubscribeAgentEventsResponse {
@@ -148,6 +166,46 @@ message InboundAgentMessage {
   // Current group title as untrusted, provider-safe context. Empty for direct
   // messages and when the fail-soft chat lookup is unavailable.
   string conversation_title = 5;
+
+  // Stable provider-safe identity of this inbound message, in the same
+  // message_ref space as AgentResponseReceipt.message_ref. It is a valid
+  // PostAgentMessage reply target for this provider when the message's chat
+  // is in the provider's proactive_chat_aliases.
+  string message_ref = 6;
+  // Opaque identity of the Feishu thread (topic) holding this message; empty
+  // when the message is not in a thread.
+  string thread_ref = 7;
+  // message_ref of the thread's root message, which may be bot- or
+  // human-authored; empty when the message is not in a thread or is itself
+  // the root. Lets a provider tie a reply-to-a-reply back to the root it
+  // mirrored, which reply_to_message_ref (the direct parent) cannot.
+  string thread_root_message_ref = 8;
+  // Why botd delivered this message to this provider.
+  InboundAddressing addressing = 9;
+  // People (not bots) mentioned in the message, in order of appearance.
+  // text renders each of them inline as "@<name>"; the bot's own mention is
+  // still stripped. Populated, and text rendered that way, only for a
+  // provider granted allow_ambient_messages, which already observes every
+  // member of its chats. Every other provider keeps the historical text
+  // byte-for-byte (raw mention keys in plain text, "@participant" in rich
+  // text) and an empty list.
+  repeated InboundMention mentions = 10;
+}
+
+enum InboundAddressing {
+  INBOUND_ADDRESSING_UNSPECIFIED = 0;
+  INBOUND_ADDRESSING_DIRECT = 1; // p2p chat with the bot
+  INBOUND_ADDRESSING_MENTION = 2; // group message that mentions the bot
+  INBOUND_ADDRESSING_REPLY = 3; // unmentioned reply to an agent-owned message
+  INBOUND_ADDRESSING_AMBIENT = 4; // include_ambient_messages observation
+}
+
+message InboundMention {
+  // Opaque provider-safe user identity, the same space as
+  // InboundAgentEvent.sender_id and SendAgentFollowUpRequest.mention_user_id.
+  string user_id = 1;
+  // Display name as the Feishu event carried it. Untrusted label.
+  string name = 2;
 }
 
 message GetAgentAttachedContextRequest {
@@ -548,6 +606,42 @@ message AgentFollowUpReceipt {
 
 message SendAgentFollowUpResponse {
   AgentFollowUpReceipt follow_up = 1;
+}
+
+message PostAgentMessageRequest {
+  string provider = 1; // must match the bearer-authenticated principal
+  // Provider-generated idempotency key. Reusing it with different content is
+  // rejected; retrying the same operation returns duplicate=true and the first
+  // post's refs.
+  string operation_id = 2;
+  oneof target {
+    // New root message in this configured or opaque chat alias. Must be in
+    // the provider's proactive_chat_aliases.
+    string chat_alias = 3;
+    // Reply to a message_ref this provider received (any addressing) or
+    // authored (responses, follow-ups, earlier posts). The reply lands in the
+    // chat that message lives in, which must also be in
+    // proactive_chat_aliases.
+    string reply_to_message_ref = 4;
+  }
+  // With reply_to_message_ref: reply inside a Feishu thread, opening one on
+  // the target if it has none. Ignored for chat_alias.
+  bool reply_in_thread = 5;
+  string markdown = 10; // complete body
+  string summary = 11; // compact notification/preview text
+  // Optional native Feishu mention prepended to the first post paragraph.
+  string mention_user_id = 12;
+  reserved 6 to 9, 13 to 31;
+}
+
+message PostAgentMessageResponse {
+  // Stable provider-safe identity of the posted message: a later
+  // PostAgentMessage reply target, and what InboundAgentMessage carries as
+  // reply_to_message_ref / thread_root_message_ref when people answer it.
+  string message_ref = 1;
+  // Thread holding the posted message; empty for an unthreaded root.
+  string thread_ref = 2;
+  bool duplicate = 3;
 }
 
 message AddAgentReactionRequest {

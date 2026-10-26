@@ -30,6 +30,7 @@ const (
 	CommandService_UploadAgentImage_FullMethodName        = "/feishubotd.v1.CommandService/UploadAgentImage"
 	CommandService_SendAgentFollowUp_FullMethodName       = "/feishubotd.v1.CommandService/SendAgentFollowUp"
 	CommandService_AddAgentReaction_FullMethodName        = "/feishubotd.v1.CommandService/AddAgentReaction"
+	CommandService_PostAgentMessage_FullMethodName        = "/feishubotd.v1.CommandService/PostAgentMessage"
 )
 
 // CommandServiceClient is the client API for CommandService service.
@@ -78,6 +79,14 @@ type CommandServiceClient interface {
 	// placed here is never auto-removed — it is a deliberate answer, not a
 	// busy signal, so it outlives the response.
 	AddAgentReaction(ctx context.Context, in *AddAgentReactionRequest, opts ...grpc.CallOption) (*AddAgentReactionResponse, error)
+	// PostAgentMessage posts one ordinary message that no inbound delivery
+	// triggered: a new root message in a chat the provider is granted, or a
+	// reply (optionally in a Feishu thread) to a message_ref botd delivered or
+	// authored. Every posted message is agent-owned by this provider, so an
+	// unmentioned reply to it routes back exactly like a reply to a response
+	// card. Gated by allow_proactive_messages and the provider's
+	// proactive_chat_aliases allowlist.
+	PostAgentMessage(ctx context.Context, in *PostAgentMessageRequest, opts ...grpc.CallOption) (*PostAgentMessageResponse, error)
 }
 
 type commandServiceClient struct {
@@ -228,6 +237,16 @@ func (c *commandServiceClient) AddAgentReaction(ctx context.Context, in *AddAgen
 	return out, nil
 }
 
+func (c *commandServiceClient) PostAgentMessage(ctx context.Context, in *PostAgentMessageRequest, opts ...grpc.CallOption) (*PostAgentMessageResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PostAgentMessageResponse)
+	err := c.cc.Invoke(ctx, CommandService_PostAgentMessage_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // CommandServiceServer is the server API for CommandService service.
 // All implementations must embed UnimplementedCommandServiceServer
 // for forward compatibility.
@@ -274,6 +293,14 @@ type CommandServiceServer interface {
 	// placed here is never auto-removed — it is a deliberate answer, not a
 	// busy signal, so it outlives the response.
 	AddAgentReaction(context.Context, *AddAgentReactionRequest) (*AddAgentReactionResponse, error)
+	// PostAgentMessage posts one ordinary message that no inbound delivery
+	// triggered: a new root message in a chat the provider is granted, or a
+	// reply (optionally in a Feishu thread) to a message_ref botd delivered or
+	// authored. Every posted message is agent-owned by this provider, so an
+	// unmentioned reply to it routes back exactly like a reply to a response
+	// card. Gated by allow_proactive_messages and the provider's
+	// proactive_chat_aliases allowlist.
+	PostAgentMessage(context.Context, *PostAgentMessageRequest) (*PostAgentMessageResponse, error)
 	mustEmbedUnimplementedCommandServiceServer()
 }
 
@@ -316,6 +343,9 @@ func (UnimplementedCommandServiceServer) SendAgentFollowUp(context.Context, *Sen
 }
 func (UnimplementedCommandServiceServer) AddAgentReaction(context.Context, *AddAgentReactionRequest) (*AddAgentReactionResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method AddAgentReaction not implemented")
+}
+func (UnimplementedCommandServiceServer) PostAgentMessage(context.Context, *PostAgentMessageRequest) (*PostAgentMessageResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method PostAgentMessage not implemented")
 }
 func (UnimplementedCommandServiceServer) mustEmbedUnimplementedCommandServiceServer() {}
 func (UnimplementedCommandServiceServer) testEmbeddedByValue()                        {}
@@ -504,6 +534,24 @@ func _CommandService_AddAgentReaction_Handler(srv interface{}, ctx context.Conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _CommandService_PostAgentMessage_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PostAgentMessageRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CommandServiceServer).PostAgentMessage(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CommandService_PostAgentMessage_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CommandServiceServer).PostAgentMessage(ctx, req.(*PostAgentMessageRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // CommandService_ServiceDesc is the grpc.ServiceDesc for CommandService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -538,6 +586,10 @@ var CommandService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "AddAgentReaction",
 			Handler:    _CommandService_AddAgentReaction_Handler,
+		},
+		{
+			MethodName: "PostAgentMessage",
+			Handler:    _CommandService_PostAgentMessage_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{
