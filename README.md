@@ -103,7 +103,9 @@ and per-caller defaults. This example keeps the existing top-level app as
       "allow_attached_video": false,
       "allow_follow_up_messages": false,
       "allow_image_upload": false,
-      "allow_legacy_commands": false
+      "allow_legacy_commands": false,
+      "allow_ambient_messages": false,
+      "allow_proactive_messages": false
     }
   },
   "commands": {
@@ -194,7 +196,7 @@ a separate token file. The general bearer and every provider token must contain
 at least 32 bytes. Provider tokens must be unique and must differ from the
 general bearer. Token loading trims and uses only the first line of each file.
 Existing deployments with a shorter general bearer must rotate it before
-upgrading because the daemon now fails closed at startup. The six agent RPCs
+upgrading because the daemon now fails closed at startup. The agent RPCs
 require the matching provider token on both Unix and loopback TCP. When this map
 is non-empty, legacy command `Subscribe`/`Respond` is scoped the same way; existing
 legacy deployments without the map keep their current local/global-token mode.
@@ -214,6 +216,14 @@ additionally permit downloaded, bounded video bytes in that same snapshot; it
 defaults to false and does nothing without `allow_attached_context` also set.
 `allow_image_upload` separately permits uploading an image so a response can
 render it, and also defaults to false.
+`allow_ambient_messages` with an `ambient_chat_aliases` list permits observing
+every human message in those groups, addressed or not, and
+`allow_proactive_messages` with a `proactive_chat_aliases` list permits
+`PostAgentMessage` there: a new root, or a reply to a message the provider
+received or authored. Both default to false, require their alias list (and the
+list its flag), and accept only group aliases the provider's `allowed_apps`
+can reach; proactive posting also requires `state_dir`. See
+[Ambient observation and proactive posts](docs/agent.md#ambient-observation-and-proactive-posts).
 `allowed_apps` optionally limits that provider to configured app aliases. When
 the field is absent, all apps are allowed; an explicit empty list allows none,
 and `null` is rejected. botd applies the allowlist before event fan-out and

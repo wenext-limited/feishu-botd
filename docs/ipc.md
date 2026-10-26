@@ -132,7 +132,7 @@ is supplied.
 | --- | --- |
 | `Subscribe` | Provider opens a server stream for one or more command names. botd pushes matching `InboundCommand` values. |
 | `Respond` | Provider sends a markdown or card reply for a previously delivered `delivery_id`. |
-| `SubscribeAgentEvents` | Agent opens a server stream for exact commands, unmatched conversational messages, card actions, native message reactions, or any combination. |
+| `SubscribeAgentEvents` | Agent opens a server stream for exact commands, unmatched conversational messages, card actions, native message reactions, ambient group messages, or any combination. |
 | `GetAgentAttachedContext` | Lazily streams the bounded topic snapshot and image chunks for one exact inbound delivery. |
 | `StartAgentResponse` | Creates a streaming CardKit 2.0 reply and returns an opaque response handle, provider-safe message reference, and revision 1. |
 | `UpdateAgentResponse` | Applies a complete accumulated markdown snapshot, and any timeline part it carries, at the expected revision. |
@@ -140,6 +140,8 @@ is supplied.
 | `ReplaceAgentResponse` | Replaces a terminal card's answer and timeline at the exact final revision without reopening streaming mode. |
 | `UploadAgentImage` | Uploads one image under the app that owns either a live inbound delivery or a conversation the provider already received an event from, and returns the `image_key` a card or follow-up can embed. |
 | `SendAgentFollowUp` | Posts one later, standalone message into a conversation the provider has already received an agent event from. |
+| `AddAgentReaction` | Places one provider-chosen native reaction on the message that triggered a response. |
+| `PostAgentMessage` | Posts one message no inbound delivery triggered: a new root in a granted chat, or a reply (optionally in a thread) to a `message_ref` the provider received or authored. |
 
 Inbound Feishu events are dispatched only for an app whose `commands.enabled`
 is true (the existing `FEISHU_BOTD_COMMANDS_ENABLED` override affects the
@@ -149,12 +151,15 @@ per configured app and handles `im.message.receive_v1`. It accepts text and
 rich-text (post) messages
 from globally unique configured channel aliases after either verifying that
 app's configured bot-name/bot-id mention or proving that an unmentioned reply's
-parent is owned by an agent provider. Mention tokens are stripped. A rich-text
+parent is owned by an agent provider; a chat some provider holds the ambient
+grant for additionally admits every human message (see "Ambient messages").
+Mention tokens are stripped. A rich-text
 trigger is flattened into the prompt: text runs pass through, other users'
 mentions become `@participant`, and content the daemon cannot carry degrades to
 an inline placeholder (`[image]`, `[unsupported video file]`) instead of
 dropping the whole message, so a provider can still answer the words beside an
-attachment it cannot see. For exact
+attachment it cannot see. A provider holding `allow_ambient_messages` instead
+gets other people's mentions rendered as `@<name>`. For exact
 command routing it derives the first word as `command` with the rest as `text`;
 the complete prompt remains authoritative for conversational routing.
 
@@ -207,13 +212,15 @@ Disallowed handles return the same `unknown_delivery`, `unknown_response`, or
 - `include_unmatched_messages = true` for natural conversational prompts;
 - `include_card_actions = true` for actions on cards owned by that provider;
 - `include_message_reactions = true` for native thumbs attached to messages
-  authored by that provider.
+  authored by that provider;
+- `include_ambient_messages = true` for every human text message in the group
+  chats the provider is granted, addressed to the bot or not.
 
 The `provider` must match the identity authenticated by the provider bearer;
 the general notification bearer cannot use an agent RPC. The daemon also checks
 requested selectors against that provider's `allowed_commands`,
-`allow_unmatched_messages`, `allow_card_actions`, and
-`allow_message_reactions` before registering the
+`allow_unmatched_messages`, `allow_card_actions`,
+`allow_message_reactions`, and `allow_ambient_messages` before registering the
 stream. Legacy streams additionally require `allow_legacy_commands`, and
 follow-up sends require `allow_follow_up_messages`. Attached topic reads require
 the independent, default-false `allow_attached_context` grant. Event candidates are then
@@ -261,9 +268,59 @@ authorization.
 An unmentioned group reply is delivered only when the persisted 24-hour owner
 record identifies an app-allowed provider; it is pinned to that provider and
 cannot enter the legacy command or local-script paths. Unknown and expired
-parents are ignored. Feishu delivery of mentionless replies additionally
+parents are ignored unless the message reaches an ambient subscription (below).
+Feishu delivery of mentionless replies additionally
 requires the sensitive `im:message.group_msg` scope; `group_at_msg` only covers
 messages that mention the bot.
+
+Every `InboundAgentMessage` also carries these additive fields, for every
+addressing and every provider:
+
+| Field | Semantics |
+| --- | --- |
+| `message_ref` | This inbound message's provider-safe identity, in the same space as `AgentResponseReceipt.message_ref` and `InboundMessageReaction.message_ref`. |
+| `thread_ref` | Opaque identity of the Feishu thread (topic) holding the message; empty outside a thread. Domain-separated from message refs. |
+| `thread_root_message_ref` | `message_ref` of the thread's root, bot- or human-authored; empty outside a thread and on the root itself. It is Feishu's `root_id`, so a reply to a reply still names the root. |
+| `addressing` | `DIRECT` (p2p), `MENTION` (group message mentioning the bot), `REPLY` (unmentioned reply to an agent-owned message), or `AMBIENT`. |
+| `mentions` | People, not bots, the message mentions, in order of appearance and without repeats: opaque `user_id` in the `sender_id` / `mention_user_id` space plus the event's display `name`. Populated only for a provider holding `allow_ambient_messages`. |
+
+`reply_to_message_ref` keeps its meaning exactly: the parent's ref only when
+the receiving provider authored that parent. Raw message, thread, root, and
+parent ids still never cross the boundary.
+
+#### Ambient messages
+
+`include_ambient_messages = true` requires `allow_ambient_messages` and
+receives every human text or rich-text message in the group chats named by
+that provider's `ambient_chat_aliases`, whether or not it mentions the bot or
+replies to anything, as `InboundAgentMessage` with `addressing = AMBIENT`. A
+message Feishu attributes to an app (`sender_type` other than `user`), or to
+this app's own bot identity, is never ambient. Ingress admits an unaddressed
+message only when some app-allowed provider holds the grant for its chat, so a
+deployment without ambient grants still discards those messages before any
+lookup.
+
+Ambient is an observation, never a prompt. It records no delivery claim and no
+conversation grant: `StartAgentResponse`, `GetAgentAttachedContext`, and a
+delivery-scoped `UploadAgentImage` on its `delivery_id` return
+`unknown_delivery`, and `SendAgentFollowUp` on its `conversation_id` returns
+`unknown_conversation` unless an addressed event already earned that scope. A
+message that is also addressed to a provider — a mention routed to it, an
+unmentioned reply to its own message, or a legacy command it took — reaches
+that provider once, with the addressed variant, even across redeliveries; every other ambient-granted provider receives the ambient
+copy under the same `delivery_id`, including when a legacy command consumer or
+another agent owns the reply. An ambient copy of an unmentioned reply to the
+receiving provider's own message still sets `reply_to_message_ref`. Ambient
+copies are deduplicated per provider for the dedupe TTL.
+
+A provider holding `allow_ambient_messages` already observes every member of
+its chats, so its deliveries — every addressing, not only ambient — also carry
+mention identities: `text` renders other people's mentions inline as `@<name>`
+(the bot's own mention stays stripped) and `mentions` is populated. Every other
+provider keeps the historical rendering byte-for-byte: plain text keeps
+Feishu's raw mention keys and rich text keeps `@participant`, with `mentions`
+empty. `command` and `command_text` always derive from the historical prompt.
+Ambient delivery requires the app's `im:message.group_msg` scope.
 
 `GetAgentAttachedContext(provider, delivery_id)` is a lazy, provider-authenticated
 server stream. The exact delivery is the only lookup capability; it expires
@@ -377,9 +434,9 @@ Feishu automatically closes streaming mode after roughly 10 minutes and allows
 CardKit entity operations for 14 days. Response handles and operation receipts
 remain process-local and expire after the configured dedupe TTL (six hours by
 default), so an old card cannot be resumed through its prior `response_id`.
-Native-reaction ownership alone is persisted under `state_dir` for 24 hours;
-the snapshot is local to one daemon and is not an active-active coordination
-store. Run one active botd process owning a given Feishu app.
+Agent-message ownership is persisted under `state_dir` for 24 hours, and
+proactive reply routes for seven days; both are local to one daemon and are
+not an active-active coordination store. Run one active botd process owning a given Feishu app.
 
 With `agent_providers` configured, startup requires the dedupe TTL to be at
 least one hour plus `send_timeout`. That keeps an ambiguous Start claim alive
@@ -446,6 +503,72 @@ ambiguous attempt releases the operation id for corrected content.
 
 Older daemons do not implement this RPC and return `UNIMPLEMENTED`.
 
+#### Agent proactive messages
+
+`PostAgentMessage` posts one ordinary message that no inbound delivery
+triggered. It requires `allow_proactive_messages` and accepts `provider`, an
+`operation_id`, exactly one target, the complete `markdown` (30 KiB), an
+optional `summary` (200 bytes) used as title and preview, and an optional
+native `mention_user_id`:
+
+| Target | Destination | Check |
+| --- | --- | --- |
+| `chat_alias` | New root message in that configured or opaque unconfigured-group alias | The alias is in the provider's `proactive_chat_aliases` and resolves to an app the provider may access |
+| `reply_to_message_ref` (+ `reply_in_thread`) | Reply to that message, inside a Feishu thread when `reply_in_thread` is set (opening one if the target has none) | The provider received that message (any addressing) in a proactive chat, or authored it there — a response card, follow-up, or earlier post — and the target's chat is still in `proactive_chat_aliases` |
+
+`reply_in_thread` is ignored for `chat_alias`. A chat the provider may not
+speak in and a chat botd cannot resolve both return `unknown_channel`; an
+unknown, expired, foreign, or out-of-scope reply target returns
+`unknown_message`. Neither says which check failed. A configured alias that
+now names a different chat than when the ref was retained makes that ref
+unaddressable. An opaque alias is a one-way digest, so a root post into an
+unconfigured group works only after botd has seen a message there.
+
+The response carries `message_ref` (the first posted part), `thread_ref`
+(empty for an unthreaded root), and `duplicate`. Every posted part is recorded
+in the agent-message ownership store under the provider, so an unmentioned
+reply to it routes back as `REPLY` exactly like a reply to a response card, and
+its reactions route to the provider. Each ref is a later `PostAgentMessage`
+target and is what inbound messages carry as `reply_to_message_ref` /
+`thread_root_message_ref` when people answer.
+
+Idempotency follows `SendAgentFollowUp`: a completed retry with the same
+`operation_id` and content returns `duplicate = true` and the first post's
+refs, different content (including a different target) is an
+`operation_conflict`, and a concurrent attempt is a retryable
+`operation_in_flight`. The Feishu message UUID is derived from the provider,
+operation id, and content, so a retry reuses it and Feishu deduplicates it for
+one hour — even across a daemon restart, which loses the in-memory operation
+receipt. While botd still holds the receipt it refuses a retry outside that
+window with `send_retry_expired`; after a restart it cannot, and a retry more
+than an hour later posts again. A definitive rejection with nothing in doubt
+releases the operation id. A long message is split into several Feishu
+messages; if Feishu accepts some parts and then fails, the accepted parts are
+owned by the provider, the operation stays pinned to its content, and botd
+returns retryable `feishu_unavailable` (or `send_state_unknown` for a
+definitive rejection) so only the identical request — whose parts Feishu
+deduplicates — can finish it. If the post succeeded but its ownership or route
+could not be recorded, botd returns retryable `ownership_store_unavailable` or
+`message_route_store_unavailable`; retrying the same operation repairs the
+record without posting again.
+
+Before dispatch, botd retains a reply route for a group message for every
+proactive-granted provider that could receive it (any of them when the message
+may be addressed, only the ambient-granted ones when it can only be observed),
+so the ref is already a target when a provider acts on it; after dispatch it
+narrows the route to the providers that actually received the message, by any
+selector, cumulatively across redeliveries, and drops it when none did. Routes
+for messages a proactive provider authors are granted to that provider. A
+legacy `Subscribe` delivery carries no ref and earns no route. Without any
+proactive grant nothing is written. Routes live
+in an append-only journal, `agent-message-routes.jsonl`, under `state_dir`, for
+seven days. It holds refs, public aliases, provider names, and expiry in the
+clear and seals raw chat, message, and thread ids with AES-256-GCM under a key
+derived from the owning app's secret, so refs stay addressable across restarts
+while the file alone reveals no Feishu id. Rotating an app secret makes that
+app's retained routes unaddressable. `allow_proactive_messages` therefore
+requires `state_dir`.
+
 #### Agent card actions
 Each `AgentResponseAction` carries a provider-defined `action_id`, label,
 optional JSON-object `payload_json`, and default/primary/danger style. A
@@ -489,7 +612,7 @@ stable machine `code`, a redacted `message`, a `retryable` flag, and a
 | 400 (`missing_*`, `invalid_severity`, `invalid_json`, `field_too_large`, ...) | `INVALID_ARGUMENT` |
 | 401 `unauthorized` | `UNAUTHENTICATED` |
 | 403 `provider_identity_mismatch`, `provider_scope_denied` | `PERMISSION_DENIED` |
-| 404 `unknown_channel`, `unknown_delivery`, `unknown_response`, `unknown_action`, `unknown_conversation`, `not_found` | `NOT_FOUND` |
+| 404 `unknown_channel`, `unknown_delivery`, `unknown_response`, `unknown_action`, `unknown_conversation`, `unknown_message`, `not_found` | `NOT_FOUND` |
 | 409 `dedupe_conflict`, `already_responded` | `ALREADY_EXISTS` |
 | 409 `operation_conflict` | `ALREADY_EXISTS` |
 | 409 `dedupe_in_flight`, `response_in_flight`, `operation_in_flight`, `revision_conflict` | `ABORTED` |

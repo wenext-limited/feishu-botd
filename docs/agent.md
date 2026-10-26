@@ -32,9 +32,12 @@ delivery does not support store apps):
    replying to one of its group messages **without mentioning it again**, also
    grant Feishu's sensitive all-group-user-message scope
    `im:message.group_msg`. botd still discards every unmentioned message except
-   a reply whose parent resolves to an unexpired agent-message owner.
+   a reply whose parent resolves to an unexpired agent-message owner, or a
+   human message in a chat a provider holds `allow_ambient_messages` for.
    The same sensitive scope is required when `allow_attached_context` lets a
-   provider lazily read a topic's group-message history.
+   provider lazily read a topic's group-message history, and for any ambient
+   grant: without it Feishu never delivers the unaddressed messages ambient
+   observation exists to see.
 4. Under **Events and Callbacks**, choose long-connection delivery and subscribe
    to the `im.message.receive_v1` event.
 5. To receive button callbacks, also subscribe to the
@@ -97,7 +100,9 @@ openssl rand -base64 32 > /run/secrets/feishu-botd-example-agent-token
       "allow_follow_up_messages": false,
       "allow_message_reactions": true,
       "allow_image_upload": false,
-      "allow_legacy_commands": false
+      "allow_legacy_commands": false,
+      "allow_ambient_messages": false,
+      "allow_proactive_messages": false
     }
   },
   "commands": {
@@ -208,6 +213,10 @@ state.
   direct messages, group mentions for which there is no exact command
   subscriber, and ownership-proven replies to agent-authored group messages.
 
+A third, independent selector, `include_ambient_messages`, observes every human
+message in granted group chats whether or not anyone addressed the bot; see
+[Ambient observation and proactive posts](#ambient-observation-and-proactive-posts).
+
 An existing legacy `Subscribe` consumer takes precedence when it successfully
 receives the same group command. Multiple providers matching the same agent
 message receive their own copy, but the first valid `StartAgentResponse`
@@ -220,8 +229,8 @@ retry does not switch from a legacy consumer to an agent, from one selector to
 another, or from an agent back to legacy after subscriber churn.
 
 Each provider can request only the selectors authorized in its config:
-`allowed_commands`, `allow_unmatched_messages`, `allow_card_actions`, and
-`allow_message_reactions`.
+`allowed_commands`, `allow_unmatched_messages`, `allow_card_actions`,
+`allow_message_reactions`, and `allow_ambient_messages`.
 `allow_legacy_commands` separately permits legacy `Subscribe`/`Respond`, using
 the same `allowed_commands` allowlist, and `allow_follow_up_messages` separately
 permits the follow-up send described below. `allow_attached_context` separately
@@ -249,6 +258,7 @@ Routing differs by chat type:
 | Direct (`p2p`) | Any non-empty text; no mention required | `chat_alias = "direct"` |
 | Configured group / topic group | Text that mentions this app's bot; with `im:message.group_msg`, an unmentioned reply to an agent-owned message | Configured alias |
 | Unconfigured group / topic group | Mentioned text when this app sets `commands.allow_unconfigured_group_chats = true`; with the same setting and scope, an unmentioned reply to an agent-owned message | Stable opaque alias |
+| Any group in a provider's `ambient_chat_aliases` | With `im:message.group_msg`, every human text message, addressed or not, as an `AMBIENT` observation to that provider only (unconfigured groups also need `allow_unconfigured_group_chats`) | Configured or opaque alias |
 
 Mention-based group routing also requires a configured bot identity
 (`bot_open_id`, `bot_user_id`, `bot_union_id`, or a bot name). Strong Feishu IDs
@@ -283,7 +293,17 @@ apps are namespaced into the derivation.
 For a Feishu reply whose parent is proven to be authored by the receiving
 provider, `reply_to_message_ref` is the app-scoped opaque identity of that
 exact parent message. It is empty for a non-reply and for a reply to an
-unowned message, including an ordinary human-authored topic parent. Group
+unowned message, including an ordinary human-authored topic parent.
+
+Every message event also carries `message_ref` (this message's own identity,
+in the same space as response and reaction refs), `thread_ref` (the opaque
+Feishu thread, empty outside one), `thread_root_message_ref` (the ref of the
+thread's root — bot- or human-authored — so a reply to a reply still names the
+root it hangs off; empty outside a thread and on the root), and `addressing`:
+`DIRECT`, `MENTION`, `REPLY`, or `AMBIENT`. A provider holding
+`allow_ambient_messages` also gets `mentions` (people, not bots, in order, as
+`user_id` plus display `name`) and a `text` that renders those people as
+`@<name>`; every other provider keeps the historical text exactly. Group
 messages also carry the current, trimmed `conversation_title` when the bounded
 five-minute lookup succeeds. The title is user-controlled context, not an
 authorization value; direct messages and failed lookups carry an empty title.
@@ -313,6 +333,65 @@ map entry, and no request or routing decision requires a provider to echo it.
 Legacy `InboundCommand.metadata` remains limited to `chat_type` and
 `message_type`. Raw event, message, thread, root, parent, card, and chat ids are
 still omitted from both public streams.
+
+## Ambient observation and proactive posts
+
+Some providers are not chat agents but shared logs: they record what people say
+in a group and post into it on their own schedule, for example mirroring a
+question one coding agent asked another into a Feishu thread so humans can
+follow and answer it. Two grants serve that shape, both off by default and both
+scoped to named group aliases:
+
+```json
+"agent_providers": {
+  "commons": {
+    "auth_token_file": "/run/secrets/feishu-botd-commons-token",
+    "allowed_apps": ["default"],
+    "allow_unmatched_messages": true,
+    "allow_message_reactions": true,
+    "allow_ambient_messages": true,
+    "ambient_chat_aliases": ["refund-backend"],
+    "allow_proactive_messages": true,
+    "proactive_chat_aliases": ["refund-backend"]
+  }
+}
+```
+
+`allow_ambient_messages` with `ambient_chat_aliases` lets the provider
+subscribe with `include_ambient_messages = true` and receive every human text
+message in those groups as `addressing = AMBIENT`, mentioned or not. Messages
+Feishu attributes to an app are never ambient. An ambient event is an
+observation: its `delivery_id` cannot start a response, read attached context,
+or upload an image (`unknown_delivery`), and its conversation earns no
+follow-up scope. A message that is also addressed to the provider — a mention
+routed to it, a reply to its own message, or a legacy command it took — arrives
+once, as that addressed variant; any other ambient-granted provider still gets its ambient copy. This
+grant sees every member of the chat, so the provider also receives mention
+identities (`@<name>` in `text`, and `mentions`) on all its deliveries.
+Requires `im:message.group_msg`.
+
+`allow_proactive_messages` with `proactive_chat_aliases` enables
+`PostAgentMessage`: a new root message into one of those aliases, or a reply —
+optionally `reply_in_thread` — to a `message_ref` the provider received in one
+of those chats or authored there (a response card, follow-up, or earlier post).
+Every posted message is owned by the provider, so an unmentioned reply to it
+routes back as `REPLY`, exactly like a reply to a response card, and the
+reply's `thread_root_message_ref` ties even a reply-to-a-reply back to the root
+the provider posted. Each `operation_id` is idempotent: a retry returns the
+first post's refs with `duplicate = true`; reuse with different content or a
+different target is `operation_conflict`. Unknown or unauthorized refs return
+`unknown_message`, and chats outside the grant `unknown_channel`.
+
+Both lists accept configured channel aliases (normalized like every alias) or
+the exact opaque `unconfigured-group-…` alias botd reports for an allowed
+unconfigured group; `direct` is rejected, as is an alias owned by an app
+outside `allowed_apps`, a flag without aliases, and aliases without their flag.
+`allow_proactive_messages` requires `state_dir`, because both post ownership
+and reply routes live there. Reply routes are retained for seven days in
+`agent-message-routes.jsonl`, with raw Feishu ids sealed under a key derived
+from the app secret, so refs survive a restart; post ownership keeps the
+24-hour window every agent message has. A daemon without these grants writes
+nothing new and routes exactly as before.
 
 ## Lazy attached topic context
 
@@ -674,6 +753,14 @@ degrade to finishing inside the original card.
   `state_dir` retains only opaque `message_ref` to provider mappings for 24
   hours. It gates both mentionless group replies and native reactions. A
   malformed snapshot fails startup rather than widening delivery.
+- Proactive reply routes are the second exception. With any
+  `allow_proactive_messages` grant, `agent-message-routes.jsonl` under
+  `state_dir` maps a `message_ref` (or opaque group alias) to its sealed Feishu
+  route for seven days, so `PostAgentMessage` reply targets survive a restart.
+  An unreadable or torn journal line only makes that one ref unaddressable;
+  rotating an app secret makes all of that app's routes unaddressable.
+  `PostAgentMessage` operation receipts and ambient deduplication stay in
+  memory like every other operation record.
 - Run exactly one active `feishu-botd` process owning a given Feishu app. One
   multi-app process opens one connection for each configured app. Feishu permits
   up to 50 connections but delivers each event to one random client in cluster
@@ -704,7 +791,11 @@ long-connection subscriptions.
 Before production use, run a live-tenant smoke test: send one direct message,
 send one mentioned message in a configured group, reply to that answer without
 another mention, observe multiple cumulative card snapshots, finish the
-response, and click an action button. Confirm the reply reaches only the
+response, and click an action button. For an ambient/proactive provider, also
+post a root with `PostAgentMessage`, reply to it in a thread, have a person
+reply to that reply without a mention, and confirm the provider sees `REPLY`
+or `AMBIENT` with the posted root as `thread_root_message_ref`, while an
+unaddressed message in an ungranted group reaches nobody. Confirm the reply reaches only the
 authoring provider, an unmentioned non-reply is ignored, nominal events reach
 the intended provider, retry/queue-failure behavior is exercised, and no raw
 identifiers or user content appear in logs.

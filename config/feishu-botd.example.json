@@ -40,7 +40,11 @@
       "allow_follow_up_messages": false,
       "allow_message_reactions": false,
       "allow_image_upload": false,
-      "allow_legacy_commands": false
+      "allow_legacy_commands": false,
+      "allow_ambient_messages": false,
+      "ambient_chat_aliases": [],
+      "allow_proactive_messages": false,
+      "proactive_chat_aliases": []
     }
   },
   "commands": {
