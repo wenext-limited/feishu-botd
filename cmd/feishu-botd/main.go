@@ -17,6 +17,7 @@ import (
 	"feishu-botd/internal/feishu"
 	"feishu-botd/internal/grpcapi"
 	"feishu-botd/internal/httpapi"
+	"feishu-botd/internal/messageroute"
 	"feishu-botd/internal/ownership"
 	"feishu-botd/internal/scriptexec"
 	"feishu-botd/internal/service"
@@ -26,6 +27,11 @@ const (
 	startupTimeoutFallback = 15 * time.Second
 	shutdownTimeout        = 10 * time.Second
 	agentOwnershipTTL      = 24 * time.Hour
+	// agentMessageRouteTTL bounds how long a delivered or authored
+	// message_ref stays a PostAgentMessage reply target. It outlives the
+	// 24-hour ownership window on purpose: an answer may arrive days after
+	// the question, long after a mentionless reply would still route.
+	agentMessageRouteTTL = 7 * 24 * time.Hour
 )
 
 var errReceiverUnavailable = errors.New("Feishu receiver unavailable")
@@ -87,6 +93,14 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 			return fmt.Errorf("open agent message ownership state: %w", err)
 		}
 		svc.SetAgentOwnershipStore(owners)
+		if cfg.AnyProviderAllowsProactiveMessages() {
+			routes, err := messageroute.Open(cfg.StateDir, agentMessageRouteTTL, messageRouteKeys(apps), time.Now())
+			if err != nil {
+				return fmt.Errorf("open agent message route state: %w", err)
+			}
+			defer routes.Close()
+			svc.SetAgentMessageRouteStore(routes)
+		}
 	}
 	httpServer := httpapi.NewServer(cfg, svc, logger)
 	grpcServer := grpcapi.NewServer(cfg, svc, logger)
@@ -119,6 +133,10 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 					ChatID:            cmd.ChatID,
 					UnconfiguredGroup: cmd.UnconfiguredGroup,
 					UnmentionedReply:  cmd.UnmentionedReply,
+					AmbientOnly:       cmd.AmbientOnly,
+					HumanSender:       cmd.HumanSender,
+					NamedPrompt:       cmd.NamedPrompt,
+					Mentions:          agentMentions(cmd.Mentions),
 				})
 				if apiErr != nil {
 					return apiErr
@@ -136,6 +154,9 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 			BotUserID:                   app.Commands.BotUserID,
 			BotUnionID:                  app.Commands.BotUnionID,
 			BotNames:                    app.Commands.BotNames,
+			AmbientChat: func(chatAlias string) bool {
+				return cfg.AmbientChatEnabled(appAlias, chatAlias)
+			},
 			ConnectionStateChanged: func(alias string, state feishu.ConnectionState) {
 				svc.SetAppConnectionState(alias, string(state))
 			},
@@ -229,6 +250,28 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		return err
 	}
 	return runErr
+}
+
+// messageRouteKeys derives each app's route-journal key from its secret, so
+// the journal under state_dir is unreadable without the config that holds
+// those secrets.
+func messageRouteKeys(apps map[string]config.AppConfig) map[string][]byte {
+	keys := make(map[string][]byte, len(apps))
+	for alias, app := range apps {
+		keys[alias] = messageroute.SealKey(alias, app.AppSecret)
+	}
+	return keys
+}
+
+func agentMentions(in []feishu.Mention) []service.AgentMention {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]service.AgentMention, 0, len(in))
+	for _, mention := range in {
+		out = append(out, service.AgentMention{UserID: mention.UserID, Name: mention.Name})
+	}
+	return out
 }
 
 func startupTimeout(cfg config.Config) time.Duration {

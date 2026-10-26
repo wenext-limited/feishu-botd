@@ -70,6 +70,7 @@ func (c *commandServer) Respond(ctx context.Context, in *pb.RespondRequest) (*pb
 func (c *commandServer) SubscribeAgentEvents(in *pb.SubscribeAgentEventsRequest, stream pb.CommandService_SubscribeAgentEventsServer) error {
 	if err := authorizeAgentSubscription(
 		stream.Context(), in.GetProvider(), in.GetCommands(), in.GetIncludeUnmatchedMessages(), in.GetIncludeCardActions(), in.GetIncludeMessageReactions(),
+		in.GetIncludeAmbientMessages(),
 	); err != nil {
 		return err
 	}
@@ -80,6 +81,7 @@ func (c *commandServer) SubscribeAgentEvents(in *pb.SubscribeAgentEventsRequest,
 		IncludeUnmatchedMessages: in.GetIncludeUnmatchedMessages(),
 		IncludeCardActions:       in.GetIncludeCardActions(),
 		IncludeMessageReactions:  in.GetIncludeMessageReactions(),
+		IncludeAmbientMessages:   in.GetIncludeAmbientMessages(),
 		AllowedApps:              allowedApps,
 		AllowedAppsConfigured:    allowedAppsConfigured,
 	})
@@ -214,6 +216,35 @@ func (c *commandServer) SendAgentFollowUp(ctx context.Context, in *pb.SendAgentF
 	return &pb.SendAgentFollowUpResponse{FollowUp: agentFollowUpReceiptToProto(receipt)}, nil
 }
 
+func (c *commandServer) PostAgentMessage(ctx context.Context, in *pb.PostAgentMessageRequest) (*pb.PostAgentMessageResponse, error) {
+	if err := authorizeAgentProactive(ctx, in.GetProvider()); err != nil {
+		return nil, err
+	}
+	input := service.PostAgentMessageInput{
+		Provider:      in.GetProvider(),
+		OperationID:   in.GetOperationId(),
+		ReplyInThread: in.GetReplyInThread(),
+		Markdown:      in.GetMarkdown(),
+		Summary:       in.GetSummary(),
+		MentionUserID: in.GetMentionUserId(),
+	}
+	switch target := in.GetTarget().(type) {
+	case *pb.PostAgentMessageRequest_ChatAlias:
+		input.ChatAlias = target.ChatAlias
+	case *pb.PostAgentMessageRequest_ReplyToMessageRef:
+		input.ReplyToMessageRef = target.ReplyToMessageRef
+	}
+	receipt, apiErr := c.svc.PostAgentMessage(ctx, input)
+	if apiErr != nil {
+		return nil, grpcError(apiErr, requestIDFromContext(ctx))
+	}
+	return &pb.PostAgentMessageResponse{
+		MessageRef: receipt.MessageRef,
+		ThreadRef:  receipt.ThreadRef,
+		Duplicate:  receipt.Duplicate,
+	}, nil
+}
+
 func (c *commandServer) AddAgentReaction(ctx context.Context, in *pb.AddAgentReactionRequest) (*pb.AddAgentReactionResponse, error) {
 	if err := authorizeAgentReaction(ctx, in.GetProvider()); err != nil {
 		return nil, err
@@ -252,10 +283,17 @@ func agentEventToProto(event service.AgentEvent) *pb.SubscribeAgentEventsRespons
 		Metadata:       event.Metadata,
 	}
 	if event.Message != nil {
-		out.Payload = &pb.InboundAgentEvent_Message{Message: &pb.InboundAgentMessage{
+		message := &pb.InboundAgentMessage{
 			Text: event.Message.Text, Command: event.Message.Command, CommandText: event.Message.CommandText,
 			ReplyToMessageRef: event.Message.ReplyToMessageRef, ConversationTitle: event.Message.ConversationTitle,
-		}}
+			MessageRef: event.Message.MessageRef, ThreadRef: event.Message.ThreadRef,
+			ThreadRootMessageRef: event.Message.ThreadRootMessageRef,
+			Addressing:           agentAddressingToProto(event.Message.Addressing),
+		}
+		for _, mention := range event.Message.Mentions {
+			message.Mentions = append(message.Mentions, &pb.InboundMention{UserId: mention.UserID, Name: mention.Name})
+		}
+		out.Payload = &pb.InboundAgentEvent_Message{Message: message}
 	} else if event.CardAction != nil {
 		out.Payload = &pb.InboundAgentEvent_CardAction{CardAction: &pb.InboundCardAction{
 			ResponseId:  event.CardAction.ResponseID,
@@ -359,6 +397,21 @@ func agentReceiptToProto(in service.AgentResponseReceipt) *pb.AgentResponseRecei
 		Phase:      agentPhaseToProto(in.Phase),
 		Duplicate:  in.Duplicate,
 		MessageRef: in.MessageRef,
+	}
+}
+
+func agentAddressingToProto(in service.AgentAddressing) pb.InboundAddressing {
+	switch in {
+	case service.AgentAddressingDirect:
+		return pb.InboundAddressing_INBOUND_ADDRESSING_DIRECT
+	case service.AgentAddressingMention:
+		return pb.InboundAddressing_INBOUND_ADDRESSING_MENTION
+	case service.AgentAddressingReply:
+		return pb.InboundAddressing_INBOUND_ADDRESSING_REPLY
+	case service.AgentAddressingAmbient:
+		return pb.InboundAddressing_INBOUND_ADDRESSING_AMBIENT
+	default:
+		return pb.InboundAddressing_INBOUND_ADDRESSING_UNSPECIFIED
 	}
 }
 

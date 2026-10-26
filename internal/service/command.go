@@ -44,6 +44,17 @@ type CommandInput struct {
 	// UnmentionedReply requires an ownership lookup before any provider may see
 	// the message. It is set only for group replies without a matching bot mention.
 	UnmentionedReply bool `json:"-"`
+	// AmbientOnly marks a group message that neither mentions the bot nor
+	// replies to anything. It can reach only ambient subscriptions, and only
+	// when HumanSender is also set. Both are daemon-private ingress state.
+	AmbientOnly bool `json:"-"`
+	HumanSender bool `json:"-"`
+
+	// NamedPrompt is Prompt with other people's mentions rendered inline as
+	// "@<name>". Mentions lists those people. Both reach only a provider that
+	// holds the ambient grant; every other provider keeps the legacy prompt.
+	NamedPrompt string
+	Mentions    []AgentMention
 }
 
 // CommandResponse is a provider reply to a previously delivered command.
@@ -213,6 +224,12 @@ func (s *Service) DispatchCommand(ctx context.Context, in CommandInput) (int, *n
 	in.ChatAlias = strings.TrimSpace(in.ChatAlias)
 	in.SenderID = strings.TrimSpace(in.SenderID)
 	in.ChatID = strings.TrimSpace(in.ChatID)
+	in.NamedPrompt = strings.TrimSpace(in.NamedPrompt)
+	in.Mentions = boundedAgentMentions(in.Mentions)
+	if !isGroupChatType(in.Metadata["chat_type"]) {
+		// Only a group has bystanders to observe.
+		in.AmbientOnly = false
+	}
 	if in.DeliveryID == "" {
 		return 0, notify.BadRequest("missing_delivery_id", "delivery_id is required")
 	}
@@ -248,6 +265,11 @@ func (s *Service) DispatchCommand(ctx context.Context, in CommandInput) (int, *n
 	if in.ConversationID == "" {
 		in.ConversationID = fallbackConversationID(in)
 	}
+	if len(in.NamedPrompt) > maxInboundPromptBytes {
+		// Display names can make the named rendering longer than the prompt
+		// itself. That must never cost the message: fall back to the prompt.
+		in.NamedPrompt = ""
+	}
 	if len(in.DeliveryID) > 160 || len(in.Prompt) > maxInboundPromptBytes || len(in.ConversationID) > 160 || len(in.SenderID) > 160 || len(in.ChatID) > 160 || len(in.Metadata["message_id"]) > 160 {
 		return 0, notify.BadRequest("field_too_large", "one or more fields are too large")
 	}
@@ -257,10 +279,17 @@ func (s *Service) DispatchCommand(ctx context.Context, in CommandInput) (int, *n
 	if apiErr != nil {
 		return 0, apiErr
 	}
-	if in.UnmentionedReply && !ownedReply {
-		s.logger.Info("unowned group reply ignored",
-			"correlation", opaqueLogCorrelationID("command", in.DeliveryID),
-		)
+	// A message nobody addressed — no mention, and either no parent or a parent
+	// no provider authored — can still be an ambient observation, but never a
+	// prompt. Without an ambient grant for this chat it is discarded exactly as
+	// before.
+	ambientOnly := in.AmbientOnly || in.UnmentionedReply && !ownedReply
+	if ambientOnly && !s.ambientCandidate(in) {
+		if in.UnmentionedReply {
+			s.logger.Info("unowned group reply ignored",
+				"correlation", opaqueLogCorrelationID("command", in.DeliveryID),
+			)
+		}
 		return 0, nil
 	}
 
@@ -269,15 +298,67 @@ func (s *Service) DispatchCommand(ctx context.Context, in CommandInput) (int, *n
 	// executors while allowing conversational agents to opt into broader ingress.
 	// A reply to an owned message is also agent-only and stays pinned to the
 	// provider that authored the parent, regardless of first-word command matches.
-	legacyDelivered, agentDelivered := s.dispatchInboundRoute(in, isDirect || isUnconfiguredGroup || ownedReply, replyProvider)
+	// A reply route is retained for every proactive provider that could
+	// receive the message before any of them can see it, then narrowed to the
+	// ones that did. Both writes happen outside the ingress lock.
+	routeGrantees := s.retainInboundMessageRoute(in, ambientOnly)
+	legacyDelivered, agentDelivered, ambientDelivered := s.dispatchInboundRoute(in, isDirect || isUnconfiguredGroup || ownedReply, replyProvider, ambientOnly)
+	s.narrowInboundMessageRoute(in, routeGrantees)
 	s.logger.Info("command dispatched",
 		"correlation", opaqueLogCorrelationID("command", in.DeliveryID),
 		"legacy_subscribers", legacyDelivered,
 		"agent_subscribers", agentDelivered,
+		"ambient_subscribers", ambientDelivered,
 		"command_projection_dropped", projectionDropped,
 		"owned_reply", ownedReply,
 	)
 	return legacyDelivered, nil
+}
+
+// ambientCandidate reports whether any provider allowed to see this app holds
+// the ambient grant for this group chat, and the message came from a person.
+func (s *Service) ambientCandidate(in CommandInput) bool {
+	return in.HumanSender && isGroupChatType(in.Metadata["chat_type"]) &&
+		s.cfg.AmbientChatEnabled(in.AppAlias, in.ChatAlias)
+}
+
+func isGroupChatType(chatType string) bool {
+	return chatType == "group" || chatType == "topic_group"
+}
+
+const (
+	maxAgentMentions          = 64
+	maxAgentMentionNameBytes  = 256
+	maxAgentMentionUserIDSize = 160
+)
+
+// boundedAgentMentions applies the receiver's own bounds at the service
+// boundary too, so a direct caller cannot put an unbounded list on the wire.
+// Entries without a usable id are dropped; an over-long name is dropped to
+// empty rather than cut mid-character.
+func boundedAgentMentions(in []AgentMention) []AgentMention {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]AgentMention, 0, len(in))
+	for _, mention := range in {
+		mention.UserID = strings.TrimSpace(mention.UserID)
+		mention.Name = strings.TrimSpace(mention.Name)
+		if mention.UserID == "" || len(mention.UserID) > maxAgentMentionUserIDSize {
+			continue
+		}
+		if len(mention.Name) > maxAgentMentionNameBytes {
+			mention.Name = ""
+		}
+		out = append(out, mention)
+		if len(out) == maxAgentMentions {
+			break
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // resolveAgentReplyOwner proves that an inbound parent is an agent-authored
@@ -312,7 +393,7 @@ func (s *Service) acceptsUnconfiguredGroup(in CommandInput) bool {
 	return ok
 }
 
-func (s *Service) dispatchInboundRoute(in CommandInput, agentOnly bool, replyProvider string) (legacyDelivered, agentDelivered int) {
+func (s *Service) dispatchInboundRoute(in CommandInput, agentOnly bool, replyProvider string, ambientOnly bool) (legacyDelivered, agentDelivered, ambientDelivered int) {
 	routes := s.inboundRoutes
 	routes.mu.Lock()
 	defer routes.mu.Unlock()
@@ -320,33 +401,51 @@ func (s *Service) dispatchInboundRoute(in CommandInput, agentOnly bool, replyPro
 	routes.pruneLocked(now)
 	messageKey := agentMessageDedupeKey(in.AppAlias, in.Metadata["message_id"])
 	if _, duplicate := routes.deliveries[in.DeliveryID]; duplicate {
-		return 0, 0
+		return 0, 0, 0
 	}
 	if messageKey != "" {
 		if _, duplicate := routes.messages[messageKey]; duplicate {
-			return 0, 0
+			return 0, 0, 0
 		}
 	}
-
 	handled := false
-	if !agentOnly {
-		legacyDelivered, handled = s.commandBroker.dispatch(in)
-	}
-	if !handled {
-		if replyProvider == "" {
-			agentDelivered, handled = s.agentBroker.dispatchMessage(in)
-		} else {
-			agentDelivered, handled = s.agentBroker.dispatchMessageToProvider(in, replyProvider)
+	var addressed map[string]struct{}
+	var legacyProviders map[string]struct{}
+	if !ambientOnly {
+		if !agentOnly {
+			legacyDelivered, handled, legacyProviders = s.commandBroker.dispatch(in)
+		}
+		if !handled {
+			if replyProvider == "" {
+				agentDelivered, handled, addressed = s.agentBroker.dispatchMessage(in)
+			} else {
+				agentDelivered, handled, addressed = s.agentBroker.dispatchMessageToProvider(in, replyProvider)
+			}
+		}
+		if handled {
+			expiresAt := now.Add(routes.ttl)
+			routes.deliveries[in.DeliveryID] = expiresAt
+			if messageKey != "" {
+				routes.messages[messageKey] = expiresAt
+			}
 		}
 	}
-	if handled {
-		expiresAt := now.Add(routes.ttl)
-		routes.deliveries[in.DeliveryID] = expiresAt
-		if messageKey != "" {
-			routes.messages[messageKey] = expiresAt
+	// Ambient observation is independent of who answers: a provider that got
+	// the addressed variant is skipped, everyone else granted this chat sees
+	// it, even when a legacy command consumer or another agent owns the reply.
+	if s.ambientCandidate(in) {
+		skip := make(map[string]struct{}, len(addressed)+len(legacyProviders))
+		for provider := range addressed {
+			skip[provider] = struct{}{}
 		}
+		// A provider that took this message as a legacy command already has
+		// it, addressed; it does not also get an ambient copy.
+		for provider := range legacyProviders {
+			skip[provider] = struct{}{}
+		}
+		ambientDelivered = s.agentBroker.dispatchAmbient(in, skip, replyProvider)
 	}
-	return legacyDelivered, agentDelivered
+	return legacyDelivered, agentDelivered, ambientDelivered
 }
 
 func (r *inboundRouteRegistry) pruneLocked(now time.Time) {
@@ -466,12 +565,14 @@ func (b *commandBroker) unsubscribe(id uint64) {
 	close(sub.ch)
 }
 
-func (b *commandBroker) dispatch(in CommandInput) (delivered int, handled bool) {
+// dispatch also reports the authenticated wire providers that received the
+// command; trusted in-process consumers are not providers and are omitted.
+func (b *commandBroker) dispatch(in CommandInput) (delivered int, handled bool, providers map[string]struct{}) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.pruneLocked(time.Now())
 	if _, ok := b.deliveries[in.DeliveryID]; ok {
-		return 0, true
+		return 0, true, nil
 	}
 
 	publicInput := publicCommandInput(in)
@@ -505,7 +606,15 @@ func (b *commandBroker) dispatch(in CommandInput) (delivered int, handled bool) 
 			state:            commandDeliveryOpen,
 		}
 	}
-	return delivered, delivered > 0
+	for principal := range allowedProviders {
+		if !principal.internal {
+			if providers == nil {
+				providers = make(map[string]struct{})
+			}
+			providers[principal.provider] = struct{}{}
+		}
+	}
+	return delivered, delivered > 0, providers
 }
 
 func (b *commandBroker) beginResponse(
@@ -586,6 +695,7 @@ func cloneCommandInput(in CommandInput) CommandInput {
 			out.Metadata[k] = v
 		}
 	}
+	out.Mentions = cloneAgentMentions(in.Mentions)
 	return out
 }
 
@@ -596,6 +706,12 @@ func publicCommandInput(in CommandInput) CommandInput {
 	out.ChatID = ""
 	out.UnconfiguredGroup = false
 	out.UnmentionedReply = false
+	out.AmbientOnly = false
+	out.HumanSender = false
+	// The legacy command stream predates mention identities and keeps its
+	// exact historical shape.
+	out.NamedPrompt = ""
+	out.Mentions = nil
 	return out
 }
 

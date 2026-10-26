@@ -124,19 +124,26 @@ func (s *Service) SendAgentFollowUp(ctx context.Context, in SendAgentFollowUpInp
 
 	sendCtx, cancel := context.WithTimeout(ctx, s.cfg.SendTimeout)
 	defer cancel()
-	if _, err := backend.sender.Send(sendCtx, chatID, notify.Request{
+	messageID, err := backend.sender.Send(sendCtx, chatID, notify.Request{
 		Source:           agentFollowUpSource,
 		DedupeKey:        followUpID,
 		Title:            summary,
 		Markdown:         markdown,
 		MentionUserID:    mentionUserID,
 		ReplyToMessageID: replyToMessageID,
-	}); err != nil {
+	})
+	if err != nil {
 		s.logFeishuFailure("agent follow-up", "follow_up", followUpID, err)
 		route.abortFollowUp(provider, operationID, err, time.Now())
 		return AgentFollowUpReceipt{}, agentMessageCallError(err, "Feishu follow-up send failed")
 	}
 	route.commitFollowUp(provider, operationID)
+	// A provider that may speak proactively can later reply to its own
+	// follow-up; a provider without that grant records nothing here.
+	s.rememberAuthoredMessageSoftly(authoredMessage{
+		provider: provider, appAlias: appAlias, chatAlias: chatAlias,
+		unconfiguredGroup: unconfiguredGroup, chatID: chatID, messageID: messageID,
+	}, "follow_up", followUpID)
 	return AgentFollowUpReceipt{FollowUpID: followUpID}, nil
 }
 

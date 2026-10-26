@@ -13,6 +13,7 @@ import (
 	"feishu-botd/internal/config"
 	"feishu-botd/internal/dedupe"
 	"feishu-botd/internal/feishu"
+	"feishu-botd/internal/messageroute"
 	"feishu-botd/internal/ownership"
 )
 
@@ -40,6 +41,7 @@ type appBackend struct {
 	reactions       feishu.ReactionMessages
 	contactUsers    feishu.ContactUsers
 	images          feishu.ImageUploader
+	poster          feishu.MessagePoster
 }
 
 // Service owns the send/dedupe/readiness flow. It is safe for concurrent use
@@ -60,6 +62,8 @@ type Service struct {
 	commandBroker *commandBroker
 	agentBroker   *agentBroker
 	agentOwners   agentOwnershipStore
+	agentRoutes   agentMessageRouteStore
+	agentPosts    *agentPostLedger
 }
 
 type agentOwnershipStore interface {
@@ -121,6 +125,9 @@ func newService(
 		if images, ok := sender.(feishu.ImageUploader); ok {
 			backend.images = images
 		}
+		if poster, ok := sender.(feishu.MessagePoster); ok {
+			backend.poster = poster
+		}
 		backends[alias] = backend
 	}
 	var connectionStates map[string]string
@@ -130,6 +137,9 @@ func newService(
 			connectionStates[alias] = AppConnectionStarting
 		}
 	}
+	agentBroker := newAgentBroker(cfg.DedupeTTL)
+	agentBroker.mentionIdentities = cfg.ProviderAllowsAmbientMessages
+	agentBroker.ambientChat = cfg.ProviderAllowsAmbientChat
 	return &Service{
 		cfg:                   cfg,
 		backends:              backends,
@@ -140,7 +150,11 @@ func newService(
 		connectionStates:      connectionStates,
 		inboundRoutes:         newInboundRouteRegistry(cfg.DedupeTTL),
 		commandBroker:         newCommandBroker(cfg.DedupeTTL),
-		agentBroker:           newAgentBroker(cfg.DedupeTTL),
+		agentBroker:           agentBroker,
+		// Process composition replaces this with the durable journal when a
+		// state_dir exists; until then reply routes last the dedupe TTL.
+		agentRoutes: messageroute.NewMemory(cfg.DedupeTTL),
+		agentPosts:  newAgentPostLedger(cfg.DedupeTTL),
 	}
 }
 

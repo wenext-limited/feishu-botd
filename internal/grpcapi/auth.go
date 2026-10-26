@@ -30,6 +30,8 @@ type providerPrincipal struct {
 	allowLegacyCommands    bool
 	allowCoTProgress       bool
 	allowAgentReactions    bool
+	allowAmbientMessages   bool
+	allowProactiveMessages bool
 }
 
 type providerCredential struct {
@@ -75,6 +77,8 @@ func newProviderAuthenticator(providers map[string]config.AgentProviderConfig) p
 				allowLegacyCommands:    providerCfg.AllowLegacyCommands,
 				allowCoTProgress:       providerCfg.AllowCoTProgress,
 				allowAgentReactions:    providerCfg.AllowAgentReactions,
+				allowAmbientMessages:   providerCfg.AllowAmbientMessages,
+				allowProactiveMessages: providerCfg.AllowProactiveMessages,
 			},
 			digest: sha256.Sum256([]byte(providerCfg.AuthToken)),
 		})
@@ -102,7 +106,8 @@ func isAgentMethod(fullMethod string) bool {
 		pb.CommandService_ReplaceAgentResponse_FullMethodName,
 		pb.CommandService_UploadAgentImage_FullMethodName,
 		pb.CommandService_SendAgentFollowUp_FullMethodName,
-		pb.CommandService_AddAgentReaction_FullMethodName:
+		pb.CommandService_AddAgentReaction_FullMethodName,
+		pb.CommandService_PostAgentMessage_FullMethodName:
 		return true
 	default:
 		return false
@@ -263,12 +268,27 @@ func authorizeLegacyResponse(ctx context.Context) (string, error) {
 	return principal.provider, nil
 }
 
-func authorizeAgentSubscription(ctx context.Context, requested string, commands []string, unmatched, actions, reactions bool) error {
+func authorizeAgentSubscription(ctx context.Context, requested string, commands []string, unmatched, actions, reactions, ambient bool) error {
 	if err := requireProviderIdentity(ctx, requested); err != nil {
 		return err
 	}
 	principal, _ := authenticatedProvider(ctx)
-	if !commandsAllowed(principal, commands) || unmatched && !principal.allowUnmatchedMessages || actions && !principal.allowCardActions || reactions && !principal.allowMessageReactions {
+	if !commandsAllowed(principal, commands) || unmatched && !principal.allowUnmatchedMessages || actions && !principal.allowCardActions || reactions && !principal.allowMessageReactions || ambient && !principal.allowAmbientMessages {
+		return providerScopeDenied(ctx)
+	}
+	return nil
+}
+
+// authorizeAgentProactive gates PostAgentMessage itself. Which chats the
+// provider may speak in, and which messages it may answer, are narrower
+// checks the service applies against proactive_chat_aliases and the refs it
+// actually received or authored.
+func authorizeAgentProactive(ctx context.Context, requested string) error {
+	if err := requireProviderIdentity(ctx, requested); err != nil {
+		return err
+	}
+	principal, _ := authenticatedProvider(ctx)
+	if !principal.allowProactiveMessages {
 		return providerScopeDenied(ctx)
 	}
 	return nil

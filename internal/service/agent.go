@@ -41,8 +41,11 @@ type AgentSubscribeOptions struct {
 	IncludeUnmatchedMessages bool
 	IncludeCardActions       bool
 	IncludeMessageReactions  bool
-	AllowedApps              []string
-	AllowedAppsConfigured    bool
+	// IncludeAmbientMessages observes every human text message in the group
+	// chats the provider's configuration grants it, addressed or not.
+	IncludeAmbientMessages bool
+	AllowedApps            []string
+	AllowedAppsConfigured  bool
 }
 
 type AgentEvent struct {
@@ -62,6 +65,36 @@ type AgentMessage struct {
 	CommandText       string
 	ReplyToMessageRef string
 	ConversationTitle string
+
+	// MessageRef is this inbound message's provider-safe identity, in the same
+	// space as AgentResponseReceipt.MessageRef.
+	MessageRef string
+	// ThreadRef is the opaque identity of the Feishu thread holding the
+	// message, and ThreadRootMessageRef the ref of that thread's root; both are
+	// empty outside a thread, and the root ref is empty on the root itself.
+	ThreadRef            string
+	ThreadRootMessageRef string
+	Addressing           AgentAddressing
+	// Mentions is populated only for a provider holding the ambient grant.
+	Mentions []AgentMention
+}
+
+// AgentAddressing says why botd delivered a message to a provider.
+type AgentAddressing int
+
+const (
+	AgentAddressingUnspecified AgentAddressing = iota
+	AgentAddressingDirect
+	AgentAddressingMention
+	AgentAddressingReply
+	AgentAddressingAmbient
+)
+
+// AgentMention is one person a message mentions. UserID shares the opaque
+// space of AgentEvent.SenderID; Name is an untrusted display label.
+type AgentMention struct {
+	UserID string
+	Name   string
 }
 
 type AgentCardAction struct {
@@ -324,6 +357,60 @@ type agentBroker struct {
 	seenMessages         map[string]time.Time
 	seenActions          map[appStateKey]time.Time
 	seenReactions        map[appStateKey]time.Time
+	// observedBy records, per message, every agent provider that received it
+	// through any selector. Ambient fan-out skips them, so neither a Feishu
+	// redelivery nor an addressed-then-ambient sequence repeats a message to a
+	// provider, and reply-route grants narrow to exactly these recipients.
+	observedBy map[string]*messageObservation
+
+	// Configuration-derived delivery policy, installed by the service. A nil
+	// function denies: no provider sees mention identities or ambient events.
+	mentionIdentities func(provider string) bool
+	ambientChat       func(provider, chatAlias string) bool
+}
+
+type messageObservation struct {
+	providers map[string]struct{}
+	expiresAt time.Time
+}
+
+// observationKey identifies one Feishu message across redeliveries; a message
+// without an id falls back to its delivery.
+func observationKey(in CommandInput) string {
+	if key := agentMessageDedupeKey(in.AppAlias, in.Metadata["message_id"]); key != "" {
+		return key
+	}
+	return "delivery\x00" + effectiveAppAlias(in.AppAlias) + "\x00" + in.DeliveryID
+}
+
+func (b *agentBroker) observeLocked(in CommandInput, providers map[string]struct{}, now time.Time) {
+	if len(providers) == 0 {
+		return
+	}
+	key := observationKey(in)
+	observation := b.observedBy[key]
+	if observation == nil {
+		observation = &messageObservation{providers: make(map[string]struct{}, len(providers))}
+		b.observedBy[key] = observation
+	}
+	for provider := range providers {
+		observation.providers[provider] = struct{}{}
+	}
+	observation.expiresAt = now.Add(b.ttl)
+}
+
+// messageRecipients returns every agent provider that has received this
+// message so far, by any selector.
+func (b *agentBroker) messageRecipients(in CommandInput) map[string]struct{} {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := make(map[string]struct{})
+	if observation := b.observedBy[observationKey(in)]; observation != nil {
+		for provider := range observation.providers {
+			out[provider] = struct{}{}
+		}
+	}
+	return out
 }
 
 type agentSubscriber struct {
@@ -335,6 +422,7 @@ type agentSubscriber struct {
 	includeUnmatchedMessages bool
 	includeCardActions       bool
 	includeMessageReactions  bool
+	includeAmbientMessages   bool
 	ch                       chan AgentEvent
 }
 
@@ -484,6 +572,7 @@ func newAgentBroker(ttl time.Duration) *agentBroker {
 		seenMessages:         make(map[string]time.Time),
 		seenActions:          make(map[appStateKey]time.Time),
 		seenReactions:        make(map[appStateKey]time.Time),
+		observedBy:           make(map[string]*messageObservation),
 	}
 }
 
@@ -520,7 +609,7 @@ func (b *agentBroker) subscribe(in AgentSubscribeOptions) (*agentSubscriber, *no
 		}
 		commands[command] = struct{}{}
 	}
-	if len(commands) == 0 && !in.IncludeUnmatchedMessages && !in.IncludeCardActions && !in.IncludeMessageReactions {
+	if len(commands) == 0 && !in.IncludeUnmatchedMessages && !in.IncludeCardActions && !in.IncludeMessageReactions && !in.IncludeAmbientMessages {
 		return nil, notify.BadRequest("missing_subscription", "at least one agent event kind is required")
 	}
 
@@ -536,6 +625,7 @@ func (b *agentBroker) subscribe(in AgentSubscribeOptions) (*agentSubscriber, *no
 		includeUnmatchedMessages: in.IncludeUnmatchedMessages,
 		includeCardActions:       in.IncludeCardActions,
 		includeMessageReactions:  in.IncludeMessageReactions,
+		includeAmbientMessages:   in.IncludeAmbientMessages,
 		ch:                       make(chan AgentEvent, agentSubscriptionBuffer),
 	}
 	b.subscribers[sub.id] = sub
@@ -553,28 +643,30 @@ func (b *agentBroker) unsubscribe(id uint64) {
 	close(sub.ch)
 }
 
-func (b *agentBroker) dispatchMessage(in CommandInput) (delivered int, handled bool) {
+// dispatchMessage and dispatchMessageToProvider also return the providers
+// that received the addressed variant, so ambient fan-out can skip them.
+func (b *agentBroker) dispatchMessage(in CommandInput) (delivered int, handled bool, providers map[string]struct{}) {
 	return b.dispatchMessageForProvider(in, "")
 }
 
 // dispatchMessageToProvider preserves reply ownership: only subscriptions for
 // the provider that authored the parent message can receive this prompt.
-func (b *agentBroker) dispatchMessageToProvider(in CommandInput, provider string) (delivered int, handled bool) {
+func (b *agentBroker) dispatchMessageToProvider(in CommandInput, provider string) (delivered int, handled bool, providers map[string]struct{}) {
 	return b.dispatchMessageForProvider(in, strings.TrimSpace(provider))
 }
 
-func (b *agentBroker) dispatchMessageForProvider(in CommandInput, provider string) (delivered int, handled bool) {
+func (b *agentBroker) dispatchMessageForProvider(in CommandInput, provider string) (delivered int, handled bool, providers map[string]struct{}) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	now := time.Now()
 	b.pruneLocked(now)
 	if _, exists := b.deliveries[in.DeliveryID]; exists {
-		return 0, true
+		return 0, true, nil
 	}
 	messageDedupeKey := agentMessageDedupeKey(in.AppAlias, in.Metadata["message_id"])
 	if messageDedupeKey != "" {
 		if _, seen := b.seenMessages[messageDedupeKey]; seen {
-			return 0, true
+			return 0, true, nil
 		}
 	}
 	if b.conversationAppConflictLocked(in.ConversationID, in.AppAlias) {
@@ -582,7 +674,7 @@ func (b *agentBroker) dispatchMessageForProvider(in CommandInput, provider strin
 		// can never safely reverse-resolve to two applications. Fail closed
 		// before enqueueing an event that could later egress through the other
 		// app's route.
-		return 0, true
+		return 0, true, nil
 	}
 
 	exact := make([]*agentSubscriber, 0)
@@ -618,20 +710,8 @@ func (b *agentBroker) dispatchMessageForProvider(in CommandInput, provider strin
 		replyToMessageRef = feishu.MessageRefForApp(in.AppAlias, in.Metadata["parent_id"])
 	}
 
-	event := AgentEvent{
-		DeliveryID:     in.DeliveryID,
-		ConversationID: in.ConversationID,
-		ChatAlias:      in.ChatAlias,
-		SenderID:       in.SenderID,
-		Metadata:       agentPublicMetadata(in.Metadata, in.AppAlias),
-		Message: &AgentMessage{
-			Text:              in.Prompt,
-			Command:           in.Command,
-			CommandText:       in.Text,
-			ReplyToMessageRef: replyToMessageRef,
-			ConversationTitle: in.ConversationTitle,
-		},
-	}
+	event := agentMessageEvent(in, addressingFor(in))
+	event.Message.ReplyToMessageRef = replyToMessageRef
 	allowed := make(map[string]struct{})
 	providerSent := make(map[string]struct{})
 	for _, sub := range candidates {
@@ -639,7 +719,7 @@ func (b *agentBroker) dispatchMessageForProvider(in CommandInput, provider strin
 			continue
 		}
 		select {
-		case sub.ch <- cloneAgentEvent(event):
+		case sub.ch <- b.eventForProvider(event, in, sub.provider):
 			providerSent[sub.provider] = struct{}{}
 			allowed[sub.provider] = struct{}{}
 			delivered++
@@ -660,8 +740,109 @@ func (b *agentBroker) dispatchMessageForProvider(in CommandInput, provider strin
 		if messageDedupeKey != "" {
 			b.seenMessages[messageDedupeKey] = now.Add(b.ttl)
 		}
+		b.observeLocked(in, allowed, now)
 	}
-	return delivered, delivered > 0
+	return delivered, delivered > 0, allowed
+}
+
+// dispatchAmbient delivers an observation copy of one human group message to
+// every ambient subscription granted its chat, except providers that already
+// received it — the addressed variant now, a legacy command (skip), or any
+// earlier delivery of the same message. An ambient delivery records no
+// delivery claim and no conversation grant, so its delivery_id cannot start a
+// response, read attached context, or upload an image, and its
+// conversation_id earns no follow-up scope.
+func (b *agentBroker) dispatchAmbient(in CommandInput, skip map[string]struct{}, replyOwner string) (delivered int) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	now := time.Now()
+	b.pruneLocked(now)
+	seen := b.observedBy[observationKey(in)]
+	if seen == nil {
+		seen = &messageObservation{}
+	}
+	sent := make(map[string]struct{})
+	event := agentMessageEvent(in, AgentAddressingAmbient)
+	for _, sub := range b.subscribers {
+		if !sub.includeAmbientMessages || !sub.allowsApp(in.AppAlias) {
+			continue
+		}
+		if _, ok := skip[sub.provider]; ok {
+			continue
+		}
+		if _, ok := seen.providers[sub.provider]; ok {
+			continue
+		}
+		if _, ok := sent[sub.provider]; ok {
+			continue
+		}
+		if b.ambientChat == nil || !b.ambientChat(sub.provider, in.ChatAlias) {
+			continue
+		}
+		out := b.eventForProvider(event, in, sub.provider)
+		if replyOwner != "" && sub.provider == replyOwner {
+			// The parent is this provider's own message, which is exactly what
+			// reply_to_message_ref means on any other delivery.
+			out.Message.ReplyToMessageRef = feishu.MessageRefForApp(in.AppAlias, in.Metadata["parent_id"])
+		}
+		select {
+		case sub.ch <- out:
+			sent[sub.provider] = struct{}{}
+			delivered++
+		default:
+		}
+	}
+	b.observeLocked(in, sent, now)
+	return delivered
+}
+
+// agentMessageEvent builds the provider-independent part of a message event.
+func agentMessageEvent(in CommandInput, addressing AgentAddressing) AgentEvent {
+	messageID := in.Metadata["message_id"]
+	threadID := in.Metadata["thread_id"]
+	return AgentEvent{
+		DeliveryID:     in.DeliveryID,
+		ConversationID: in.ConversationID,
+		ChatAlias:      in.ChatAlias,
+		SenderID:       in.SenderID,
+		Metadata:       agentPublicMetadata(in.Metadata, in.AppAlias),
+		Message: &AgentMessage{
+			Text:                 in.Prompt,
+			Command:              in.Command,
+			CommandText:          in.Text,
+			ConversationTitle:    in.ConversationTitle,
+			MessageRef:           feishu.MessageRefForApp(in.AppAlias, messageID),
+			ThreadRef:            feishu.ThreadRefForApp(in.AppAlias, threadID),
+			ThreadRootMessageRef: feishu.ThreadRootMessageRefForApp(in.AppAlias, messageID, threadID, in.Metadata["root_id"]),
+			Addressing:           addressing,
+		},
+	}
+}
+
+// eventForProvider applies the one per-provider difference in message
+// content: a provider holding the ambient grant already observes every member
+// of its chats, so it also gets mention identities — names in the text and
+// the mentions list. Every other provider keeps the legacy prompt exactly.
+func (b *agentBroker) eventForProvider(event AgentEvent, in CommandInput, provider string) AgentEvent {
+	out := cloneAgentEvent(event)
+	if out.Message != nil && b.mentionIdentities != nil && b.mentionIdentities(provider) {
+		if in.NamedPrompt != "" {
+			out.Message.Text = in.NamedPrompt
+		}
+		out.Message.Mentions = cloneAgentMentions(in.Mentions)
+	}
+	return out
+}
+
+func addressingFor(in CommandInput) AgentAddressing {
+	switch {
+	case in.Metadata["chat_type"] == "p2p":
+		return AgentAddressingDirect
+	case in.UnmentionedReply:
+		return AgentAddressingReply
+	default:
+		return AgentAddressingMention
+	}
 }
 
 func (s *Service) StartAgentResponse(ctx context.Context, in StartAgentResponseInput) (AgentResponseReceipt, *notify.APIError) {
@@ -877,6 +1058,11 @@ func (s *Service) StartAgentResponse(ctx context.Context, in StartAgentResponseI
 	}
 	delivery.response = response
 	delivery.state = agentDeliveryStreaming
+	authored := authoredMessage{
+		provider: provider, appAlias: delivery.appAlias,
+		chatAlias: delivery.input.ChatAlias, unconfiguredGroup: delivery.input.UnconfiguredGroup,
+		chatID: firstNonEmptyString(chatID, delivery.input.ChatID), messageID: delivery.messageID,
+	}
 	delivery.compactAfterStart()
 	b.mu.Lock()
 	b.responses[response.responseID] = response
@@ -885,6 +1071,9 @@ func (s *Service) StartAgentResponse(ctx context.Context, in StartAgentResponseI
 	if apiErr := s.persistAgentOwner(response); apiErr != nil {
 		return AgentResponseReceipt{}, apiErr
 	}
+	// A provider that may speak proactively can later reply to its own card.
+	// The card already exists, so a retention failure is logged, not returned.
+	s.rememberAuthoredMessageSoftly(authored, "response", response.responseID)
 	return receiptFor(response, false), nil
 }
 
@@ -1692,6 +1881,11 @@ func (b *agentBroker) pruneLocked(now time.Time) {
 			delete(b.seenMessages, messageID)
 		}
 	}
+	for key, observation := range b.observedBy {
+		if now.After(observation.expiresAt) {
+			delete(b.observedBy, key)
+		}
+	}
 	for conversationID, route := range b.conversations {
 		if route.expired(now) {
 			delete(b.conversations, conversationID)
@@ -1852,6 +2046,7 @@ func cloneAgentEvent(in AgentEvent) AgentEvent {
 	out.Metadata = cloneStringMap(in.Metadata)
 	if in.Message != nil {
 		message := *in.Message
+		message.Mentions = cloneAgentMentions(in.Message.Mentions)
 		out.Message = &message
 	}
 	if in.CardAction != nil {
@@ -1859,6 +2054,22 @@ func cloneAgentEvent(in AgentEvent) AgentEvent {
 		out.CardAction = &action
 	}
 	return out
+}
+
+func cloneAgentMentions(in []AgentMention) []AgentMention {
+	if len(in) == 0 {
+		return nil
+	}
+	return append([]AgentMention(nil), in...)
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func (s *Service) logAgentCardFailure(operation, responseID string, err error) {
