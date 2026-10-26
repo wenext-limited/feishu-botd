@@ -22,6 +22,11 @@ const (
 	defaultSendTimeout              = 15 * time.Second
 	defaultScriptExecTimeoutSeconds = 120
 	minimumBearerTokenBytes         = 32
+
+	// UnconfiguredGroupAliasPrefix starts the stable opaque alias botd derives
+	// for a group admitted by allow_unconfigured_group_chats. The suffix is a
+	// 64-character lowercase hex digest; the raw chat id never appears in it.
+	UnconfiguredGroupAliasPrefix = "unconfigured-group-"
 )
 
 // AppConfig is one Feishu application's private runtime configuration.
@@ -102,6 +107,19 @@ type AgentProviderConfig struct {
 	// separate capability from the collapsible-panel timeline every provider
 	// already has, because the underlying API needs its own tenant permission.
 	AllowCoTProgress bool
+	// AllowAmbientMessages permits the provider to observe every human text
+	// message in the group chats named by AmbientChatAliases, whether or not it
+	// addresses the bot. It is the broadest read grant botd has: it also gives
+	// the provider the identities of people mentioned in its deliveries. It is
+	// inert without at least one alias, and config loading rejects that shape.
+	AllowAmbientMessages bool
+	AmbientChatAliases   []string
+	// AllowProactiveMessages permits PostAgentMessage: speaking in a chat with
+	// no inbound delivery to answer. Like follow-ups it lets the agent speak
+	// unprompted, but it is not bounded by a conversation the provider was
+	// spoken to in, only by ProactiveChatAliases, so it is a separate grant.
+	AllowProactiveMessages bool
+	ProactiveChatAliases   []string
 	// WorkingReactionEmoji, when non-empty, is the Feishu emoji key (e.g.
 	// "OnIt") the daemon places on the triggering message for the duration of
 	// a response and removes once it closes. Entirely daemon-driven — the
@@ -275,6 +293,104 @@ func (c Config) ProviderAllowsAgentReactions(provider string) bool {
 	return configured && providerCfg.AllowAgentReactions
 }
 
+// ProviderAllowsAmbientMessages reports whether the provider holds the ambient
+// grant at all. Such a provider already observes every member of its granted
+// chats, so botd also renders mention identities into its deliveries.
+func (c Config) ProviderAllowsAmbientMessages(provider string) bool {
+	providerCfg, configured := c.AgentProviders[strings.TrimSpace(provider)]
+	return configured && providerCfg.AllowAmbientMessages
+}
+
+// ProviderAllowsAmbientChat is the per-chat ambient check. Omission always
+// denies, and the alias must be one the operator named for this provider.
+func (c Config) ProviderAllowsAmbientChat(provider, chatAlias string) bool {
+	providerCfg, configured := c.AgentProviders[strings.TrimSpace(provider)]
+	return configured && providerCfg.AllowAmbientMessages &&
+		containsChatAlias(providerCfg.AmbientChatAliases, chatAlias)
+}
+
+// ProviderAllowsProactiveMessages reports whether the provider may call
+// PostAgentMessage at all. Which chats it may speak in is ProviderAllowsProactiveChat.
+func (c Config) ProviderAllowsProactiveMessages(provider string) bool {
+	providerCfg, configured := c.AgentProviders[strings.TrimSpace(provider)]
+	return configured && providerCfg.AllowProactiveMessages
+}
+
+// ProviderAllowsProactiveChat is the per-chat proactive check, applied to a
+// new root message's alias and to the chat a reply target lives in.
+func (c Config) ProviderAllowsProactiveChat(provider, chatAlias string) bool {
+	providerCfg, configured := c.AgentProviders[strings.TrimSpace(provider)]
+	return configured && providerCfg.AllowProactiveMessages &&
+		containsChatAlias(providerCfg.ProactiveChatAliases, chatAlias)
+}
+
+// ProactiveProvidersForChat returns, in deterministic order, every provider
+// that may speak proactively in chatAlias of appAlias. botd retains a private
+// reply route for a message only when this list is non-empty.
+func (c Config) ProactiveProvidersForChat(appAlias, chatAlias string) []string {
+	providers := make([]string, 0)
+	for provider := range c.AgentProviders {
+		if c.ProviderAllowsProactiveChat(provider, chatAlias) && c.ProviderAllowsApp(provider, appAlias) {
+			providers = append(providers, provider)
+		}
+	}
+	sort.Strings(providers)
+	return providers
+}
+
+// AmbientChatEnabled reports whether any provider allowed to see appAlias is
+// ambient-granted for chatAlias. The receiver admits an unmentioned, non-reply
+// group message as an ambient candidate only when this is true, so a
+// deployment without ambient grants keeps discarding those messages at ingress.
+func (c Config) AmbientChatEnabled(appAlias, chatAlias string) bool {
+	for provider := range c.AgentProviders {
+		if c.ProviderAllowsAmbientChat(provider, chatAlias) && c.ProviderAllowsApp(provider, appAlias) {
+			return true
+		}
+	}
+	return false
+}
+
+// AnyProviderAllowsProactiveMessages reports whether botd needs to retain
+// private reply routes at all.
+func (c Config) AnyProviderAllowsProactiveMessages() bool {
+	for _, providerCfg := range c.AgentProviders {
+		if providerCfg.AllowProactiveMessages {
+			return true
+		}
+	}
+	return false
+}
+
+// IsUnconfiguredGroupAlias reports whether alias has the exact shape of the
+// opaque alias botd derives for an allowed unconfigured group.
+func IsUnconfiguredGroupAlias(alias string) bool {
+	digest, ok := strings.CutPrefix(alias, UnconfiguredGroupAliasPrefix)
+	if !ok || len(digest) != 64 {
+		return false
+	}
+	for index := 0; index < len(digest); index++ {
+		char := digest[index]
+		if !(char >= '0' && char <= '9' || char >= 'a' && char <= 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+func containsChatAlias(aliases []string, chatAlias string) bool {
+	chatAlias = normalizeChannelName(chatAlias)
+	if chatAlias == "" {
+		return false
+	}
+	for _, alias := range aliases {
+		if alias == chatAlias {
+			return true
+		}
+	}
+	return false
+}
+
 // AgentWorkingReaction returns the configured emoji key for this provider, or
 // "" if the behavior is not enabled. Unlike the Allow* grants above this is a
 // daemon-driven behavior default, not a provider capability, so callers do
@@ -382,6 +498,10 @@ func LoadFromEnv() (Config, error) {
 			AllowAttachedVideo:       providerCfg.AllowAttachedVideo,
 			AllowAgentReactions:      providerCfg.AllowAgentReactions,
 			AllowCoTProgress:         providerCfg.AllowCoTProgress,
+			AllowAmbientMessages:     providerCfg.AllowAmbientMessages,
+			AmbientChatAliases:       cloneStrings(providerCfg.AmbientChatAliases),
+			AllowProactiveMessages:   providerCfg.AllowProactiveMessages,
+			ProactiveChatAliases:     cloneStrings(providerCfg.ProactiveChatAliases),
 			WorkingReactionEmoji:     providerCfg.WorkingReactionEmoji,
 			WorkingReactionOverrides: providerCfg.WorkingReactionSenderOverrides,
 			AllowedApps:              allowedApps,
@@ -391,9 +511,18 @@ func LoadFromEnv() (Config, error) {
 	if err := validateAgentProviderApps(cfg.AgentProviders, cfg.Apps); err != nil {
 		return Config{}, err
 	}
+	if err := validateAgentProviderChatGrants(cfg); err != nil {
+		return Config{}, err
+	}
 	for provider, providerCfg := range cfg.AgentProviders {
 		if providerCfg.AllowMessageReactions && cfg.StateDir == "" {
 			return Config{}, fmt.Errorf("provider %q allow_message_reactions requires state_dir or FEISHU_BOTD_STATE_DIR", provider)
+		}
+		// A posted message is useful only if a reply to it routes back, and
+		// that ownership record lives under state_dir, as do the reply routes
+		// that make a delivered message_ref a later reply target.
+		if providerCfg.AllowProactiveMessages && cfg.StateDir == "" {
+			return Config{}, fmt.Errorf("provider %q allow_proactive_messages requires state_dir or FEISHU_BOTD_STATE_DIR", provider)
 		}
 	}
 	if err := validateAgentProviderTokens(cfg.AgentProviders, ""); err != nil {
@@ -491,6 +620,10 @@ type fileAgentProviderConfig struct {
 	AllowAttachedVideo     bool               `json:"allow_attached_video"`
 	AllowAgentReactions    bool               `json:"allow_agent_reactions"`
 	AllowCoTProgress       bool               `json:"allow_cot_progress"`
+	AllowAmbientMessages   bool               `json:"allow_ambient_messages"`
+	AmbientChatAliases     []string           `json:"ambient_chat_aliases"`
+	AllowProactiveMessages bool               `json:"allow_proactive_messages"`
+	ProactiveChatAliases   []string           `json:"proactive_chat_aliases"`
 	WorkingReactionEmoji   string             `json:"working_reaction_emoji"`
 	// WorkingReactionSenderOverrides maps a sender's Feishu display name to a
 	// working reaction emoji, resolved via a live Contact API call — see
@@ -870,6 +1003,12 @@ func normalizeServices(in map[string]ServiceConfig) map[string]ServiceConfig {
 	return services
 }
 
+// NormalizeChannelAlias applies the one channel-alias normalization botd uses
+// everywhere, so a provider-supplied alias compares equal to a configured one.
+func NormalizeChannelAlias(name string) string {
+	return normalizeChannelName(name)
+}
+
 func normalizeChannelName(name string) string {
 	name = strings.TrimSpace(name)
 	name = strings.ToLower(strings.ReplaceAll(name, "_", "-"))
@@ -1153,6 +1292,14 @@ func normalizeAgentProviderConfigs(in map[string]fileAgentProviderConfig) (map[s
 		if err != nil {
 			return nil, fmt.Errorf("provider %q: %w", provider, err)
 		}
+		ambientChats, err := normalizeProviderChatAliases("ambient_chat_aliases", providerCfg.AmbientChatAliases)
+		if err != nil {
+			return nil, fmt.Errorf("provider %q: %w", provider, err)
+		}
+		proactiveChats, err := normalizeProviderChatAliases("proactive_chat_aliases", providerCfg.ProactiveChatAliases)
+		if err != nil {
+			return nil, fmt.Errorf("provider %q: %w", provider, err)
+		}
 		out[provider] = fileAgentProviderConfig{
 			AuthTokenFile:                  tokenFile,
 			AllowedCommands:                commands,
@@ -1167,6 +1314,10 @@ func normalizeAgentProviderConfigs(in map[string]fileAgentProviderConfig) (map[s
 			AllowAttachedVideo:             providerCfg.AllowAttachedVideo,
 			AllowAgentReactions:            providerCfg.AllowAgentReactions,
 			AllowCoTProgress:               providerCfg.AllowCoTProgress,
+			AllowAmbientMessages:           providerCfg.AllowAmbientMessages,
+			AmbientChatAliases:             ambientChats,
+			AllowProactiveMessages:         providerCfg.AllowProactiveMessages,
+			ProactiveChatAliases:           proactiveChats,
 			WorkingReactionEmoji:           providerCfg.WorkingReactionEmoji,
 			WorkingReactionSenderOverrides: reactionOverrides,
 		}
@@ -1200,6 +1351,90 @@ func normalizeProviderWorkingReactionOverrides(in map[string]string) (map[string
 		out[name] = emoji
 	}
 	return out, nil
+}
+
+// normalizeProviderChatAliases applies the channel-alias normalization used
+// everywhere else, so a grant matches the alias ingress reports. Whether each
+// alias resolves is checked once the channel directory exists.
+func normalizeProviderChatAliases(field string, in []string) ([]string, error) {
+	if len(in) == 0 {
+		return nil, nil
+	}
+	seen := make(map[string]struct{}, len(in))
+	out := make([]string, 0, len(in))
+	for _, raw := range in {
+		alias := normalizeChannelName(raw)
+		if alias == "" {
+			return nil, fmt.Errorf("%s contains an empty chat alias", field)
+		}
+		if len(alias) > 160 {
+			return nil, fmt.Errorf("%s entry exceeds 160 bytes", field)
+		}
+		if _, duplicate := seen[alias]; duplicate {
+			continue
+		}
+		seen[alias] = struct{}{}
+		out = append(out, alias)
+	}
+	return out, nil
+}
+
+// validateAgentProviderChatGrants keeps the two chat-scoped grants honest: a
+// flag without aliases grants nothing and an alias list without its flag
+// grants nothing, so both shapes are operator mistakes rather than defaults.
+// Every alias must be a group botd can actually resolve for that provider.
+func validateAgentProviderChatGrants(cfg Config) error {
+	names := make([]string, 0, len(cfg.AgentProviders))
+	for provider := range cfg.AgentProviders {
+		names = append(names, provider)
+	}
+	sort.Strings(names)
+	for _, provider := range names {
+		providerCfg := cfg.AgentProviders[provider]
+		for _, grant := range []struct {
+			flag, field string
+			allowed     bool
+			aliases     []string
+		}{
+			{"allow_ambient_messages", "ambient_chat_aliases", providerCfg.AllowAmbientMessages, providerCfg.AmbientChatAliases},
+			{"allow_proactive_messages", "proactive_chat_aliases", providerCfg.AllowProactiveMessages, providerCfg.ProactiveChatAliases},
+		} {
+			switch {
+			case grant.allowed && len(grant.aliases) == 0:
+				return fmt.Errorf("provider %q %s requires at least one %s entry", provider, grant.flag, grant.field)
+			case !grant.allowed && len(grant.aliases) > 0:
+				return fmt.Errorf("provider %q %s requires %s", provider, grant.field, grant.flag)
+			}
+			for _, alias := range grant.aliases {
+				if err := validateProviderChatAlias(cfg, provider, grant.field, alias); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func validateProviderChatAlias(cfg Config, provider, field, alias string) error {
+	if alias == "direct" {
+		return fmt.Errorf("provider %q %s cannot name %q; the grant covers group chats only", provider, field, alias)
+	}
+	if IsUnconfiguredGroupAlias(alias) {
+		for appAlias := range cfg.Apps {
+			if cfg.AllowsUnconfiguredGroupChats(appAlias) && cfg.ProviderAllowsApp(provider, appAlias) {
+				return nil
+			}
+		}
+		return fmt.Errorf("provider %q %s entry %q is an unconfigured-group alias, but no app it may access sets allow_unconfigured_group_chats", provider, field, alias)
+	}
+	appAlias, _, ok := cfg.ResolveChannel(alias)
+	if !ok {
+		return fmt.Errorf("provider %q %s references unknown channel alias %q", provider, field, alias)
+	}
+	if !cfg.ProviderAllowsApp(provider, appAlias) {
+		return fmt.Errorf("provider %q %s references channel alias %q owned by app %q outside its allowed_apps", provider, field, alias, appAlias)
+	}
+	return nil
 }
 
 func normalizeProviderApps(in []string) ([]string, error) {
