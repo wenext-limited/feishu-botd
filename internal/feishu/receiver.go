@@ -7,8 +7,10 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"sort"
 	"strings"
 	"sync"
+	"unicode"
 
 	larkevent "github.com/larksuite/oapi-sdk-go/v3/event"
 	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher"
@@ -31,6 +33,12 @@ type CommandReceiverConfig struct {
 	BotUnionID                  string
 	BotNames                    []string
 	ChatTitleLookup             ChatTitleLookup
+
+	// AmbientChat reports whether an unmentioned, non-reply group message in
+	// chatAlias may become an ambient candidate, because some provider holds
+	// the ambient grant for that chat. Nil keeps the historical behavior of
+	// discarding every such message at ingress, before any title lookup.
+	AmbientChat func(chatAlias string) bool
 
 	// ConnectionStateChanged receives only a public app alias and a fixed state.
 	// Raw SDK errors can contain credentials, connection URLs, or tenant data and
@@ -61,7 +69,36 @@ type InboundCommand struct {
 	// that had a parent message but no matching bot mention. The service must
 	// prove that the parent is agent-authored before routing this candidate.
 	UnmentionedReply bool `json:"-"`
+	// AmbientOnly is daemon-private ingress state. It marks a group message
+	// that neither mentions the bot nor replies to anything: it can only ever
+	// be an ambient observation, never a prompt.
+	AmbientOnly bool `json:"-"`
+	// HumanSender is daemon-private ingress state: Feishu reported a user, not
+	// an app, as the sender. Ambient delivery requires it.
+	HumanSender bool `json:"-"`
+
+	// NamedPrompt is Prompt with other people's mentions rendered inline as
+	// "@<name>" rather than the legacy "@participant" (rich text) or raw
+	// mention key (plain text). The bot's own mention is stripped from both.
+	NamedPrompt string
+	// Mentions are the people, not bots, the message mentions, in order of
+	// appearance and without repeats.
+	Mentions []Mention
 }
+
+// Mention is one person a message mentions. UserID is in the same opaque
+// space as InboundCommand.SenderID; Name is the display name the event
+// carried, an untrusted label.
+type Mention struct {
+	UserID string
+	Name   string
+}
+
+const (
+	maxInboundMentions      = 64
+	maxInboundMentionName   = 256
+	maxInboundMentionUserID = 160
+)
 
 type CommandHandler func(context.Context, InboundCommand) error
 
@@ -485,6 +522,8 @@ func (r *CommandReceiver) CommandFromEvent(event *larkim.P2MessageReceiveV1) (In
 	}
 
 	text := ""
+	named := ""
+	var mentions []Mention
 	switch messageType {
 	case "text":
 		var body struct {
@@ -494,21 +533,33 @@ func (r *CommandReceiver) CommandFromEvent(event *larkim.P2MessageReceiveV1) (In
 			return InboundCommand{}, false
 		}
 		text = strings.TrimSpace(body.Text)
+		named = r.namedPlainText(text, msg.Mentions)
+		mentions = r.mentionedPeople(plainTextMentionOrder(text, msg.Mentions), nil)
 	case "post":
 		var ok bool
 		text, ok = r.postTriggerText(deref(msg.Content), msg.Mentions)
 		if !ok {
 			return InboundCommand{}, false
 		}
+		named, _ = r.postText(deref(msg.Content), msg.Mentions, true)
+		mentions = r.mentionedPeople(r.postMentionOrder(deref(msg.Content), msg.Mentions))
 	}
 	if text == "" {
 		return InboundCommand{}, false
 	}
 
 	mentionKeys := r.matchingMentionKeys(msg.Mentions)
+	humanSender := r.isHumanSender(event.Event.Sender)
 	unmentionedReply := chatType != "p2p" && len(mentionKeys) == 0 && strings.TrimSpace(deref(msg.ParentId)) != ""
+	ambientOnly := false
 	if chatType != "p2p" && len(mentionKeys) == 0 && !unmentionedReply {
-		return InboundCommand{}, false
+		// Neither addressed nor a reply: only an ambient observation could
+		// want this message, and only from a human in a chat some provider
+		// was granted. Everything else is discarded exactly as before.
+		if !humanSender || r.cfg.AmbientChat == nil || !r.cfg.AmbientChat(chatAlias) {
+			return InboundCommand{}, false
+		}
+		ambientOnly = true
 	}
 	for _, key := range mentionKeys {
 		if key != "" {
@@ -517,10 +568,17 @@ func (r *CommandReceiver) CommandFromEvent(event *larkim.P2MessageReceiveV1) (In
 	}
 	if len(mentionKeys) > 0 {
 		text = r.stripConfiguredBotName(text)
+		// Named text carries real people's names, so the bot's name is only
+		// stripped as a whole word: bot "Al" must not eat "@Alice".
+		named = r.stripConfiguredBotNameWord(named)
 	}
 	prompt := strings.TrimSpace(text)
 	if prompt == "" {
 		return InboundCommand{}, false
+	}
+	namedPrompt := strings.TrimSpace(named)
+	if namedPrompt == "" {
+		namedPrompt = prompt
 	}
 	fields := strings.Fields(prompt)
 	if len(fields) == 0 {
@@ -551,9 +609,235 @@ func (r *CommandReceiver) CommandFromEvent(event *larkim.P2MessageReceiveV1) (In
 		ChatID:            chatID,
 		UnconfiguredGroup: unconfiguredGroup,
 		UnmentionedReply:  unmentionedReply,
+		AmbientOnly:       ambientOnly,
+		HumanSender:       humanSender,
+		NamedPrompt:       namedPrompt,
+		Mentions:          mentions,
 		SenderID:          senderID(event.Event.Sender),
 		Metadata:          commandMetadataForApp(r.cfg.AppAlias, event, msg, chatType),
 	}, true
+}
+
+// isHumanSender reports whether Feishu identified the sender as a user. A
+// missing type is not assumed to be human, and a sender carrying this app's
+// own configured bot identity never is.
+func (r *CommandReceiver) isHumanSender(sender *larkim.EventSender) bool {
+	if sender == nil || !strings.EqualFold(deref(sender.SenderType), "user") {
+		return false
+	}
+	if sender.SenderId != nil {
+		for _, pair := range [][2]string{
+			{r.cfg.BotOpenID, deref(sender.SenderId.OpenId)},
+			{r.cfg.BotUserID, deref(sender.SenderId.UserId)},
+			{r.cfg.BotUnionID, deref(sender.SenderId.UnionId)},
+		} {
+			if pair[0] != "" && pair[0] == pair[1] {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// namedPlainText renders a plain-text body's mention keys: this bot's own key
+// disappears, everyone else becomes "@<name>". Longer keys are tried first so
+// "@_user_10" is never read as "@_user_1" followed by a stray "0".
+func (r *CommandReceiver) namedPlainText(text string, mentions []*larkim.MentionEvent) string {
+	type replacement struct{ key, value string }
+	replacements := make([]replacement, 0, len(mentions))
+	for _, mention := range mentions {
+		if mention == nil {
+			continue
+		}
+		key := deref(mention.Key)
+		if key == "" {
+			continue
+		}
+		value := ""
+		if !r.matchesBotMention(mention) {
+			value = mentionLabel(deref(mention.Name))
+		}
+		replacements = append(replacements, replacement{key: key, value: value})
+	}
+	if len(replacements) == 0 {
+		return text
+	}
+	sort.SliceStable(replacements, func(i, j int) bool { return len(replacements[i].key) > len(replacements[j].key) })
+	pairs := make([]string, 0, len(replacements)*2)
+	for _, item := range replacements {
+		pairs = append(pairs, item.key, item.value)
+	}
+	return strings.NewReplacer(pairs...).Replace(text)
+}
+
+func mentionLabel(name string) string {
+	if name = strings.TrimSpace(name); name != "" {
+		return "@" + name
+	}
+	return "@participant"
+}
+
+// plainTextMentionOrder orders the event's mentions by where their keys first
+// appear in the text. A mention whose key never appears keeps its event order
+// after every located one.
+func plainTextMentionOrder(text string, mentions []*larkim.MentionEvent) []*larkim.MentionEvent {
+	type position struct {
+		mention *larkim.MentionEvent
+		index   int
+	}
+	positions := make([]position, 0, len(mentions))
+	for _, mention := range mentions {
+		if mention == nil {
+			continue
+		}
+		index := -1
+		if key := deref(mention.Key); key != "" {
+			index = mentionKeyIndex(text, key)
+		}
+		if index < 0 {
+			index = len(text) + 1
+		}
+		positions = append(positions, position{mention: mention, index: index})
+	}
+	sort.SliceStable(positions, func(i, j int) bool { return positions[i].index < positions[j].index })
+	ordered := make([]*larkim.MentionEvent, 0, len(positions))
+	for _, item := range positions {
+		ordered = append(ordered, item.mention)
+	}
+	return ordered
+}
+
+// mentionKeyIndex finds key as a whole mention token, so "@_user_1" does not
+// match inside "@_user_10".
+func mentionKeyIndex(text, key string) int {
+	offset := 0
+	for {
+		index := strings.Index(text[offset:], key)
+		if index < 0 {
+			return -1
+		}
+		end := offset + index + len(key)
+		if end >= len(text) || text[end] < '0' || text[end] > '9' {
+			return offset + index
+		}
+		offset = end
+	}
+}
+
+// postMentionOrder orders the event's mentions by the at-element that first
+// refers to them. An at-element naming someone the event's mention list does
+// not cover is returned separately, already reduced to a Mention.
+func (r *CommandReceiver) postMentionOrder(raw string, mentions []*larkim.MentionEvent) ([]*larkim.MentionEvent, []Mention) {
+	post, ok := localizedAttachedPost(raw)
+	if !ok {
+		return mentions, nil
+	}
+	botTokens := r.botMentionTokens(mentions)
+	seen := make(map[*larkim.MentionEvent]struct{}, len(mentions))
+	ordered := make([]*larkim.MentionEvent, 0, len(mentions))
+	extra := make([]Mention, 0)
+	for _, row := range post.Content {
+		for _, element := range row {
+			if strings.TrimSpace(element.Tag) != "at" || r.isBotPostMention(element, botTokens) {
+				continue
+			}
+			if mention := mentionForPostElement(element, mentions); mention != nil {
+				if _, dup := seen[mention]; !dup {
+					seen[mention] = struct{}{}
+					ordered = append(ordered, mention)
+				}
+				continue
+			}
+			userID := strings.TrimSpace(element.UserID)
+			// Only something shaped like a real user id may become a person:
+			// never a mention key, and never the @all pseudo-mention.
+			if userID == "" || strings.HasPrefix(userID, "@") || strings.EqualFold(userID, "all") {
+				continue
+			}
+			extra = append(extra, Mention{UserID: userID, Name: strings.TrimSpace(element.UserName)})
+		}
+	}
+	for _, mention := range mentions {
+		if mention == nil {
+			continue
+		}
+		if _, ok := seen[mention]; !ok {
+			ordered = append(ordered, mention)
+		}
+	}
+	return ordered, extra
+}
+
+// mentionForPostElement matches one post at-element to the event mention it
+// refers to, by mention key or by any of the mention's ids.
+func mentionForPostElement(element postElement, mentions []*larkim.MentionEvent) *larkim.MentionEvent {
+	userID := strings.TrimSpace(element.UserID)
+	if userID == "" {
+		return nil
+	}
+	for _, mention := range mentions {
+		if mention == nil {
+			continue
+		}
+		if deref(mention.Key) == userID {
+			return mention
+		}
+		if mention.Id != nil {
+			for _, id := range []*string{mention.Id.OpenId, mention.Id.UserId, mention.Id.UnionId} {
+				if deref(id) == userID {
+					return mention
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// mentionedPeople reduces ordered event mentions (plus any post-only extras,
+// which follow them) to the people list: bots, including this one, are
+// dropped, a mention without an id is dropped, and each person appears once.
+func (r *CommandReceiver) mentionedPeople(ordered []*larkim.MentionEvent, extra []Mention) []Mention {
+	people := make([]Mention, 0)
+	seen := make(map[string]struct{})
+	add := func(userID, name string) {
+		userID = strings.TrimSpace(userID)
+		if userID == "" || len(userID) > maxInboundMentionUserID || len(people) >= maxInboundMentions {
+			return
+		}
+		if _, dup := seen[userID]; dup {
+			return
+		}
+		seen[userID] = struct{}{}
+		name = strings.TrimSpace(name)
+		if len(name) > maxInboundMentionName {
+			name = strings.ToValidUTF8(name[:maxInboundMentionName], "")
+		}
+		people = append(people, Mention{UserID: userID, Name: name})
+	}
+	for _, mention := range ordered {
+		if mention == nil || r.matchesBotMention(mention) || isBotMentionType(mention) {
+			continue
+		}
+		add(reactionUserID(mention.Id), deref(mention.Name))
+	}
+	for _, mention := range extra {
+		add(mention.UserID, mention.Name)
+	}
+	if len(people) == 0 {
+		return nil
+	}
+	return people
+}
+
+// isBotMentionType reports a mention Feishu labelled as a bot or app. Such a
+// mention addresses software, not a person, so it never enters the people list.
+func isBotMentionType(mention *larkim.MentionEvent) bool {
+	switch strings.ToLower(deref(mention.MentionedType)) {
+	case "bot", "app":
+		return true
+	default:
+		return false
+	}
 }
 
 // unconfiguredGroupAlias gives providers a stable correlation value without
@@ -568,7 +852,7 @@ func unconfiguredGroupAlias(appAlias, chatID string) string {
 		"feishu-botd/unconfigured-group-alias/v1\x00" +
 			effectiveAppAlias(appAlias) + "\x00" + chatID,
 	))
-	return "unconfigured-group-" + hex.EncodeToString(sum[:])
+	return config.UnconfiguredGroupAliasPrefix + hex.EncodeToString(sum[:])
 }
 
 // CardActionFromEvent removes callback-only credentials and raw routing ids
@@ -641,6 +925,12 @@ func (r *CommandReceiver) matchingMentionKeys(mentions []*larkim.MentionEvent) [
 // knows the message carried something it cannot see and can still answer the
 // words around it.
 func (r *CommandReceiver) postTriggerText(raw string, mentions []*larkim.MentionEvent) (string, bool) {
+	return r.postText(raw, mentions, false)
+}
+
+// postText is postTriggerText with a choice of how other people's mentions
+// render: the legacy "@participant", or "@<name>" when named is true.
+func (r *CommandReceiver) postText(raw string, mentions []*larkim.MentionEvent, named bool) (string, bool) {
 	post, ok := localizedAttachedPost(raw)
 	if !ok {
 		return "", false
@@ -662,7 +952,15 @@ func (r *CommandReceiver) postTriggerText(raw string, mentions []*larkim.Mention
 				if r.isBotPostMention(element, botTokens) {
 					continue
 				}
-				parts = append(parts, "@participant")
+				if !named {
+					parts = append(parts, "@participant")
+					continue
+				}
+				name := strings.TrimSpace(element.UserName)
+				if mention := mentionForPostElement(element, mentions); mention != nil && deref(mention.Name) != "" {
+					name = deref(mention.Name)
+				}
+				parts = append(parts, mentionLabel(name))
 			default:
 				if element.Text != "" {
 					parts = append(parts, element.Text)
@@ -755,6 +1053,25 @@ func (r *CommandReceiver) stripConfiguredBotName(text string) string {
 	for name := range r.botNames {
 		for _, prefix := range []string{"@" + name, name} {
 			if rest, ok := trimCaseInsensitivePrefix(trimmed, prefix); ok {
+				return rest
+			}
+		}
+	}
+	return trimmed
+}
+
+// stripConfiguredBotNameWord is stripConfiguredBotName that only strips a
+// name followed by whitespace or the end of the text.
+func (r *CommandReceiver) stripConfiguredBotNameWord(text string) string {
+	trimmed := strings.TrimSpace(text)
+	for name := range r.botNames {
+		for _, prefix := range []string{"@" + name, name} {
+			rest, ok := trimCaseInsensitivePrefix(trimmed, prefix)
+			if !ok {
+				continue
+			}
+			remainder := []rune(trimmed)[len([]rune(prefix)):]
+			if len(remainder) == 0 || unicode.IsSpace(remainder[0]) {
 				return rest
 			}
 		}
