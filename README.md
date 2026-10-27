@@ -103,6 +103,7 @@ and per-caller defaults. This example keeps the existing top-level app as
       "allow_attached_video": false,
       "allow_follow_up_messages": false,
       "allow_image_upload": false,
+      "allow_sender_email": false,
       "allow_legacy_commands": false
     }
   },
@@ -214,6 +215,11 @@ additionally permit downloaded, bounded video bytes in that same snapshot; it
 defaults to false and does nothing without `allow_attached_context` also set.
 `allow_image_upload` separately permits uploading an image so a response can
 render it, and also defaults to false.
+`allow_sender_email` separately hands the provider the sender's company email
+address on every inbound message (`InboundAgentMessage.sender_email`), so it can
+act for that person elsewhere. It is personal data and defaults to false; botd
+looks addresses up only when some provider holds the grant. See
+[docs/agent.md](docs/agent.md) for the Feishu scope it needs.
 `allowed_apps` optionally limits that provider to configured app aliases. When
 the field is absent, all apps are allowed; an explicit empty list allows none,
 and `null` is rejected. botd applies the allowlist before event fan-out and

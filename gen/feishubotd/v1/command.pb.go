@@ -1033,8 +1033,15 @@ type InboundAgentMessage struct {
 	// Current group title as untrusted, provider-safe context. Empty for direct
 	// messages and when the fail-soft chat lookup is unavailable.
 	ConversationTitle string `protobuf:"bytes,5,opt,name=conversation_title,json=conversationTitle,proto3" json:"conversation_title,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// The sender's company email address, for a provider configured with
+	// allow_sender_email and empty for every other provider. Resolved through
+	// the Contact API from the sender's open_id: enterprise_email, or email
+	// when that is empty. Fail-soft: empty when the app lacks the contact
+	// scope, the lookup fails, or the user has no address. It is personal data,
+	// so a provider should use it to act for this person and never log it.
+	SenderEmail   string `protobuf:"bytes,6,opt,name=sender_email,json=senderEmail,proto3" json:"sender_email,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *InboundAgentMessage) Reset() {
@@ -1098,6 +1105,13 @@ func (x *InboundAgentMessage) GetReplyToMessageRef() string {
 func (x *InboundAgentMessage) GetConversationTitle() string {
 	if x != nil {
 		return x.ConversationTitle
+	}
+	return ""
+}
+
+func (x *InboundAgentMessage) GetSenderEmail() string {
+	if x != nil {
+		return x.SenderEmail
 	}
 	return ""
 }
@@ -3514,13 +3528,14 @@ const file_feishubotd_v1_command_proto_rawDesc = "" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B\t\n" +
 	"\apayloadJ\x04\b\x06\x10\n" +
-	"J\x04\b\r\x10 \"\xc6\x01\n" +
+	"J\x04\b\r\x10 \"\xe9\x01\n" +
 	"\x13InboundAgentMessage\x12\x12\n" +
 	"\x04text\x18\x01 \x01(\tR\x04text\x12\x18\n" +
 	"\acommand\x18\x02 \x01(\tR\acommand\x12!\n" +
 	"\fcommand_text\x18\x03 \x01(\tR\vcommandText\x12/\n" +
 	"\x14reply_to_message_ref\x18\x04 \x01(\tR\x11replyToMessageRef\x12-\n" +
-	"\x12conversation_title\x18\x05 \x01(\tR\x11conversationTitle\"c\n" +
+	"\x12conversation_title\x18\x05 \x01(\tR\x11conversationTitle\x12!\n" +
+	"\fsender_email\x18\x06 \x01(\tR\vsenderEmail\"c\n" +
 	"\x1eGetAgentAttachedContextRequest\x12\x1a\n" +
 	"\bprovider\x18\x01 \x01(\tR\bprovider\x12\x1f\n" +
 	"\vdelivery_id\x18\x02 \x01(\tR\n" +

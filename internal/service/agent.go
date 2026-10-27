@@ -62,6 +62,9 @@ type AgentMessage struct {
 	CommandText       string
 	ReplyToMessageRef string
 	ConversationTitle string
+	// SenderEmail is set only on the copy sent to a provider granted
+	// allow_sender_email.
+	SenderEmail string
 }
 
 type AgentCardAction struct {
@@ -324,6 +327,9 @@ type agentBroker struct {
 	seenMessages         map[string]time.Time
 	seenActions          map[appStateKey]time.Time
 	seenReactions        map[appStateKey]time.Time
+	// allowsSenderEmail reports a provider's allow_sender_email grant. Nil
+	// denies every provider.
+	allowsSenderEmail func(provider string) bool
 }
 
 type agentSubscriber struct {
@@ -638,8 +644,12 @@ func (b *agentBroker) dispatchMessageForProvider(in CommandInput, provider strin
 		if _, duplicateProvider := providerSent[sub.provider]; duplicateProvider {
 			continue
 		}
+		delivery := cloneAgentEvent(event)
+		if in.SenderEmail != "" && b.allowsSenderEmail != nil && b.allowsSenderEmail(sub.provider) {
+			delivery.Message.SenderEmail = in.SenderEmail
+		}
 		select {
-		case sub.ch <- cloneAgentEvent(event):
+		case sub.ch <- delivery:
 			providerSent[sub.provider] = struct{}{}
 			allowed[sub.provider] = struct{}{}
 			delivered++

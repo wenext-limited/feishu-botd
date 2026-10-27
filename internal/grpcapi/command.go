@@ -255,6 +255,7 @@ func agentEventToProto(event service.AgentEvent) *pb.SubscribeAgentEventsRespons
 		out.Payload = &pb.InboundAgentEvent_Message{Message: &pb.InboundAgentMessage{
 			Text: event.Message.Text, Command: event.Message.Command, CommandText: event.Message.CommandText,
 			ReplyToMessageRef: event.Message.ReplyToMessageRef, ConversationTitle: event.Message.ConversationTitle,
+			SenderEmail: event.Message.SenderEmail,
 		}}
 	} else if event.CardAction != nil {
 		out.Payload = &pb.InboundAgentEvent_CardAction{CardAction: &pb.InboundCardAction{

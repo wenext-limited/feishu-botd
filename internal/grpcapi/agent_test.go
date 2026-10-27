@@ -618,3 +618,16 @@ func TestAgentEnumMappings(t *testing.T) {
 		}
 	}
 }
+
+func TestAgentEventToProtoCarriesSenderEmail(t *testing.T) {
+	t.Parallel()
+
+	out := agentEventToProto(service.AgentEvent{
+		DeliveryID: "delivery_email_fixture",
+		SenderID:   "sender_fixture",
+		Message:    &service.AgentMessage{Text: "hi", SenderEmail: "lisi@zhenxinmail.com"},
+	}).GetEvent()
+	if got := out.GetMessage().GetSenderEmail(); got != "lisi@zhenxinmail.com" {
+		t.Fatalf("sender_email = %q", got)
+	}
+}
