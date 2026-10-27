@@ -148,6 +148,13 @@ message InboundAgentMessage {
   // Current group title as untrusted, provider-safe context. Empty for direct
   // messages and when the fail-soft chat lookup is unavailable.
   string conversation_title = 5;
+  // The sender's company email address, for a provider configured with
+  // allow_sender_email and empty for every other provider. Resolved through
+  // the Contact API from the sender's open_id: enterprise_email, or email
+  // when that is empty. Fail-soft: empty when the app lacks the contact
+  // scope, the lookup fails, or the user has no address. It is personal data,
+  // so a provider should use it to act for this person and never log it.
+  string sender_email = 6;
 }
 
 message GetAgentAttachedContextRequest {

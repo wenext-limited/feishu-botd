@@ -44,6 +44,11 @@ delivery does not support store apps):
    `im.message.reaction.created_v1` and `im.message.reaction.deleted_v1`.
    To expose the current group title, grant the permission required by
    `GET /open-apis/im/v1/chats/:chat_id`; title lookup is fail-soft.
+   To hand a provider granted `allow_sender_email` the sender's address, grant
+   `contact:user.employee:readonly` (it covers `enterprise_email`) and
+   `contact:user.email:readonly` (it covers `email`), and make sure the app's
+   contact visibility range (通讯录权限范围) includes the people who message the
+   bot. The lookup is fail-soft too: without them the address is empty.
 7. Publish a new app version, make the bot available to the intended users, and
    add it to every group in which it should answer.
 
@@ -97,6 +102,7 @@ openssl rand -base64 32 > /run/secrets/feishu-botd-example-agent-token
       "allow_follow_up_messages": false,
       "allow_message_reactions": true,
       "allow_image_upload": false,
+      "allow_sender_email": false,
       "allow_legacy_commands": false
     }
   },
@@ -234,7 +240,9 @@ to false and is inert without `allow_attached_context` also set — it is not
 an independent grant.
 `allow_image_upload` separately permits the outbound image upload described
 below, and likewise defaults to false: it is the only grant that writes a
-durable tenant-side object from bytes the provider supplied. Requests
+durable tenant-side object from bytes the provider supplied.
+`allow_sender_email` separately permits `sender_email`, described below; it
+defaults to false because the address is personal data. Requests
 outside this scope fail before broker registration. Event selection also
 considers `allowed_apps`: a disallowed exact-command subscriber cannot suppress
 an allowed unmatched subscriber. Grant only the minimum selectors needed;
@@ -287,6 +295,19 @@ unowned message, including an ordinary human-authored topic parent. Group
 messages also carry the current, trimmed `conversation_title` when the bounded
 five-minute lookup succeeds. The title is user-controlled context, not an
 authorization value; direct messages and failed lookups carry an empty title.
+
+A provider granted `allow_sender_email` also receives `sender_email`: the
+sender's `enterprise_email`, or `email` when that is empty, read through
+`GET /open-apis/contact/v3/users/:user_id` by open_id. This is the order dial
+uses when a person signs in with Feishu, so a provider can name the person to
+dial with it. Every other provider receives an empty string, and botd makes no
+Contact call unless some provider that may see the app holds the grant. The
+lookup is bounded to three seconds and cached per sender (an hour for an
+address, ten minutes for none or a failure). It never blocks or fails a
+message: a missing scope, a failed lookup, or a user with no address leaves it
+empty, and botd logs that once, without the address or the sender's id, until
+the next successful lookup. Treat the value as personal data and keep it out
+of logs.
 
 An unmentioned group reply is only an ingress candidate. botd hashes its parent
 id, resolves the existing 24-hour ownership record, checks the provider's app

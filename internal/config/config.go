@@ -102,6 +102,11 @@ type AgentProviderConfig struct {
 	// separate capability from the collapsible-panel timeline every provider
 	// already has, because the underlying API needs its own tenant permission.
 	AllowCoTProgress bool
+	// AllowSenderEmail permits the provider to receive the sender's company
+	// email address on every inbound message (InboundAgentMessage.sender_email),
+	// resolved by the daemon through the Contact API. It is personal data, so
+	// omission always denies, and a provider without it never causes a lookup.
+	AllowSenderEmail bool
 	// WorkingReactionEmoji, when non-empty, is the Feishu emoji key (e.g.
 	// "OnIt") the daemon places on the triggering message for the duration of
 	// a response and removes once it closes. Entirely daemon-driven — the
@@ -253,6 +258,26 @@ func (c Config) ProviderAllowsAttachedContext(provider string) bool {
 	return configured && providerCfg.AllowAttachedContext
 }
 
+// ProviderAllowsSenderEmail is an explicit personal-data grant: the sender's
+// company email address rides on every inbound message the provider receives.
+// Omission always denies.
+func (c Config) ProviderAllowsSenderEmail(provider string) bool {
+	providerCfg, configured := c.AgentProviders[strings.TrimSpace(provider)]
+	return configured && providerCfg.AllowSenderEmail
+}
+
+// AnyProviderAllowsSenderEmail reports whether some provider that may see
+// appAlias holds the sender-email grant, so the daemon looks an address up
+// only when someone could receive it.
+func (c Config) AnyProviderAllowsSenderEmail(appAlias string) bool {
+	for provider, providerCfg := range c.AgentProviders {
+		if providerCfg.AllowSenderEmail && c.ProviderAllowsApp(provider, appAlias) {
+			return true
+		}
+	}
+	return false
+}
+
 // ProviderAllowsAttachedVideo is a sensitive-read grant layered on top of
 // ProviderAllowsAttachedContext (ADR-0126): omission always denies, and so
 // does allow_attached_video=true without allow_attached_context=true.
@@ -382,6 +407,7 @@ func LoadFromEnv() (Config, error) {
 			AllowAttachedVideo:       providerCfg.AllowAttachedVideo,
 			AllowAgentReactions:      providerCfg.AllowAgentReactions,
 			AllowCoTProgress:         providerCfg.AllowCoTProgress,
+			AllowSenderEmail:         providerCfg.AllowSenderEmail,
 			WorkingReactionEmoji:     providerCfg.WorkingReactionEmoji,
 			WorkingReactionOverrides: providerCfg.WorkingReactionSenderOverrides,
 			AllowedApps:              allowedApps,
@@ -491,6 +517,7 @@ type fileAgentProviderConfig struct {
 	AllowAttachedVideo     bool               `json:"allow_attached_video"`
 	AllowAgentReactions    bool               `json:"allow_agent_reactions"`
 	AllowCoTProgress       bool               `json:"allow_cot_progress"`
+	AllowSenderEmail       bool               `json:"allow_sender_email"`
 	WorkingReactionEmoji   string             `json:"working_reaction_emoji"`
 	// WorkingReactionSenderOverrides maps a sender's Feishu display name to a
 	// working reaction emoji, resolved via a live Contact API call — see
@@ -1167,6 +1194,7 @@ func normalizeAgentProviderConfigs(in map[string]fileAgentProviderConfig) (map[s
 			AllowAttachedVideo:             providerCfg.AllowAttachedVideo,
 			AllowAgentReactions:            providerCfg.AllowAgentReactions,
 			AllowCoTProgress:               providerCfg.AllowCoTProgress,
+			AllowSenderEmail:               providerCfg.AllowSenderEmail,
 			WorkingReactionEmoji:           providerCfg.WorkingReactionEmoji,
 			WorkingReactionSenderOverrides: reactionOverrides,
 		}

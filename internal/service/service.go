@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"feishu-botd/internal/config"
@@ -40,6 +41,11 @@ type appBackend struct {
 	reactions       feishu.ReactionMessages
 	contactUsers    feishu.ContactUsers
 	images          feishu.ImageUploader
+	// senderEmails resolves and caches senders' company addresses for
+	// providers granted allow_sender_email; senderEmailWarned keeps a failing
+	// lookup to one log line until the next success.
+	senderEmails      *feishu.SenderEmailCache
+	senderEmailWarned *atomic.Bool
 }
 
 // Service owns the send/dedupe/readiness flow. It is safe for concurrent use
@@ -118,6 +124,10 @@ func newService(
 		if contactUsers, ok := sender.(feishu.ContactUsers); ok {
 			backend.contactUsers = contactUsers
 		}
+		if emails, ok := sender.(feishu.ContactEmails); ok {
+			backend.senderEmails = feishu.NewSenderEmailCache(emails)
+		}
+		backend.senderEmailWarned = &atomic.Bool{}
 		if images, ok := sender.(feishu.ImageUploader); ok {
 			backend.images = images
 		}
@@ -130,6 +140,8 @@ func newService(
 			connectionStates[alias] = AppConnectionStarting
 		}
 	}
+	agents := newAgentBroker(cfg.DedupeTTL)
+	agents.allowsSenderEmail = cfg.ProviderAllowsSenderEmail
 	return &Service{
 		cfg:                   cfg,
 		backends:              backends,
@@ -140,7 +152,7 @@ func newService(
 		connectionStates:      connectionStates,
 		inboundRoutes:         newInboundRouteRegistry(cfg.DedupeTTL),
 		commandBroker:         newCommandBroker(cfg.DedupeTTL),
-		agentBroker:           newAgentBroker(cfg.DedupeTTL),
+		agentBroker:           agents,
 	}
 }
 

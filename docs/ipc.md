@@ -258,6 +258,11 @@ message. Replies to unowned messages leave it empty. Group messages may add
 the current bounded `conversation_title`; lookup failure leaves it empty.
 Neither value contains a raw Feishu route, and the title must never be used as
 authorization.
+A provider granted `allow_sender_email` also receives
+`InboundAgentMessage.sender_email`, the sender's company address
+(`enterprise_email`, else `email`); it is empty for every other provider and
+whenever the fail-soft Contact lookup yields nothing. Older providers ignore
+the field.
 An unmentioned group reply is delivered only when the persisted 24-hour owner
 record identifies an app-allowed provider; it is pinned to that provider and
 cannot enter the legacy command or local-script paths. Unknown and expired

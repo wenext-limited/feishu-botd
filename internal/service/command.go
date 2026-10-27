@@ -34,6 +34,10 @@ type CommandInput struct {
 	SenderID          string
 	Metadata          map[string]string
 	ConversationTitle string
+	// SenderEmail is the sender's company address, resolved by the daemon
+	// for providers granted allow_sender_email (see resolveSenderEmail) and
+	// handed only to those. Personal data: never logged, never serialized.
+	SenderEmail string `json:"-"`
 
 	// ChatID, UnconfiguredGroup, and UnmentionedReply are daemon-private ingress
 	// routing state.
@@ -192,7 +196,8 @@ func (s *Service) subscribeCommandsForApps(
 // providers. It is intentionally non-blocking so Feishu event acknowledgement is
 // not coupled to local provider health.
 func (s *Service) DispatchCommand(ctx context.Context, in CommandInput) (int, *notify.APIError) {
-	_ = ctx
+	// A caller cannot supply an address; only resolveSenderEmail sets one.
+	in.SenderEmail = ""
 	explicitAppAlias := strings.TrimSpace(in.AppAlias)
 	in.AppAlias = effectiveAppAlias(in.AppAlias)
 	if explicitAppAlias != "" {
@@ -269,6 +274,7 @@ func (s *Service) DispatchCommand(ctx context.Context, in CommandInput) (int, *n
 	// executors while allowing conversational agents to opt into broader ingress.
 	// A reply to an owned message is also agent-only and stays pinned to the
 	// provider that authored the parent, regardless of first-word command matches.
+	s.resolveSenderEmail(ctx, &in, replyProvider)
 	legacyDelivered, agentDelivered := s.dispatchInboundRoute(in, isDirect || isUnconfiguredGroup || ownedReply, replyProvider)
 	s.logger.Info("command dispatched",
 		"correlation", opaqueLogCorrelationID("command", in.DeliveryID),

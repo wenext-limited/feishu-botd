@@ -40,6 +40,7 @@
       "allow_follow_up_messages": false,
       "allow_message_reactions": false,
       "allow_image_upload": false,
+      "allow_sender_email": false,
       "allow_legacy_commands": false
     }
   },
