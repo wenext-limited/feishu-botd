@@ -2,6 +2,7 @@ package grpcapi
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net"
 	"testing"
@@ -19,17 +20,23 @@ import (
 
 // startFollowUpUnixServer mirrors startAgentUnixServer with the follow-up
 // capability under test, so the denied case exercises the real config default.
-func startFollowUpUnixServer(t *testing.T, sender *fakeAgentSender, allowFollowUp bool) (*grpc.ClientConn, *service.Service) {
+func startFollowUpUnixServer(t *testing.T, sender *fakeAgentSender, allowFollowUp bool, allowLease ...bool) (*grpc.ClientConn, *service.Service) {
 	t.Helper()
 	cfg := testConfig()
 	cfg.AgentProviders = map[string]config.AgentProviderConfig{
 		"fixture-agent": {
 			AuthToken: fixtureAgentToken, AllowedCommands: []string{"ask"},
 			AllowUnmatchedMessages: true, AllowCardActions: true,
-			AllowFollowUpMessages: allowFollowUp,
+			AllowFollowUpMessages:   allowFollowUp,
+			AllowConversationLeases: len(allowLease) > 0 && allowLease[0],
 		},
 	}
 	svc := service.NewService(cfg, sender, dedupe.NewMemoryStore(time.Hour), slog.Default())
+	if len(allowLease) > 0 && allowLease[0] {
+		if err := svc.OpenAgentConversationLeases(t.TempDir()); err != nil {
+			t.Fatal(err)
+		}
+	}
 	srv := NewServer(cfg, svc, slog.Default())
 	ctx, cancel := context.WithCancel(context.Background())
 	socketPath := tempSocket(t)
@@ -97,7 +104,7 @@ func TestGRPCAgentFollowUpDeliversThenReplays(t *testing.T) {
 		t.Fatalf("send agent follow-up: %v", err)
 	}
 	receipt := response.GetFollowUp()
-	if receipt.GetFollowUpId() == "" || receipt.GetDuplicate() {
+	if receipt.GetFollowUpId() == "" || receipt.GetDuplicate() || receipt.GetMessageRef() == "" {
 		t.Fatalf("follow-up receipt = %#v", receipt)
 	}
 	if sender.chatID != "oc_test" || sender.request.Markdown != "The deep run finished. Three regressions found." {
@@ -108,7 +115,7 @@ func TestGRPCAgentFollowUpDeliversThenReplays(t *testing.T) {
 	if err != nil {
 		t.Fatalf("replay agent follow-up: %v", err)
 	}
-	if !replay.GetFollowUp().GetDuplicate() || replay.GetFollowUp().GetFollowUpId() != receipt.GetFollowUpId() {
+	if !replay.GetFollowUp().GetDuplicate() || replay.GetFollowUp().GetFollowUpId() != receipt.GetFollowUpId() || replay.GetFollowUp().GetMessageRef() != receipt.GetMessageRef() {
 		t.Fatalf("replay receipt = %#v, want duplicate of %q", replay.GetFollowUp(), receipt.GetFollowUpId())
 	}
 	if sender.calls != 1 {
@@ -192,5 +199,45 @@ func TestGRPCAgentFollowUpConflictingReuseIsAlreadyExists(t *testing.T) {
 	}
 	if sender.calls != 1 {
 		t.Fatalf("send calls = %d, want 1", sender.calls)
+	}
+}
+
+func TestGRPCConversationLeaseRequiresIndependentGrantAndExactProvider(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		t.Run(fmt.Sprint(enabled), func(t *testing.T) {
+			sender := &fakeAgentSender{fakeSender: fakeSender{messageID: "om_lease"}}
+			conn, svc := startFollowUpUnixServer(t, sender, true, enabled)
+			client := pb.NewCommandServiceClient(conn)
+			conversation := seedFollowUpConversation(t, svc, client)
+			req := &pb.RetainAgentConversationRequest{Provider: "fixture-agent", ConversationId: conversation, LeaseId: "task-1", TtlSeconds: 86400, Acquire: true}
+			retained, err := client.RetainAgentConversation(context.Background(), req)
+			if !enabled {
+				if status.Code(err) != codes.PermissionDenied {
+					t.Fatalf("lease without grant = %v", err)
+				}
+				return
+			}
+			if err != nil || retained.GetExpiresAtUnixSeconds() <= time.Now().Unix() {
+				t.Fatalf("retain = %v, %v", retained, err)
+			}
+			req.Provider = "other"
+			if _, err := client.RetainAgentConversation(context.Background(), req); status.Code(err) != codes.PermissionDenied {
+				t.Fatalf("forged provider = %v", err)
+			}
+			send := followUpRequest(conversation, "leased-send")
+			send.ConversationLeaseId = "task-1"
+			send.ConversationLeaseSequence = 1
+			if _, err := client.SendAgentFollowUp(context.Background(), send); err != nil {
+				t.Fatal(err)
+			}
+			_, err = client.ReleaseAgentConversation(context.Background(), &pb.ReleaseAgentConversationRequest{Provider: "fixture-agent", ConversationId: conversation, LeaseId: "task-1"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			send.OperationId = "after-release"
+			if _, err := client.SendAgentFollowUp(context.Background(), send); status.Code(err) != codes.NotFound {
+				t.Fatalf("released lease = %v", err)
+			}
+		})
 	}
 }

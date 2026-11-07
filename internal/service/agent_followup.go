@@ -21,17 +21,20 @@ const agentFollowUpSource = "agent_follow_up"
 // rather than a CardKit entity: there is no revision and no way to edit it
 // afterwards.
 type SendAgentFollowUpInput struct {
-	Provider       string
-	ConversationID string
-	OperationID    string
-	Markdown       string
-	Summary        string
-	MentionUserID  string
+	Provider                  string
+	ConversationID            string
+	OperationID               string
+	Markdown                  string
+	Summary                   string
+	MentionUserID             string
+	ConversationLeaseID       string
+	ConversationLeaseSequence uint64
 }
 
 type AgentFollowUpReceipt struct {
 	FollowUpID string
 	Duplicate  bool
+	MessageRef string
 }
 
 // agentConversationRoute is the daemon-private reverse map from an opaque
@@ -65,6 +68,7 @@ type agentFollowUpOperation struct {
 	provider    string
 	fingerprint string
 	followUpID  string
+	messageRef  string
 	pending     bool
 	complete    bool
 	// ambiguousAt is the first attempt whose outcome Feishu never confirmed. It
@@ -92,18 +96,28 @@ func (s *Service) SendAgentFollowUp(ctx context.Context, in SendAgentFollowUpInp
 		return AgentFollowUpReceipt{}, notify.BadRequest("field_too_large", "one or more fields are too large")
 	}
 
+	in.Provider, in.ConversationID, in.OperationID = provider, conversationID, operationID
+	in.Markdown, in.Summary, in.MentionUserID = markdown, summary, mentionUserID
+	if in.ConversationLeaseID != "" {
+		return s.sendLeasedFollowUp(ctx, in)
+	}
 	now := time.Now()
-	route, appAlias, chatAlias, privateChatID, replyToMessageID, unconfiguredGroup, ok := s.agentBroker.lookupAndPinConversation(
-		conversationID,
-		provider,
-		operationID,
-		func(resolvedApp string) bool { return s.appAllowed(provider, resolvedApp) },
-		now,
-		s.cfg.SendTimeout,
-	)
+	route, _, _, _, _, _, ok := s.agentBroker.lookupAndPinConversation(conversationID, provider, operationID, func(app string) bool { return s.appAllowed(provider, app) }, now, s.cfg.SendTimeout)
 	if !ok {
 		return AgentFollowUpReceipt{}, unknownConversationError()
 	}
+	return s.sendAgentFollowUpOnRoute(ctx, in, route, nil, false)
+}
+
+func (s *Service) sendAgentFollowUpOnRoute(ctx context.Context, in SendAgentFollowUpInput, route *agentConversationRoute, persist func() error, durable bool) (AgentFollowUpReceipt, *notify.APIError) {
+	provider, conversationID, operationID := in.Provider, in.ConversationID, in.OperationID
+	markdown, summary, mentionUserID := in.Markdown, in.Summary, in.MentionUserID
+	now := time.Now()
+	route.mu.Lock()
+	appAlias, chatAlias, privateChatID, replyToMessageID := route.appAlias, route.chatAlias, route.chatID, route.threadReplyTo
+	unconfiguredGroup := route.unconfiguredGroup
+	route.mu.Unlock()
+
 	chatID := s.followUpChatID(appAlias, chatAlias, privateChatID, unconfiguredGroup)
 	if chatID == "" {
 		return AgentFollowUpReceipt{}, unknownConversationError()
@@ -119,25 +133,67 @@ func (s *Service) SendAgentFollowUp(ctx context.Context, in SendAgentFollowUpInp
 		return AgentFollowUpReceipt{}, apiErr
 	}
 	if replay {
-		return AgentFollowUpReceipt{FollowUpID: followUpID, Duplicate: true}, nil
+		if persist != nil {
+			if err := persist(); err != nil {
+				return AgentFollowUpReceipt{}, leaseUnavailable()
+			}
+		}
+		return s.followUpReceipt(route, provider, operationID, followUpID, true)
+	}
+
+	var priorAmbiguity time.Time
+	if durable {
+		route.mu.Lock()
+		op := route.operations[route.followUpOperationKeyLocked(provider, operationID)]
+		priorAmbiguity = op.ambiguousAt
+		if op.ambiguousAt.IsZero() {
+			op.ambiguousAt = now
+		}
+		route.mu.Unlock()
+		if err := persist(); err != nil {
+			route.mu.Lock()
+			op.pending = false
+			op.ambiguousAt = priorAmbiguity
+			route.mu.Unlock()
+			return AgentFollowUpReceipt{}, leaseUnavailable()
+		}
 	}
 
 	sendCtx, cancel := context.WithTimeout(ctx, s.cfg.SendTimeout)
 	defer cancel()
-	if _, err := backend.sender.Send(sendCtx, chatID, notify.Request{
+	messageID, err := backend.sender.Send(sendCtx, chatID, notify.Request{
 		Source:           agentFollowUpSource,
 		DedupeKey:        followUpID,
 		Title:            summary,
 		Markdown:         markdown,
 		MentionUserID:    mentionUserID,
 		ReplyToMessageID: replyToMessageID,
-	}); err != nil {
+	})
+	if err != nil {
 		s.logFeishuFailure("agent follow-up", "follow_up", followUpID, err)
+		if durable && !isAmbiguousMessageFailure(err) {
+			route.mu.Lock()
+			route.operations[route.followUpOperationKeyLocked(provider, operationID)].ambiguousAt = priorAmbiguity
+			route.mu.Unlock()
+		}
 		route.abortFollowUp(provider, operationID, err, time.Now())
+		if persist != nil {
+			if err := persist(); err != nil {
+				return AgentFollowUpReceipt{}, leaseUnavailable()
+			}
+		}
 		return AgentFollowUpReceipt{}, agentMessageCallError(err, "Feishu follow-up send failed")
 	}
+	route.mu.Lock()
+	route.operations[route.followUpOperationKeyLocked(provider, operationID)].messageRef = feishu.MessageRefForApp(appAlias, messageID)
+	route.mu.Unlock()
 	route.commitFollowUp(provider, operationID)
-	return AgentFollowUpReceipt{FollowUpID: followUpID}, nil
+	if persist != nil {
+		if err := persist(); err != nil {
+			return AgentFollowUpReceipt{}, leaseUnavailable()
+		}
+	}
+	return s.followUpReceipt(route, provider, operationID, followUpID, false)
 }
 
 // Keep the legacy fingerprint for unmentioned follow-ups so an operation
@@ -513,4 +569,16 @@ func agentMessageCallError(err error, message string) *notify.APIError {
 		return notify.NewAPIError(502, "feishu_unavailable", message, true)
 	}
 	return notify.NewAPIError(412, "feishu_rejected", message, false)
+}
+
+func (s *Service) followUpReceipt(route *agentConversationRoute, provider, operationID, followUpID string, duplicate bool) (AgentFollowUpReceipt, *notify.APIError) {
+	route.mu.Lock()
+	ref := route.operations[route.followUpOperationKeyLocked(provider, operationID)].messageRef
+	route.mu.Unlock()
+	if s.agentOwners != nil && ref != "" {
+		if err := s.agentOwners.Put(ref, provider, time.Now()); err != nil {
+			return AgentFollowUpReceipt{}, notify.NewAPIError(503, "ownership_store_unavailable", "could not persist follow-up ownership", true)
+		}
+	}
+	return AgentFollowUpReceipt{FollowUpID: followUpID, Duplicate: duplicate, MessageRef: ref}, nil
 }

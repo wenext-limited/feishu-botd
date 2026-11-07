@@ -38,6 +38,7 @@
       "allow_attached_context": false,
       "allow_attached_video": false,
       "allow_follow_up_messages": false,
+      "allow_conversation_leases": false,
       "allow_message_reactions": false,
       "allow_image_upload": false,
       "allow_sender_email": false,

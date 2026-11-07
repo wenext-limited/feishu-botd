@@ -19,17 +19,19 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	CommandService_Subscribe_FullMethodName               = "/feishubotd.v1.CommandService/Subscribe"
-	CommandService_Respond_FullMethodName                 = "/feishubotd.v1.CommandService/Respond"
-	CommandService_SubscribeAgentEvents_FullMethodName    = "/feishubotd.v1.CommandService/SubscribeAgentEvents"
-	CommandService_GetAgentAttachedContext_FullMethodName = "/feishubotd.v1.CommandService/GetAgentAttachedContext"
-	CommandService_StartAgentResponse_FullMethodName      = "/feishubotd.v1.CommandService/StartAgentResponse"
-	CommandService_UpdateAgentResponse_FullMethodName     = "/feishubotd.v1.CommandService/UpdateAgentResponse"
-	CommandService_FinishAgentResponse_FullMethodName     = "/feishubotd.v1.CommandService/FinishAgentResponse"
-	CommandService_ReplaceAgentResponse_FullMethodName    = "/feishubotd.v1.CommandService/ReplaceAgentResponse"
-	CommandService_UploadAgentImage_FullMethodName        = "/feishubotd.v1.CommandService/UploadAgentImage"
-	CommandService_SendAgentFollowUp_FullMethodName       = "/feishubotd.v1.CommandService/SendAgentFollowUp"
-	CommandService_AddAgentReaction_FullMethodName        = "/feishubotd.v1.CommandService/AddAgentReaction"
+	CommandService_Subscribe_FullMethodName                = "/feishubotd.v1.CommandService/Subscribe"
+	CommandService_Respond_FullMethodName                  = "/feishubotd.v1.CommandService/Respond"
+	CommandService_SubscribeAgentEvents_FullMethodName     = "/feishubotd.v1.CommandService/SubscribeAgentEvents"
+	CommandService_GetAgentAttachedContext_FullMethodName  = "/feishubotd.v1.CommandService/GetAgentAttachedContext"
+	CommandService_StartAgentResponse_FullMethodName       = "/feishubotd.v1.CommandService/StartAgentResponse"
+	CommandService_UpdateAgentResponse_FullMethodName      = "/feishubotd.v1.CommandService/UpdateAgentResponse"
+	CommandService_FinishAgentResponse_FullMethodName      = "/feishubotd.v1.CommandService/FinishAgentResponse"
+	CommandService_ReplaceAgentResponse_FullMethodName     = "/feishubotd.v1.CommandService/ReplaceAgentResponse"
+	CommandService_UploadAgentImage_FullMethodName         = "/feishubotd.v1.CommandService/UploadAgentImage"
+	CommandService_SendAgentFollowUp_FullMethodName        = "/feishubotd.v1.CommandService/SendAgentFollowUp"
+	CommandService_RetainAgentConversation_FullMethodName  = "/feishubotd.v1.CommandService/RetainAgentConversation"
+	CommandService_ReleaseAgentConversation_FullMethodName = "/feishubotd.v1.CommandService/ReleaseAgentConversation"
+	CommandService_AddAgentReaction_FullMethodName         = "/feishubotd.v1.CommandService/AddAgentReaction"
 )
 
 // CommandServiceClient is the client API for CommandService service.
@@ -70,6 +72,9 @@ type CommandServiceClient interface {
 	// delivered an agent event to this provider. This is the compatibility path
 	// when a terminal response handle is unavailable for in-place replacement.
 	SendAgentFollowUp(ctx context.Context, in *SendAgentFollowUpRequest, opts ...grpc.CallOption) (*SendAgentFollowUpResponse, error)
+	// Retain an existing conversation scope for a durable scheduled task.
+	RetainAgentConversation(ctx context.Context, in *RetainAgentConversationRequest, opts ...grpc.CallOption) (*RetainAgentConversationResponse, error)
+	ReleaseAgentConversation(ctx context.Context, in *ReleaseAgentConversationRequest, opts ...grpc.CallOption) (*ReleaseAgentConversationResponse, error)
 	// AddAgentReaction places one native Feishu reaction, chosen by the
 	// provider rather than the daemon, on the message that triggered this
 	// response. Gated by its own grant, separate from AllowMessageReactions
@@ -218,6 +223,26 @@ func (c *commandServiceClient) SendAgentFollowUp(ctx context.Context, in *SendAg
 	return out, nil
 }
 
+func (c *commandServiceClient) RetainAgentConversation(ctx context.Context, in *RetainAgentConversationRequest, opts ...grpc.CallOption) (*RetainAgentConversationResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RetainAgentConversationResponse)
+	err := c.cc.Invoke(ctx, CommandService_RetainAgentConversation_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *commandServiceClient) ReleaseAgentConversation(ctx context.Context, in *ReleaseAgentConversationRequest, opts ...grpc.CallOption) (*ReleaseAgentConversationResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReleaseAgentConversationResponse)
+	err := c.cc.Invoke(ctx, CommandService_ReleaseAgentConversation_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *commandServiceClient) AddAgentReaction(ctx context.Context, in *AddAgentReactionRequest, opts ...grpc.CallOption) (*AddAgentReactionResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(AddAgentReactionResponse)
@@ -266,6 +291,9 @@ type CommandServiceServer interface {
 	// delivered an agent event to this provider. This is the compatibility path
 	// when a terminal response handle is unavailable for in-place replacement.
 	SendAgentFollowUp(context.Context, *SendAgentFollowUpRequest) (*SendAgentFollowUpResponse, error)
+	// Retain an existing conversation scope for a durable scheduled task.
+	RetainAgentConversation(context.Context, *RetainAgentConversationRequest) (*RetainAgentConversationResponse, error)
+	ReleaseAgentConversation(context.Context, *ReleaseAgentConversationRequest) (*ReleaseAgentConversationResponse, error)
 	// AddAgentReaction places one native Feishu reaction, chosen by the
 	// provider rather than the daemon, on the message that triggered this
 	// response. Gated by its own grant, separate from AllowMessageReactions
@@ -313,6 +341,12 @@ func (UnimplementedCommandServiceServer) UploadAgentImage(grpc.ClientStreamingSe
 }
 func (UnimplementedCommandServiceServer) SendAgentFollowUp(context.Context, *SendAgentFollowUpRequest) (*SendAgentFollowUpResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SendAgentFollowUp not implemented")
+}
+func (UnimplementedCommandServiceServer) RetainAgentConversation(context.Context, *RetainAgentConversationRequest) (*RetainAgentConversationResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RetainAgentConversation not implemented")
+}
+func (UnimplementedCommandServiceServer) ReleaseAgentConversation(context.Context, *ReleaseAgentConversationRequest) (*ReleaseAgentConversationResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ReleaseAgentConversation not implemented")
 }
 func (UnimplementedCommandServiceServer) AddAgentReaction(context.Context, *AddAgentReactionRequest) (*AddAgentReactionResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method AddAgentReaction not implemented")
@@ -486,6 +520,42 @@ func _CommandService_SendAgentFollowUp_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _CommandService_RetainAgentConversation_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RetainAgentConversationRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CommandServiceServer).RetainAgentConversation(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CommandService_RetainAgentConversation_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CommandServiceServer).RetainAgentConversation(ctx, req.(*RetainAgentConversationRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _CommandService_ReleaseAgentConversation_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReleaseAgentConversationRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CommandServiceServer).ReleaseAgentConversation(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CommandService_ReleaseAgentConversation_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CommandServiceServer).ReleaseAgentConversation(ctx, req.(*ReleaseAgentConversationRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _CommandService_AddAgentReaction_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(AddAgentReactionRequest)
 	if err := dec(in); err != nil {
@@ -534,6 +604,14 @@ var CommandService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SendAgentFollowUp",
 			Handler:    _CommandService_SendAgentFollowUp_Handler,
+		},
+		{
+			MethodName: "RetainAgentConversation",
+			Handler:    _CommandService_RetainAgentConversation_Handler,
+		},
+		{
+			MethodName: "ReleaseAgentConversation",
+			Handler:    _CommandService_ReleaseAgentConversation_Handler,
 		},
 		{
 			MethodName: "AddAgentReaction",

@@ -18,7 +18,7 @@ import (
 )
 
 // Version is the reported service version, shared by both transports.
-const Version = "0.2.0"
+const Version = "0.3.0"
 
 // Provider names the upstream message provider in responses.
 const Provider = "feishu"
@@ -62,10 +62,11 @@ type Service struct {
 	connectionMu          sync.RWMutex
 	connectionStates      map[string]string
 
-	inboundRoutes *inboundRouteRegistry
-	commandBroker *commandBroker
-	agentBroker   *agentBroker
-	agentOwners   agentOwnershipStore
+	inboundRoutes      *inboundRouteRegistry
+	commandBroker      *commandBroker
+	agentBroker        *agentBroker
+	agentOwners        agentOwnershipStore
+	conversationLeases *conversationLeases
 }
 
 type agentOwnershipStore interface {

@@ -525,3 +525,10 @@ Tooling (installed under `$(go env GOPATH)/bin`):
 
 Non-Go clients run their own generator against `proto/` (e.g. `tonic`/`prost`
 for Rust). The `.proto` files are the only shared artifact.
+
+`RetainAgentConversation` and `ReleaseAgentConversation` are provider-authenticated
+RPCs gated by `allow_conversation_leases` and `allow_follow_up_messages`. They
+manage bounded durable route leases, using only opaque conversation and task
+identifiers. Leased `SendAgentFollowUp` additionally carries
+`conversation_lease_id` and `conversation_lease_sequence`; see
+[durable scheduled follow-ups](agent.md#durable-scheduled-follow-ups).

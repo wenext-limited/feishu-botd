@@ -44,6 +44,10 @@ service CommandService {
   // when a terminal response handle is unavailable for in-place replacement.
   rpc SendAgentFollowUp(SendAgentFollowUpRequest) returns (SendAgentFollowUpResponse);
 
+  // Retain an existing conversation scope for a durable scheduled task.
+  rpc RetainAgentConversation(RetainAgentConversationRequest) returns (RetainAgentConversationResponse);
+  rpc ReleaseAgentConversation(ReleaseAgentConversationRequest) returns (ReleaseAgentConversationResponse);
+
   // AddAgentReaction places one native Feishu reaction, chosen by the
   // provider rather than the daemon, on the message that triggered this
   // response. Gated by its own grant, separate from AllowMessageReactions
@@ -547,13 +551,19 @@ message SendAgentFollowUpRequest {
   // Optional native Feishu mention prepended to the first post paragraph.
   // The id is an opaque provider-safe user identity (normally an open_id).
   string mention_user_id = 12;
-  reserved 4 to 9, 13 to 31;
+  // Optional durable task lease. An invalid lease never falls back to ingress scope.
+  string conversation_lease_id = 13;
+  // Strictly increasing per lease for new logical messages; unchanged on retry.
+  uint64 conversation_lease_sequence = 14;
+  reserved 4 to 9, 15 to 31;
 }
 
 message AgentFollowUpReceipt {
   // Opaque delivery handle. Feishu message, thread, and chat ids stay private.
   string follow_up_id = 1;
   bool duplicate = 2;
+  // Opaque authored-message reference for reply-chain correlation.
+  string message_ref = 3;
 }
 
 message SendAgentFollowUpResponse {
@@ -584,3 +594,21 @@ message RegisterProviderRequest {
 message RegisterProviderResponse {
   bool registered = 1;
 }
+
+// Acquisition requires an unexpired ingress scope; renewal requires that same
+// provider's existing unexpired lease. A lease lasts at most seven days.
+message RetainAgentConversationRequest {
+  string provider = 1;
+  string conversation_id = 2;
+  string lease_id = 3;
+  int64 ttl_seconds = 4;
+  // Only task creation sets acquire. Renewal never recreates a missing lease.
+  bool acquire = 5;
+}
+message RetainAgentConversationResponse { int64 expires_at_unix_seconds = 1; }
+message ReleaseAgentConversationRequest {
+  string provider = 1;
+  string conversation_id = 2;
+  string lease_id = 3;
+}
+message ReleaseAgentConversationResponse {}

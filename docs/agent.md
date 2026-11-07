@@ -729,3 +729,48 @@ response, and click an action button. Confirm the reply reaches only the
 authoring provider, an unmentioned non-reply is ignored, nominal events reach
 the intended provider, retry/queue-failure behavior is exercised, and no raw
 identifiers or user content appear in logs.
+
+### Durable scheduled follow-ups
+
+Daily or standing tasks must not reuse the ordinary, TTL-limited ingress grant
+as if it were a permanent route. Deployments may explicitly enable
+`allow_conversation_leases` for a provider that already has
+`allow_follow_up_messages`, with `state_dir` configured. The default is off.
+
+While the provider still has a live grant for an inbound conversation, call
+`RetainAgentConversation(provider, conversation_id, lease_id, ttl_seconds, acquire=true)`.
+Use the standing task's immutable ID as `lease_id`; a lease is bound to that
+provider and conversation. `ttl_seconds` is 1–604800 (seven days). Set `acquire=false` for periodic renewal of an existing unexpired lease, without
+a new inbound message. Renewal never recreates a missing or cancelled lease. Renew before
+expiry; an expired or released lease cannot authorize its own reacquisition.
+An old task whose ingress grant already expired needs a new inbound message
+in its authorized conversation before it can acquire a lease.
+
+Supply `conversation_lease_id` and a positive `conversation_lease_sequence` on
+`SendAgentFollowUp`. Sequence numbers increase for each new logical message and
+stay unchanged on retries. A sequence must not advance while the previous send
+is incomplete. The daemon retains the most recent 256 completed operation
+records and a durable high-water mark: a retry of a retired sequence returns
+`operation_retired` and never sends again. Completed retries within the ledger
+return the same receipt, including its opaque `message_ref`. The reference is
+also registered in the agent-authored-message ownership store, so replies can
+route back to the author without exposing raw Feishu message IDs.
+
+Never reuse a task ID. Call `ReleaseAgentConversation` when the task is cancelled or finishes. Release
+persists a revocation tombstone for seven days, including when acquisition has
+not arrived yet. It is idempotent and waits for an accepted send already in flight; after it returns
+success, no new send can use that lease. A delayed acquisition is rejected during
+the maximum seven-day lease/retry horizon; renewal remains unable to recreate the
+lease even after that bounded tombstone is pruned. An acquisition is exclusively
+for a new immutable task ID, never a periodic maintenance retry. Lease sends fail closed if the lease is
+missing, expired, released, belongs to another provider, or the app is no longer
+allowed. They never fall back to an ordinary conversation grant. Image upload
+continues to use its separately authorized ordinary conversation scope; this
+lease version grants no additional image-upload access.
+
+`agent-conversation-leases.json` is private daemon state (0600) under `state_dir`.
+It contains the private route and operation ledger, is written atomically before
+sending, and survives restarts. Corrupt state fails startup. An ambiguous send
+that outlives Feishu's message UUID dedupe window is not retried as a fresh send.
+Keep this file with the daemon's state backups. Disabling the provider capability
+revokes the ability to renew or send using leases even while state remains.

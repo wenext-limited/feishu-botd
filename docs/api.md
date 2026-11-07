@@ -23,7 +23,7 @@ and `GET /readyz` remain unauthenticated on both transports.
 Returns process liveness only.
 
 ```json
-{"status":"ok","service":"feishu-botd","version":"0.2.0"}
+{"status":"ok","service":"feishu-botd","version":"0.3.0"}
 ```
 
 ## `GET /readyz`
