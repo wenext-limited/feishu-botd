@@ -283,12 +283,13 @@ func TestPersistentStoreSkipsRewritingAnUnchangedRoute(t *testing.T) {
 	}
 }
 
-func TestPersistentStoreKeepsACardAndNeverRewindsItsSequence(t *testing.T) {
+func TestPersistentStoreKeepsACardItsAuthorshipAndNeverRewindsItsSequence(t *testing.T) {
 	dir := t.TempDir()
 	store := openTestStore(t, dir, testKeys(), testNow)
 	card := inboundRoute("commons")
 	card.CardID = "card_private_entity"
 	card.CardSequence = 3
+	card.Authored = true
 	if err := store.Put("msgref_card", card, testNow); err != nil {
 		t.Fatalf("put card: %v", err)
 	}
@@ -317,7 +318,7 @@ func TestPersistentStoreKeepsACardAndNeverRewindsItsSequence(t *testing.T) {
 	}
 	reopened := openTestStore(t, dir, testKeys(), testNow.Add(time.Hour))
 	route, ok, err := reopened.Lookup("msgref_card", testNow.Add(time.Hour))
-	if err != nil || !ok || route.CardID != "card_private_entity" || route.CardSequence != 4 || route.MessageID != "om_private_question" {
+	if err != nil || !ok || route.CardID != "card_private_entity" || route.CardSequence != 4 || !route.Authored || route.MessageID != "om_private_question" {
 		t.Fatalf("restored card route = %#v ok=%t err=%v", route, ok, err)
 	}
 	if err := reopened.Put("msgref_bad", Route{AppAlias: "support", ChatAlias: "ops", Providers: []string{"commons"}, CardSequence: -1}, testNow); err == nil {

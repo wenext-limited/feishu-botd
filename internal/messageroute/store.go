@@ -5,7 +5,8 @@
 //
 // A message_ref is a one-way digest and cannot be reversed, so this store is
 // the reverse index. Under botd's state dir it is an append-only journal whose
-// raw chat, message, and thread ids are sealed with AES-256-GCM under a key
+// raw chat, message, thread, and CardKit card ids (with a posted card's
+// sequence and authorship) are sealed with AES-256-GCM under a key
 // derived from the owning app's secret: the file itself holds only refs,
 // public aliases, provider names, expiry times, and ciphertext. Rotating an
 // app secret therefore makes that app's retained routes unreadable, which is
@@ -64,7 +65,11 @@ type Route struct {
 	// moves backwards, so a later route refresh cannot strand an update.
 	CardID       string
 	CardSequence int32
-	ExpiresAt    time.Time
+	// Authored marks a message the bot sent for the route's provider (a post,
+	// card, response, or follow-up) rather than one it received. It is sealed
+	// too, and once set a Put cannot clear it.
+	Authored  bool
+	ExpiresAt time.Time
 }
 
 // Allows reports whether provider is one of the route's grantees.
@@ -103,6 +108,7 @@ type sealedRoute struct {
 	ThreadID     string `json:"thread_id,omitempty"`
 	CardID       string `json:"card_id,omitempty"`
 	CardSequence int32  `json:"card_sequence,omitempty"`
+	Authored     bool   `json:"authored,omitempty"`
 }
 
 // Store is safe for concurrent use. A store built by NewMemory never touches
@@ -214,6 +220,7 @@ func (s *Store) Put(key string, route Route, now time.Time) error {
 		route.MessageID = firstNonEmpty(route.MessageID, previous.MessageID)
 		route.ThreadID = firstNonEmpty(route.ThreadID, previous.ThreadID)
 		route.CardID = firstNonEmpty(route.CardID, previous.CardID)
+		route.Authored = route.Authored || previous.Authored
 		if previous.CardSequence > route.CardSequence {
 			route.CardSequence = previous.CardSequence
 		}
@@ -461,7 +468,7 @@ func (s *Store) encodeLocked(key string, route Route) ([]byte, error) {
 	}
 	plaintext, err := json.Marshal(sealedRoute{
 		ChatID: route.ChatID, MessageID: route.MessageID, ThreadID: route.ThreadID,
-		CardID: route.CardID, CardSequence: route.CardSequence,
+		CardID: route.CardID, CardSequence: route.CardSequence, Authored: route.Authored,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("encode message route: %w", err)
@@ -546,6 +553,7 @@ func (s *Store) decodeLocked(line []byte) (string, Route, bool) {
 		ThreadID:          private.ThreadID,
 		CardID:            private.CardID,
 		CardSequence:      private.CardSequence,
+		Authored:          private.Authored,
 		ExpiresAt:         time.Unix(value.ExpiresAt, 0),
 	}, true
 }
@@ -585,7 +593,7 @@ func normalizedProviders(in []string) []string {
 func sameRoute(a, b Route) bool {
 	if a.AppAlias != b.AppAlias || a.ChatAlias != b.ChatAlias || a.UnconfiguredGroup != b.UnconfiguredGroup ||
 		a.ChatID != b.ChatID || a.MessageID != b.MessageID || a.ThreadID != b.ThreadID ||
-		a.CardID != b.CardID || a.CardSequence != b.CardSequence ||
+		a.CardID != b.CardID || a.CardSequence != b.CardSequence || a.Authored != b.Authored ||
 		len(a.Providers) != len(b.Providers) {
 		return false
 	}
