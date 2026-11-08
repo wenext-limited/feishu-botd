@@ -133,6 +133,11 @@ func TestChatGrantsRejectInconsistentOrUnresolvableShapes(t *testing.T) {
 			wantError: "allow_proactive_messages requires state_dir",
 		},
 		{
+			name:      "pins require the proactive grant",
+			entry:     `,"allow_pins":true`,
+			wantError: "allow_pins requires allow_proactive_messages",
+		},
+		{
 			name:      "direct is not a group",
 			entry:     `,"allow_ambient_messages":true,"ambient_chat_aliases":["direct"]`,
 			wantError: "group chats only",
@@ -204,5 +209,24 @@ func TestIsUnconfiguredGroupAliasRequiresTheExactDerivedShape(t *testing.T) {
 		if IsUnconfiguredGroupAlias(alias) {
 			t.Fatalf("alias %q was accepted", alias)
 		}
+	}
+}
+
+func TestPinGrantDefaultsOffAndLoadsBesideTheProactiveGrant(t *testing.T) {
+	cfg, err := loadChatGrantConfig(t, `,"allow_proactive_messages":true,"proactive_chat_aliases":["ops"]`,
+		`,"state_dir":"/var/lib/feishu-botd"`)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if cfg.AgentProviders["commons"].AllowPins || cfg.ProviderAllowsPins("commons") {
+		t.Fatal("allow_pins was not off by default")
+	}
+	cfg, err = loadChatGrantConfig(t, `,"allow_proactive_messages":true,"proactive_chat_aliases":["ops"],"allow_pins":true`,
+		`,"state_dir":"/var/lib/feishu-botd"`)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if !cfg.ProviderAllowsPins("commons") || cfg.ProviderAllowsPins("someone-else") || cfg.ProviderAllowsPins("") {
+		t.Fatal("allow_pins did not scope to its provider")
 	}
 }

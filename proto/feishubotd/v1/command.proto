@@ -61,6 +61,22 @@ service CommandService {
   // card. Gated by allow_proactive_messages and the provider's
   // proactive_chat_aliases allowlist.
   rpc PostAgentMessage(PostAgentMessageRequest) returns (PostAgentMessageResponse);
+
+  // PostAgentCard is PostAgentMessage for a card that can change later: the
+  // same targets, grants, idempotency, and agent ownership, but the content
+  // is typed and botd renders it as a Card JSON 2.0 CardKit entity. The
+  // returned message_ref is the handle UpdateAgentCard and PinAgentMessage
+  // take; the CardKit card id and its sequence stay inside botd.
+  rpc PostAgentCard(PostAgentCardRequest) returns (PostAgentCardResponse);
+  // UpdateAgentCard replaces the whole content of a card this provider
+  // posted with PostAgentCard. Updates to one card are applied in arrival
+  // order, one at a time, and a backlog collapses to its newest entry.
+  // Gated by allow_proactive_messages, like the post that created the card.
+  rpc UpdateAgentCard(UpdateAgentCardRequest) returns (UpdateAgentCardResponse);
+  // PinAgentMessage pins a message this provider authored (a posted card,
+  // post, response, or follow-up botd retained a route for) to its chat's
+  // pin list. Gated by allow_pins.
+  rpc PinAgentMessage(PinAgentMessageRequest) returns (PinAgentMessageResponse);
 }
 
 // ProviderService is the FUTURE pull path (botd asks a registered client to
@@ -642,6 +658,110 @@ message PostAgentMessageResponse {
   // Thread holding the posted message; empty for an unthreaded root.
   string thread_ref = 2;
   bool duplicate = 3;
+}
+
+// AgentCardState is the lifecycle tag in a posted card's header. botd owns
+// the wording and the colour, so every provider's cards read the same way.
+enum AgentCardState {
+  // No tag; the header keeps the default colour.
+  AGENT_CARD_STATE_UNSPECIFIED = 0;
+  AGENT_CARD_STATE_PROCESSING = 1; // 进行中, blue
+  AGENT_CARD_STATE_ACTIVE = 2; // 已回答, green
+  AGENT_CARD_STATE_SUSPENDED = 3; // 等人处理, orange
+  AGENT_CARD_STATE_ARCHIVED = 4; // 已归档, grey
+}
+
+// One checklist line. label is rendered as plain text, never markdown.
+message AgentCardStep {
+  string label = 1;
+  bool done = 2;
+}
+
+// One link button under the card body. url must be an absolute https URL.
+message AgentCardLink {
+  string label = 1;
+  string url = 2;
+}
+
+// AgentCardContent is the complete content of a posted card. Every post and
+// update carries all of it: an update replaces the card wholesale, so a field
+// left empty is removed from the card rather than kept.
+message AgentCardContent {
+  string title = 1; // required; plain-text header title
+  AgentCardState state = 2;
+  // Optional card body. Images render only from a Feishu image_key, exactly
+  // as in AgentResponseContent.markdown.
+  string markdown = 3;
+  repeated AgentCardStep steps = 4; // at most 50, rendered in order
+  repeated AgentCardLink links = 5; // at most 10
+  // Compact notification/preview text; the title when empty.
+  string summary = 6;
+  reserved 7 to 15;
+}
+
+message PostAgentCardRequest {
+  string provider = 1; // must match the bearer-authenticated principal
+  // Provider-generated idempotency key, with PostAgentMessage's rules: the
+  // same content returns duplicate=true and the first post's refs, different
+  // content is rejected. The key space is separate from PostAgentMessage's.
+  string operation_id = 2;
+  oneof target {
+    // New root message in this configured or opaque chat alias. Must be in
+    // the provider's proactive_chat_aliases.
+    string chat_alias = 3;
+    // Reply to a message_ref this provider received or authored, in a chat
+    // that is in proactive_chat_aliases.
+    string reply_to_message_ref = 4;
+  }
+  // With reply_to_message_ref: reply inside a Feishu thread, opening one on
+  // the target if it has none. Ignored for chat_alias.
+  bool reply_in_thread = 5;
+  AgentCardContent content = 10;
+  reserved 6 to 9, 11 to 31;
+}
+
+message PostAgentCardResponse {
+  // Stable provider-safe identity of the card message, in the same space as
+  // PostAgentMessageResponse.message_ref: an UpdateAgentCard and
+  // PinAgentMessage handle, a PostAgentMessage reply target, and what
+  // InboundAgentMessage carries when people answer the card.
+  string message_ref = 1;
+  // Thread holding the card; empty for an unthreaded root.
+  string thread_ref = 2;
+  bool duplicate = 3;
+}
+
+message UpdateAgentCardRequest {
+  string provider = 1; // must match the bearer-authenticated principal
+  // message_ref returned by this provider's PostAgentCard. Any other ref,
+  // including another provider's card, is unknown_message.
+  string message_ref = 2;
+  // Provider-generated idempotency key. Reusing it with different content is
+  // rejected; retrying the same operation returns duplicate=true.
+  string operation_id = 3;
+  AgentCardContent content = 10; // complete replacement content
+  reserved 4 to 9, 11 to 31;
+}
+
+message UpdateAgentCardResponse {
+  bool duplicate = 1;
+  // True when a newer update to the same card arrived while this one was
+  // queued, so botd applied that one instead. The card shows content at
+  // least as new as this request; a replay of this operation stays true.
+  bool superseded = 2;
+}
+
+message PinAgentMessageRequest {
+  string provider = 1; // must match the bearer-authenticated principal
+  // message_ref of a message this provider authored. Pinning is idempotent:
+  // Feishu answers a repeated pin with the existing pin, so no operation_id
+  // is needed.
+  string message_ref = 2;
+  reserved 3 to 15;
+}
+
+message PinAgentMessageResponse {
+  reserved 1 to 15;
 }
 
 message AddAgentReactionRequest {

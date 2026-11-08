@@ -32,6 +32,7 @@ type providerPrincipal struct {
 	allowAgentReactions    bool
 	allowAmbientMessages   bool
 	allowProactiveMessages bool
+	allowPins              bool
 }
 
 type providerCredential struct {
@@ -79,6 +80,7 @@ func newProviderAuthenticator(providers map[string]config.AgentProviderConfig) p
 				allowAgentReactions:    providerCfg.AllowAgentReactions,
 				allowAmbientMessages:   providerCfg.AllowAmbientMessages,
 				allowProactiveMessages: providerCfg.AllowProactiveMessages,
+				allowPins:              providerCfg.AllowPins,
 			},
 			digest: sha256.Sum256([]byte(providerCfg.AuthToken)),
 		})
@@ -107,7 +109,10 @@ func isAgentMethod(fullMethod string) bool {
 		pb.CommandService_UploadAgentImage_FullMethodName,
 		pb.CommandService_SendAgentFollowUp_FullMethodName,
 		pb.CommandService_AddAgentReaction_FullMethodName,
-		pb.CommandService_PostAgentMessage_FullMethodName:
+		pb.CommandService_PostAgentMessage_FullMethodName,
+		pb.CommandService_PostAgentCard_FullMethodName,
+		pb.CommandService_UpdateAgentCard_FullMethodName,
+		pb.CommandService_PinAgentMessage_FullMethodName:
 		return true
 	default:
 		return false
@@ -279,7 +284,8 @@ func authorizeAgentSubscription(ctx context.Context, requested string, commands 
 	return nil
 }
 
-// authorizeAgentProactive gates PostAgentMessage itself. Which chats the
+// authorizeAgentProactive gates PostAgentMessage, PostAgentCard, and
+// UpdateAgentCard themselves. Which chats the
 // provider may speak in, and which messages it may answer, are narrower
 // checks the service applies against proactive_chat_aliases and the refs it
 // actually received or authored.
@@ -289,6 +295,19 @@ func authorizeAgentProactive(ctx context.Context, requested string) error {
 	}
 	principal, _ := authenticatedProvider(ctx)
 	if !principal.allowProactiveMessages {
+		return providerScopeDenied(ctx)
+	}
+	return nil
+}
+
+// authorizeAgentPin gates PinAgentMessage. Which messages may be pinned is
+// the service's narrower check against the messages the provider authored.
+func authorizeAgentPin(ctx context.Context, requested string) error {
+	if err := requireProviderIdentity(ctx, requested); err != nil {
+		return err
+	}
+	principal, _ := authenticatedProvider(ctx)
+	if !principal.allowPins {
 		return providerScopeDenied(ctx)
 	}
 	return nil

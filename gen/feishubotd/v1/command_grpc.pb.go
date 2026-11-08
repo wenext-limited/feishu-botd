@@ -31,6 +31,9 @@ const (
 	CommandService_SendAgentFollowUp_FullMethodName       = "/feishubotd.v1.CommandService/SendAgentFollowUp"
 	CommandService_AddAgentReaction_FullMethodName        = "/feishubotd.v1.CommandService/AddAgentReaction"
 	CommandService_PostAgentMessage_FullMethodName        = "/feishubotd.v1.CommandService/PostAgentMessage"
+	CommandService_PostAgentCard_FullMethodName           = "/feishubotd.v1.CommandService/PostAgentCard"
+	CommandService_UpdateAgentCard_FullMethodName         = "/feishubotd.v1.CommandService/UpdateAgentCard"
+	CommandService_PinAgentMessage_FullMethodName         = "/feishubotd.v1.CommandService/PinAgentMessage"
 )
 
 // CommandServiceClient is the client API for CommandService service.
@@ -87,6 +90,21 @@ type CommandServiceClient interface {
 	// card. Gated by allow_proactive_messages and the provider's
 	// proactive_chat_aliases allowlist.
 	PostAgentMessage(ctx context.Context, in *PostAgentMessageRequest, opts ...grpc.CallOption) (*PostAgentMessageResponse, error)
+	// PostAgentCard is PostAgentMessage for a card that can change later: the
+	// same targets, grants, idempotency, and agent ownership, but the content
+	// is typed and botd renders it as a Card JSON 2.0 CardKit entity. The
+	// returned message_ref is the handle UpdateAgentCard and PinAgentMessage
+	// take; the CardKit card id and its sequence stay inside botd.
+	PostAgentCard(ctx context.Context, in *PostAgentCardRequest, opts ...grpc.CallOption) (*PostAgentCardResponse, error)
+	// UpdateAgentCard replaces the whole content of a card this provider
+	// posted with PostAgentCard. Updates to one card are applied in arrival
+	// order, one at a time, and a backlog collapses to its newest entry.
+	// Gated by allow_proactive_messages, like the post that created the card.
+	UpdateAgentCard(ctx context.Context, in *UpdateAgentCardRequest, opts ...grpc.CallOption) (*UpdateAgentCardResponse, error)
+	// PinAgentMessage pins a message this provider authored (a posted card,
+	// post, response, or follow-up botd retained a route for) to its chat's
+	// pin list. Gated by allow_pins.
+	PinAgentMessage(ctx context.Context, in *PinAgentMessageRequest, opts ...grpc.CallOption) (*PinAgentMessageResponse, error)
 }
 
 type commandServiceClient struct {
@@ -247,6 +265,36 @@ func (c *commandServiceClient) PostAgentMessage(ctx context.Context, in *PostAge
 	return out, nil
 }
 
+func (c *commandServiceClient) PostAgentCard(ctx context.Context, in *PostAgentCardRequest, opts ...grpc.CallOption) (*PostAgentCardResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PostAgentCardResponse)
+	err := c.cc.Invoke(ctx, CommandService_PostAgentCard_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *commandServiceClient) UpdateAgentCard(ctx context.Context, in *UpdateAgentCardRequest, opts ...grpc.CallOption) (*UpdateAgentCardResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UpdateAgentCardResponse)
+	err := c.cc.Invoke(ctx, CommandService_UpdateAgentCard_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *commandServiceClient) PinAgentMessage(ctx context.Context, in *PinAgentMessageRequest, opts ...grpc.CallOption) (*PinAgentMessageResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PinAgentMessageResponse)
+	err := c.cc.Invoke(ctx, CommandService_PinAgentMessage_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // CommandServiceServer is the server API for CommandService service.
 // All implementations must embed UnimplementedCommandServiceServer
 // for forward compatibility.
@@ -301,6 +349,21 @@ type CommandServiceServer interface {
 	// card. Gated by allow_proactive_messages and the provider's
 	// proactive_chat_aliases allowlist.
 	PostAgentMessage(context.Context, *PostAgentMessageRequest) (*PostAgentMessageResponse, error)
+	// PostAgentCard is PostAgentMessage for a card that can change later: the
+	// same targets, grants, idempotency, and agent ownership, but the content
+	// is typed and botd renders it as a Card JSON 2.0 CardKit entity. The
+	// returned message_ref is the handle UpdateAgentCard and PinAgentMessage
+	// take; the CardKit card id and its sequence stay inside botd.
+	PostAgentCard(context.Context, *PostAgentCardRequest) (*PostAgentCardResponse, error)
+	// UpdateAgentCard replaces the whole content of a card this provider
+	// posted with PostAgentCard. Updates to one card are applied in arrival
+	// order, one at a time, and a backlog collapses to its newest entry.
+	// Gated by allow_proactive_messages, like the post that created the card.
+	UpdateAgentCard(context.Context, *UpdateAgentCardRequest) (*UpdateAgentCardResponse, error)
+	// PinAgentMessage pins a message this provider authored (a posted card,
+	// post, response, or follow-up botd retained a route for) to its chat's
+	// pin list. Gated by allow_pins.
+	PinAgentMessage(context.Context, *PinAgentMessageRequest) (*PinAgentMessageResponse, error)
 	mustEmbedUnimplementedCommandServiceServer()
 }
 
@@ -346,6 +409,15 @@ func (UnimplementedCommandServiceServer) AddAgentReaction(context.Context, *AddA
 }
 func (UnimplementedCommandServiceServer) PostAgentMessage(context.Context, *PostAgentMessageRequest) (*PostAgentMessageResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method PostAgentMessage not implemented")
+}
+func (UnimplementedCommandServiceServer) PostAgentCard(context.Context, *PostAgentCardRequest) (*PostAgentCardResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method PostAgentCard not implemented")
+}
+func (UnimplementedCommandServiceServer) UpdateAgentCard(context.Context, *UpdateAgentCardRequest) (*UpdateAgentCardResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UpdateAgentCard not implemented")
+}
+func (UnimplementedCommandServiceServer) PinAgentMessage(context.Context, *PinAgentMessageRequest) (*PinAgentMessageResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method PinAgentMessage not implemented")
 }
 func (UnimplementedCommandServiceServer) mustEmbedUnimplementedCommandServiceServer() {}
 func (UnimplementedCommandServiceServer) testEmbeddedByValue()                        {}
@@ -552,6 +624,60 @@ func _CommandService_PostAgentMessage_Handler(srv interface{}, ctx context.Conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _CommandService_PostAgentCard_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PostAgentCardRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CommandServiceServer).PostAgentCard(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CommandService_PostAgentCard_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CommandServiceServer).PostAgentCard(ctx, req.(*PostAgentCardRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _CommandService_UpdateAgentCard_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateAgentCardRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CommandServiceServer).UpdateAgentCard(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CommandService_UpdateAgentCard_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CommandServiceServer).UpdateAgentCard(ctx, req.(*UpdateAgentCardRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _CommandService_PinAgentMessage_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PinAgentMessageRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CommandServiceServer).PinAgentMessage(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CommandService_PinAgentMessage_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CommandServiceServer).PinAgentMessage(ctx, req.(*PinAgentMessageRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // CommandService_ServiceDesc is the grpc.ServiceDesc for CommandService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -590,6 +716,18 @@ var CommandService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "PostAgentMessage",
 			Handler:    _CommandService_PostAgentMessage_Handler,
+		},
+		{
+			MethodName: "PostAgentCard",
+			Handler:    _CommandService_PostAgentCard_Handler,
+		},
+		{
+			MethodName: "UpdateAgentCard",
+			Handler:    _CommandService_UpdateAgentCard_Handler,
+		},
+		{
+			MethodName: "PinAgentMessage",
+			Handler:    _CommandService_PinAgentMessage_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

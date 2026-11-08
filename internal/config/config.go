@@ -120,6 +120,11 @@ type AgentProviderConfig struct {
 	// spoken to in, only by ProactiveChatAliases, so it is a separate grant.
 	AllowProactiveMessages bool
 	ProactiveChatAliases   []string
+	// AllowPins permits PinAgentMessage: pinning a message the provider
+	// authored to its chat's pin list, which every member sees at the top of
+	// the chat. It addresses messages through the same retained routes as
+	// PostAgentMessage, so it requires AllowProactiveMessages.
+	AllowPins bool
 	// WorkingReactionEmoji, when non-empty, is the Feishu emoji key (e.g.
 	// "OnIt") the daemon places on the triggering message for the duration of
 	// a response and removes once it closes. Entirely daemon-driven — the
@@ -316,6 +321,12 @@ func (c Config) ProviderAllowsProactiveMessages(provider string) bool {
 	return configured && providerCfg.AllowProactiveMessages
 }
 
+// ProviderAllowsPins reports whether the provider may call PinAgentMessage.
+func (c Config) ProviderAllowsPins(provider string) bool {
+	providerCfg, configured := c.AgentProviders[strings.TrimSpace(provider)]
+	return configured && providerCfg.AllowPins
+}
+
 // ProviderAllowsProactiveChat is the per-chat proactive check, applied to a
 // new root message's alias and to the chat a reply target lives in.
 func (c Config) ProviderAllowsProactiveChat(provider, chatAlias string) bool {
@@ -502,6 +513,7 @@ func LoadFromEnv() (Config, error) {
 			AmbientChatAliases:       cloneStrings(providerCfg.AmbientChatAliases),
 			AllowProactiveMessages:   providerCfg.AllowProactiveMessages,
 			ProactiveChatAliases:     cloneStrings(providerCfg.ProactiveChatAliases),
+			AllowPins:                providerCfg.AllowPins,
 			WorkingReactionEmoji:     providerCfg.WorkingReactionEmoji,
 			WorkingReactionOverrides: providerCfg.WorkingReactionSenderOverrides,
 			AllowedApps:              allowedApps,
@@ -523,6 +535,11 @@ func LoadFromEnv() (Config, error) {
 		// that make a delivered message_ref a later reply target.
 		if providerCfg.AllowProactiveMessages && cfg.StateDir == "" {
 			return Config{}, fmt.Errorf("provider %q allow_proactive_messages requires state_dir or FEISHU_BOTD_STATE_DIR", provider)
+		}
+		// A pin names a message through the reply-route journal, which only
+		// a proactive provider's messages are retained in.
+		if providerCfg.AllowPins && !providerCfg.AllowProactiveMessages {
+			return Config{}, fmt.Errorf("provider %q allow_pins requires allow_proactive_messages", provider)
 		}
 	}
 	if err := validateAgentProviderTokens(cfg.AgentProviders, ""); err != nil {
@@ -624,6 +641,7 @@ type fileAgentProviderConfig struct {
 	AmbientChatAliases     []string           `json:"ambient_chat_aliases"`
 	AllowProactiveMessages bool               `json:"allow_proactive_messages"`
 	ProactiveChatAliases   []string           `json:"proactive_chat_aliases"`
+	AllowPins              bool               `json:"allow_pins"`
 	WorkingReactionEmoji   string             `json:"working_reaction_emoji"`
 	// WorkingReactionSenderOverrides maps a sender's Feishu display name to a
 	// working reaction emoji, resolved via a live Contact API call — see
@@ -1318,6 +1336,7 @@ func normalizeAgentProviderConfigs(in map[string]fileAgentProviderConfig) (map[s
 			AmbientChatAliases:             ambientChats,
 			AllowProactiveMessages:         providerCfg.AllowProactiveMessages,
 			ProactiveChatAliases:           proactiveChats,
+			AllowPins:                      providerCfg.AllowPins,
 			WorkingReactionEmoji:           providerCfg.WorkingReactionEmoji,
 			WorkingReactionSenderOverrides: reactionOverrides,
 		}
