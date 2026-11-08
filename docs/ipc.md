@@ -142,6 +142,9 @@ is supplied.
 | `SendAgentFollowUp` | Posts one later, standalone message into a conversation the provider has already received an agent event from. |
 | `AddAgentReaction` | Places one provider-chosen native reaction on the message that triggered a response. |
 | `PostAgentMessage` | Posts one message no inbound delivery triggered: a new root in a granted chat, or a reply (optionally in a thread) to a `message_ref` the provider received or authored. |
+| `PostAgentCard` | Posts a proactive CardKit card rendered from typed content (title, state, markdown, checklist, links) under `PostAgentMessage`'s targets and grants. |
+| `UpdateAgentCard` | Replaces the whole content of a card the provider posted with `PostAgentCard`; updates to one card are serialized and a backlog collapses to its newest entry. |
+| `PinAgentMessage` | Pins a message the provider authored to its chat's pin list (`allow_pins`). |
 
 Inbound Feishu events are dispatched only for an app whose `commands.enabled`
 is true (the existing `FEISHU_BOTD_COMMANDS_ENABLED` override affects the
@@ -568,6 +571,28 @@ derived from the owning app's secret, so refs stay addressable across restarts
 while the file alone reveals no Feishu id. Rotating an app secret makes that
 app's retained routes unaddressable. `allow_proactive_messages` therefore
 requires `state_dir`.
+
+#### Agent proactive cards and pins
+
+`PostAgentCard` accepts `provider`, `operation_id`, the same `chat_alias` /
+`reply_to_message_ref` (+ `reply_in_thread`) target as `PostAgentMessage`
+with the same checks and errors, and an `AgentCardContent`: a required
+`title`, a `state` (`PROCESSING`, `ACTIVE`, `SUSPENDED`, `ARCHIVED`, or
+unspecified), optional `markdown`, up to 50 `steps {label, done}`, up to 10
+`links {label, url}` with absolute `https` URLs, and an optional `summary`.
+Invalid content is `INVALID_ARGUMENT` with `missing_title`,
+`invalid_card_state`, `invalid_step`, `invalid_link`, or `field_too_large`.
+The response and idempotency are `PostAgentMessage`'s, in a separate
+operation-id space; the card is owned by the provider and becomes a reply
+target. `UpdateAgentCard` accepts `provider`, a card's `message_ref`,
+`operation_id`, and complete replacement content, and returns `duplicate` and
+`superseded`. A ref that is not this provider's `PostAgentCard` card is
+`unknown_message`; an expired CardKit entity is `card_expired`. Both require
+`allow_proactive_messages`. `PinAgentMessage` accepts `provider` and the
+`message_ref` of a message the provider authored, requires `allow_pins`, and
+maps Feishu's permission refusals (codes 230027, 230046, 230006, 99991672,
+99991679) to `pin_permission_denied`. See
+[Proactive task cards and pins](agent.md#proactive-task-cards-and-pins).
 
 #### Agent card actions
 Each `AgentResponseAction` carries a provider-defined `action_id`, label,

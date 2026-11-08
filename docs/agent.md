@@ -102,7 +102,8 @@ openssl rand -base64 32 > /run/secrets/feishu-botd-example-agent-token
       "allow_image_upload": false,
       "allow_legacy_commands": false,
       "allow_ambient_messages": false,
-      "allow_proactive_messages": false
+      "allow_proactive_messages": false,
+      "allow_pins": false
     }
   },
   "commands": {
@@ -392,6 +393,91 @@ and reply routes live there. Reply routes are retained for seven days in
 from the app secret, so refs survive a restart; post ownership keeps the
 24-hour window every agent message has. A daemon without these grants writes
 nothing new and routes exactly as before.
+
+## Proactive task cards and pins
+
+A provider that mirrors work into a group usually wants one message per task
+that it keeps current — a root card whose title, state, checklist, and links
+change as the task moves — and a pinned summary of what is waiting on people.
+`PostAgentMessage` posts are ordinary messages and cannot change, so three
+more RPCs serve that shape:
+
+```json
+"agent_providers": {
+  "commons": {
+    "allow_proactive_messages": true,
+    "proactive_chat_aliases": ["agent-group"],
+    "allow_pins": true
+  }
+}
+```
+
+`PostAgentCard` takes exactly `PostAgentMessage`'s targets, grants, and
+idempotency rules — a `chat_alias` root, or a `reply_to_message_ref` with
+optional `reply_in_thread`, inside `proactive_chat_aliases` (opaque
+`unconfigured-group-…` aliases included) — but typed content instead of a
+message body. botd renders it as a Card JSON 2.0 CardKit entity:
+
+| Field | Rendering |
+| --- | --- |
+| `title` (required, 200 bytes) | Plain-text header title |
+| `state` | Header colour and tag: `PROCESSING` 进行中 (blue), `ACTIVE` 已回答 (green), `SUSPENDED` 等人处理 (orange), `ARCHIVED` 已归档 (grey); `UNSPECIFIED` shows no tag |
+| `markdown` | Card body, rendered like a response answer; images only from an `image_key` |
+| `steps {label, done}` (≤ 50) | A plain-text checklist, ✅ done and ⬜ open, one single-line label each |
+| `links {label, url}` (≤ 10) | Link buttons; `url` must be an absolute `https` URL without credentials |
+| `summary` (200 bytes) | Notification and chat-list preview; the title when empty |
+
+Labels and the title are plain text, so they never render as markup; the
+whole card shares the daemon's 30 KiB budget. The response is the same
+`message_ref` / `thread_ref` / `duplicate` as `PostAgentMessage`, and the card
+is owned by the provider like a post: an unmentioned human reply to it, or in
+its thread, routes back as `REPLY`, and its ref is a reply target for later
+posts and cards. Operation ids live in their own key space, separate from
+`PostAgentMessage`'s. A retry reuses the CardKit entity and the message UUID
+of the first attempt, so an ambiguous send cannot produce two cards.
+
+`UpdateAgentCard` takes that `message_ref`, an `operation_id`, and the
+complete new content, and replaces the whole card: a field left empty is
+removed. Only a card this provider posted with `PostAgentCard` qualifies; any
+other ref — unknown, another provider's, a plain post, a received message, or
+a card whose chat left the grant — is `unknown_message`, and no Feishu id is
+ever returned. Updates to one card run one at a time in arrival order. When
+several are queued, the ones a newer update is waiting behind are skipped and
+answer `superseded = true` (the card already shows newer content, and a replay
+of that operation stays superseded); a provider that sends complete snapshots
+in order can therefore stream state changes without pacing them itself. The
+same `operation_id` and content replays as `duplicate = true`; different
+content is `operation_conflict`. botd keeps the CardKit card id and the card's
+sequence number sealed beside the card's route in
+`agent-message-routes.jsonl`, and reserves each update's sequence durably
+before calling Feishu, so updates continue across a restart and a crash can
+only skip a sequence, never reuse one. A failed update releases its operation
+id — reapplying a full snapshot is harmless — and a retryable failure is
+`feishu_unavailable`. CardKit entities expire 14 days after creation; an
+update to an expired or missing entity is non-retryable `card_expired`
+(`FAILED_PRECONDITION`), and the provider should post a new card. Each update
+refreshes the card's seven-day route; a card left without an update for seven
+days becomes `unknown_message`. Operation receipts are in memory, so after a restart a
+replay of an old operation id reapplies its content.
+
+`PinAgentMessage` pins a message the provider authored — a posted card or
+post, a response card, or a follow-up botd retained a route for — to the
+chat's pin list, which every member sees at the top of the chat. It requires
+`allow_pins`, which requires `allow_proactive_messages` because the pin is
+addressed through the same retained routes. Feishu answers a repeated pin with
+the existing pin, so the call needs no `operation_id`. A received message or
+any other ref is `unknown_message`. Feishu needs one of
+`im:message.pins:write_only` (the narrow scope), `im:message`, or
+`im:message:send_as_bot`; agent apps already hold the last. When Feishu still
+refuses — a missing scope, or a group set so only owners and admins may pin —
+botd returns non-retryable `pin_permission_denied` (`FAILED_PRECONDITION`) so
+the provider can fall back, for example to a plain post; a per-message pin
+rate limit is retryable `feishu_unavailable`. This is the chat's message pin
+list, not the group announcement or top notice.
+
+CardKit allows 1000 card mutations per minute and 50 per second per app, the
+pin API 1000 per minute and 50 per second with at most 5 per second on one
+message. botd serializes each card's updates but does not pace across cards.
 
 ## Lazy attached topic context
 
@@ -759,8 +845,11 @@ degrade to finishing inside the original card.
   route for seven days, so `PostAgentMessage` reply targets survive a restart.
   An unreadable or torn journal line only makes that one ref unaddressable;
   rotating an app secret makes all of that app's routes unaddressable.
-  `PostAgentMessage` operation receipts and ambient deduplication stay in
-  memory like every other operation record.
+  The same journal keeps each `PostAgentCard` card's sealed CardKit id and
+  sequence, so `UpdateAgentCard` survives a restart.
+  `PostAgentMessage`, `PostAgentCard`, and `UpdateAgentCard` operation
+  receipts and ambient deduplication stay in memory like every other operation
+  record.
 - Run exactly one active `feishu-botd` process owning a given Feishu app. One
   multi-app process opens one connection for each configured app. Feishu permits
   up to 50 connections but delivers each event to one random client in cluster

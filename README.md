@@ -105,7 +105,8 @@ and per-caller defaults. This example keeps the existing top-level app as
       "allow_image_upload": false,
       "allow_legacy_commands": false,
       "allow_ambient_messages": false,
-      "allow_proactive_messages": false
+      "allow_proactive_messages": false,
+      "allow_pins": false
     }
   },
   "commands": {
@@ -222,8 +223,13 @@ every human message in those groups, addressed or not, and
 `PostAgentMessage` there: a new root, or a reply to a message the provider
 received or authored. Both default to false, require their alias list (and the
 list its flag), and accept only group aliases the provider's `allowed_apps`
-can reach; proactive posting also requires `state_dir`. See
-[Ambient observation and proactive posts](docs/agent.md#ambient-observation-and-proactive-posts).
+can reach; proactive posting also requires `state_dir`. The same grant covers
+`PostAgentCard` and `UpdateAgentCard`, a proactive task card botd renders from
+typed content and can replace in place. `allow_pins` permits `PinAgentMessage`
+on a message the provider authored; it defaults to false and requires
+`allow_proactive_messages`. See
+[Ambient observation and proactive posts](docs/agent.md#ambient-observation-and-proactive-posts)
+and [Proactive task cards and pins](docs/agent.md#proactive-task-cards-and-pins).
 `allowed_apps` optionally limits that provider to configured app aliases. When
 the field is absent, all apps are allowed; an explicit empty list allows none,
 and `null` is rejected. botd applies the allowlist before event fan-out and
