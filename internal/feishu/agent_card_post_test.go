@@ -50,7 +50,7 @@ func agentCardSender(httpClient *agentCardHTTPClient) *ChannelSender {
 
 func TestAgentCardsSDKWireRequests(t *testing.T) {
 	httpClient := &agentCardHTTPClient{responses: map[string]string{
-		"/open-apis/im/v1/messages":                  `{"code":0,"msg":"success","data":{"message_id":"om_root"}}`,
+		"/open-apis/im/v1/messages":                   `{"code":0,"msg":"success","data":{"message_id":"om_root"}}`,
 		"/open-apis/im/v1/messages/om_question/reply": `{"code":0,"msg":"success","data":{"message_id":"om_threaded","thread_id":"omt_task"}}`,
 	}}
 	sender := agentCardSender(httpClient)

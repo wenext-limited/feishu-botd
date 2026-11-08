@@ -282,3 +282,45 @@ func TestPersistentStoreSkipsRewritingAnUnchangedRoute(t *testing.T) {
 		t.Fatalf("journal lines = %d, want a write for a widened route", store.lines)
 	}
 }
+
+func TestPersistentStoreKeepsACardAndNeverRewindsItsSequence(t *testing.T) {
+	dir := t.TempDir()
+	store := openTestStore(t, dir, testKeys(), testNow)
+	card := inboundRoute("commons")
+	card.CardID = "card_private_entity"
+	card.CardSequence = 3
+	if err := store.Put("msgref_card", card, testNow); err != nil {
+		t.Fatalf("put card: %v", err)
+	}
+	// A reply-route refresh knows nothing about the card.
+	if err := store.Put("msgref_card", inboundRoute("commons"), testNow.Add(time.Minute)); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	stale := card
+	stale.CardSequence = 1
+	if err := store.Put("msgref_card", stale, testNow.Add(2*time.Minute)); err != nil {
+		t.Fatalf("stale put: %v", err)
+	}
+	advanced := card
+	advanced.CardSequence = 4
+	if err := store.Put("msgref_card", advanced, testNow.Add(3*time.Minute)); err != nil {
+		t.Fatalf("advance: %v", err)
+	}
+	_ = store.Close()
+
+	raw, err := os.ReadFile(filepath.Join(dir, FileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "card_private_entity") {
+		t.Fatalf("journal holds the plaintext card id: %s", raw)
+	}
+	reopened := openTestStore(t, dir, testKeys(), testNow.Add(time.Hour))
+	route, ok, err := reopened.Lookup("msgref_card", testNow.Add(time.Hour))
+	if err != nil || !ok || route.CardID != "card_private_entity" || route.CardSequence != 4 || route.MessageID != "om_private_question" {
+		t.Fatalf("restored card route = %#v ok=%t err=%v", route, ok, err)
+	}
+	if err := reopened.Put("msgref_bad", Route{AppAlias: "support", ChatAlias: "ops", Providers: []string{"commons"}, CardSequence: -1}, testNow); err == nil {
+		t.Fatal("a negative card sequence was accepted")
+	}
+}

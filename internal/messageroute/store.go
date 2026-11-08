@@ -57,7 +57,14 @@ type Route struct {
 	ChatID    string
 	MessageID string
 	ThreadID  string
-	ExpiresAt time.Time
+	// CardID is the CardKit entity behind a card the provider posted with
+	// PostAgentCard, and CardSequence the highest CardKit sequence botd has
+	// reserved for it. Both are sealed with the other private ids. A Put that
+	// carries no card keeps the one already known, and the sequence never
+	// moves backwards, so a later route refresh cannot strand an update.
+	CardID       string
+	CardSequence int32
+	ExpiresAt    time.Time
 }
 
 // Allows reports whether provider is one of the route's grantees.
@@ -91,9 +98,11 @@ type journalLine struct {
 }
 
 type sealedRoute struct {
-	ChatID    string `json:"chat_id,omitempty"`
-	MessageID string `json:"message_id,omitempty"`
-	ThreadID  string `json:"thread_id,omitempty"`
+	ChatID       string `json:"chat_id,omitempty"`
+	MessageID    string `json:"message_id,omitempty"`
+	ThreadID     string `json:"thread_id,omitempty"`
+	CardID       string `json:"card_id,omitempty"`
+	CardSequence int32  `json:"card_sequence,omitempty"`
 }
 
 // Store is safe for concurrent use. A store built by NewMemory never touches
@@ -184,7 +193,11 @@ func (s *Store) Put(key string, route Route, now time.Time) error {
 	route.ChatID = strings.TrimSpace(route.ChatID)
 	route.MessageID = strings.TrimSpace(route.MessageID)
 	route.ThreadID = strings.TrimSpace(route.ThreadID)
+	route.CardID = strings.TrimSpace(route.CardID)
 	route.Providers = normalizedProviders(route.Providers)
+	if route.CardSequence < 0 {
+		return errors.New("message route card sequence must not be negative")
+	}
 	if key == "" || route.AppAlias == "" || route.ChatAlias == "" || len(route.Providers) == 0 {
 		return errors.New("message route key, app, chat alias, and provider are required")
 	}
@@ -200,6 +213,10 @@ func (s *Store) Put(key string, route Route, now time.Time) error {
 		route.ChatID = firstNonEmpty(route.ChatID, previous.ChatID)
 		route.MessageID = firstNonEmpty(route.MessageID, previous.MessageID)
 		route.ThreadID = firstNonEmpty(route.ThreadID, previous.ThreadID)
+		route.CardID = firstNonEmpty(route.CardID, previous.CardID)
+		if previous.CardSequence > route.CardSequence {
+			route.CardSequence = previous.CardSequence
+		}
 		// Ingress re-learns a chat on every message. Skip the write while the
 		// held route already says the same thing and has most of its life left.
 		if sameRoute(previous, route) && previous.ExpiresAt.After(now.Add(s.ttl/2)) {
@@ -442,7 +459,10 @@ func (s *Store) encodeLocked(key string, route Route) ([]byte, error) {
 	if !ok {
 		return nil, fmt.Errorf("no message route key for app %q", route.AppAlias)
 	}
-	plaintext, err := json.Marshal(sealedRoute{ChatID: route.ChatID, MessageID: route.MessageID, ThreadID: route.ThreadID})
+	plaintext, err := json.Marshal(sealedRoute{
+		ChatID: route.ChatID, MessageID: route.MessageID, ThreadID: route.ThreadID,
+		CardID: route.CardID, CardSequence: route.CardSequence,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("encode message route: %w", err)
 	}
@@ -524,6 +544,8 @@ func (s *Store) decodeLocked(line []byte) (string, Route, bool) {
 		ChatID:            private.ChatID,
 		MessageID:         private.MessageID,
 		ThreadID:          private.ThreadID,
+		CardID:            private.CardID,
+		CardSequence:      private.CardSequence,
 		ExpiresAt:         time.Unix(value.ExpiresAt, 0),
 	}, true
 }
@@ -563,6 +585,7 @@ func normalizedProviders(in []string) []string {
 func sameRoute(a, b Route) bool {
 	if a.AppAlias != b.AppAlias || a.ChatAlias != b.ChatAlias || a.UnconfiguredGroup != b.UnconfiguredGroup ||
 		a.ChatID != b.ChatID || a.MessageID != b.MessageID || a.ThreadID != b.ThreadID ||
+		a.CardID != b.CardID || a.CardSequence != b.CardSequence ||
 		len(a.Providers) != len(b.Providers) {
 		return false
 	}
