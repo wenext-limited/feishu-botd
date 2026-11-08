@@ -245,6 +245,93 @@ func (c *commandServer) PostAgentMessage(ctx context.Context, in *pb.PostAgentMe
 	}, nil
 }
 
+func (c *commandServer) PostAgentCard(ctx context.Context, in *pb.PostAgentCardRequest) (*pb.PostAgentCardResponse, error) {
+	if err := authorizeAgentProactive(ctx, in.GetProvider()); err != nil {
+		return nil, err
+	}
+	input := service.PostAgentCardInput{
+		Provider:      in.GetProvider(),
+		OperationID:   in.GetOperationId(),
+		ReplyInThread: in.GetReplyInThread(),
+		Content:       agentCardContentFromProto(in.GetContent()),
+	}
+	switch target := in.GetTarget().(type) {
+	case *pb.PostAgentCardRequest_ChatAlias:
+		input.ChatAlias = target.ChatAlias
+	case *pb.PostAgentCardRequest_ReplyToMessageRef:
+		input.ReplyToMessageRef = target.ReplyToMessageRef
+	}
+	receipt, apiErr := c.svc.PostAgentCard(ctx, input)
+	if apiErr != nil {
+		return nil, grpcError(apiErr, requestIDFromContext(ctx))
+	}
+	return &pb.PostAgentCardResponse{
+		MessageRef: receipt.MessageRef,
+		ThreadRef:  receipt.ThreadRef,
+		Duplicate:  receipt.Duplicate,
+	}, nil
+}
+
+func (c *commandServer) UpdateAgentCard(ctx context.Context, in *pb.UpdateAgentCardRequest) (*pb.UpdateAgentCardResponse, error) {
+	if err := authorizeAgentProactive(ctx, in.GetProvider()); err != nil {
+		return nil, err
+	}
+	receipt, apiErr := c.svc.UpdateAgentCard(ctx, service.UpdateAgentCardInput{
+		Provider:    in.GetProvider(),
+		MessageRef:  in.GetMessageRef(),
+		OperationID: in.GetOperationId(),
+		Content:     agentCardContentFromProto(in.GetContent()),
+	})
+	if apiErr != nil {
+		return nil, grpcError(apiErr, requestIDFromContext(ctx))
+	}
+	return &pb.UpdateAgentCardResponse{Duplicate: receipt.Duplicate, Superseded: receipt.Superseded}, nil
+}
+
+func (c *commandServer) PinAgentMessage(ctx context.Context, in *pb.PinAgentMessageRequest) (*pb.PinAgentMessageResponse, error) {
+	if err := authorizeAgentPin(ctx, in.GetProvider()); err != nil {
+		return nil, err
+	}
+	if apiErr := c.svc.PinAgentMessage(ctx, service.PinAgentMessageInput{
+		Provider:   in.GetProvider(),
+		MessageRef: in.GetMessageRef(),
+	}); apiErr != nil {
+		return nil, grpcError(apiErr, requestIDFromContext(ctx))
+	}
+	return &pb.PinAgentMessageResponse{}, nil
+}
+
+// agentCardContentFromProto maps the wire enum onto the service's. An unknown
+// value stays out of range so the service rejects it rather than dropping it.
+func agentCardContentFromProto(in *pb.AgentCardContent) service.AgentCardContent {
+	out := service.AgentCardContent{
+		Title:    in.GetTitle(),
+		Markdown: in.GetMarkdown(),
+		Summary:  in.GetSummary(),
+	}
+	switch in.GetState() {
+	case pb.AgentCardState_AGENT_CARD_STATE_UNSPECIFIED:
+		out.State = service.AgentCardStateUnspecified
+	case pb.AgentCardState_AGENT_CARD_STATE_PROCESSING:
+		out.State = service.AgentCardStateProcessing
+	case pb.AgentCardState_AGENT_CARD_STATE_ACTIVE:
+		out.State = service.AgentCardStateActive
+	case pb.AgentCardState_AGENT_CARD_STATE_SUSPENDED:
+		out.State = service.AgentCardStateSuspended
+	case pb.AgentCardState_AGENT_CARD_STATE_ARCHIVED:
+		out.State = service.AgentCardStateArchived
+	default:
+		out.State = service.AgentCardState(-1)
+	}
+	for _, step := range in.GetSteps() {
+		out.Steps = append(out.Steps, service.AgentCardStep{Label: step.GetLabel(), Done: step.GetDone()})
+	}
+	for _, link := range in.GetLinks() {
+		out.Links = append(out.Links, service.AgentCardLink{Label: link.GetLabel(), URL: link.GetUrl()})
+	}
+	return out
+}
+
 func (c *commandServer) AddAgentReaction(ctx context.Context, in *pb.AddAgentReactionRequest) (*pb.AddAgentReactionResponse, error) {
 	if err := authorizeAgentReaction(ctx, in.GetProvider()); err != nil {
 		return nil, err

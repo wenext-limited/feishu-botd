@@ -42,6 +42,8 @@ type appBackend struct {
 	contactUsers    feishu.ContactUsers
 	images          feishu.ImageUploader
 	poster          feishu.MessagePoster
+	agentCards      feishu.AgentCards
+	pinner          feishu.MessagePinner
 }
 
 // Service owns the send/dedupe/readiness flow. It is safe for concurrent use
@@ -64,6 +66,11 @@ type Service struct {
 	agentOwners   agentOwnershipStore
 	agentRoutes   agentMessageRouteStore
 	agentPosts    *agentPostLedger
+	// The PostAgentCard ledger is separate so a card and a message never
+	// collide on one operation id.
+	agentCardPosts   *agentPostLedger
+	agentCardUpdates *agentCardUpdateLedger
+	agentCardLanes   *agentCardLanes
 }
 
 type agentOwnershipStore interface {
@@ -128,6 +135,12 @@ func newService(
 		if poster, ok := sender.(feishu.MessagePoster); ok {
 			backend.poster = poster
 		}
+		if cards, ok := sender.(feishu.AgentCards); ok {
+			backend.agentCards = cards
+		}
+		if pinner, ok := sender.(feishu.MessagePinner); ok {
+			backend.pinner = pinner
+		}
 		backends[alias] = backend
 	}
 	var connectionStates map[string]string
@@ -155,6 +168,10 @@ func newService(
 		// state_dir exists; until then reply routes last the dedupe TTL.
 		agentRoutes: messageroute.NewMemory(cfg.DedupeTTL),
 		agentPosts:  newAgentPostLedger(cfg.DedupeTTL),
+
+		agentCardPosts:   newAgentPostLedger(cfg.DedupeTTL),
+		agentCardUpdates: newAgentCardUpdateLedger(cfg.DedupeTTL),
+		agentCardLanes:   newAgentCardLanes(),
 	}
 }
 

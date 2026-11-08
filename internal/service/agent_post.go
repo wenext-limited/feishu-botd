@@ -68,7 +68,12 @@ type agentPostOperation struct {
 	ambiguousAt time.Time
 	target      postTarget
 	posted      feishu.PostedMessage
-	expiresAt   time.Time
+	// cardID is the CardKit entity a PostAgentCard attempt created. A retry
+	// must send that same entity: sending a second one under the first
+	// attempt's message UUID would leave the message pointing at an entity
+	// botd no longer tracks.
+	cardID    string
+	expiresAt time.Time
 }
 
 type agentPostKey struct {
@@ -142,7 +147,7 @@ func (s *Service) PostAgentMessage(ctx context.Context, in PostAgentMessageInput
 	if replay != nil {
 		// A replay re-runs the idempotent ownership writes in case the first
 		// attempt posted but failed to record them.
-		if apiErr := s.persistPostedMessage(provider, replay.target, replay.posted); apiErr != nil {
+		if apiErr := s.persistPostedMessage(provider, replay.target, replay.posted, ""); apiErr != nil {
 			return AgentPostReceipt{}, apiErr
 		}
 		return postReceipt(replay.target, replay.posted, true), nil
@@ -180,7 +185,7 @@ func (s *Service) PostAgentMessage(ctx context.Context, in PostAgentMessageInput
 			// messages: own them now, and pin the operation to its content so
 			// only an identical retry — which reuses every part's UUID and is
 			// deduplicated by Feishu — can finish the rest.
-			_ = s.persistPostedMessage(provider, target, posted)
+			_ = s.persistPostedMessage(provider, target, posted, "")
 			s.agentPosts.abort(provider, operationID, nil, time.Now())
 			if isRetryableMessageFailure(err) {
 				return AgentPostReceipt{}, notify.NewAPIError(502, "feishu_unavailable", "Feishu accepted only part of the proactive message", true)
@@ -195,7 +200,7 @@ func (s *Service) PostAgentMessage(ctx context.Context, in PostAgentMessageInput
 		return AgentPostReceipt{}, notify.NewAPIError(502, "feishu_unavailable", "Feishu proactive message send returned no message", true)
 	}
 	s.agentPosts.commit(provider, operationID, target, posted)
-	if apiErr := s.persistPostedMessage(provider, target, posted); apiErr != nil {
+	if apiErr := s.persistPostedMessage(provider, target, posted, ""); apiErr != nil {
 		return AgentPostReceipt{}, apiErr
 	}
 	return postReceipt(target, posted, false), nil
@@ -274,8 +279,10 @@ func (s *Service) lookupMessageRoute(key string, now time.Time) (messageroute.Ro
 }
 
 // persistPostedMessage makes every posted part agent-owned by the provider and
-// a later reply target for it. Both writes are idempotent.
-func (s *Service) persistPostedMessage(provider string, target postTarget, posted feishu.PostedMessage) *notify.APIError {
+// a later reply target for it. cardID, set for a PostAgentCard card, is kept
+// beside the first part's route so UpdateAgentCard can find the entity. Both
+// writes are idempotent.
+func (s *Service) persistPostedMessage(provider string, target postTarget, posted feishu.PostedMessage, cardID string) *notify.APIError {
 	now := time.Now()
 	for index, messageID := range posted.MessageIDs {
 		messageRef := feishu.MessageRefForApp(target.appAlias, messageID)
@@ -287,9 +294,9 @@ func (s *Service) persistPostedMessage(provider string, target postTarget, poste
 				return notify.NewAPIError(500, "ownership_store_unavailable", "could not persist message ownership", true)
 			}
 		}
-		threadID := ""
+		threadID, partCardID := "", ""
 		if index == 0 {
-			threadID = posted.ThreadID
+			threadID, partCardID = posted.ThreadID, cardID
 		}
 		if s.agentRoutes != nil {
 			if err := s.agentRoutes.Put(messageRef, messageroute.Route{
@@ -300,6 +307,8 @@ func (s *Service) persistPostedMessage(provider string, target postTarget, poste
 				ChatID:            target.chatID,
 				MessageID:         messageID,
 				ThreadID:          threadID,
+				CardID:            partCardID,
+				Authored:          true,
 			}, now); err != nil {
 				return notify.NewAPIError(500, "message_route_store_unavailable", "could not persist message route", true)
 			}
@@ -339,6 +348,7 @@ func (s *Service) rememberAuthoredMessageSoftly(message authoredMessage, kind, c
 		Providers:         []string{message.provider},
 		ChatID:            message.chatID,
 		MessageID:         message.messageID,
+		Authored:          true,
 	}, time.Now()); err != nil {
 		s.logger.Warn("agent message route retention failed",
 			"operation", kind,
@@ -495,6 +505,25 @@ func (l *agentPostLedger) begin(provider, operationID, fingerprint string, now t
 	return nil, nil
 }
 
+// setCard records the entity an attempt created, for the attempts after it.
+func (l *agentPostLedger) setCard(provider, operationID, cardID string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if op, ok := l.operations[agentPostKey{provider: provider, operationID: operationID}]; ok {
+		op.cardID = cardID
+	}
+}
+
+// card returns the entity an earlier attempt created, if any.
+func (l *agentPostLedger) card(provider, operationID string) string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if op, ok := l.operations[agentPostKey{provider: provider, operationID: operationID}]; ok {
+		return op.cardID
+	}
+	return ""
+}
+
 func (l *agentPostLedger) commit(provider, operationID string, target postTarget, posted feishu.PostedMessage) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -527,6 +556,12 @@ func (l *agentPostLedger) release(provider, operationID string) {
 // temporary rejection keeps it for a same-UUID retry, and a definitive
 // rejection with nothing in doubt releases the id.
 func (l *agentPostLedger) abort(provider, operationID string, err error, now time.Time) {
+	l.abortClassified(provider, operationID, err == nil || isAmbiguousMessageFailure(err), err != nil && isRetryableMessageFailure(err), now)
+}
+
+// abortClassified is abort for a caller that classifies its own failure: a
+// card send fails with CardKit errors, not message send errors.
+func (l *agentPostLedger) abortClassified(provider, operationID string, ambiguous, retryable bool, now time.Time) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	key := agentPostKey{provider: provider, operationID: operationID}
@@ -536,11 +571,11 @@ func (l *agentPostLedger) abort(provider, operationID string, err error, now tim
 	}
 	op.pending = false
 	switch {
-	case err == nil || isAmbiguousMessageFailure(err):
+	case ambiguous:
 		if op.ambiguousAt.IsZero() {
 			op.ambiguousAt = now
 		}
-	case isRetryableMessageFailure(err):
+	case retryable:
 	case op.ambiguousAt.IsZero():
 		delete(l.operations, key)
 	}

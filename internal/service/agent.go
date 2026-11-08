@@ -2089,6 +2089,18 @@ func (s *Service) logFeishuFailure(operation, correlationKind, correlationValue 
 		)
 		return
 	}
+	var sendErr *feishu.MessageSendError
+	if errors.As(err, &sendErr) {
+		s.logger.Warn("agent card operation failed",
+			"operation", operation,
+			"correlation", correlationID,
+			"error_class", sendErr.Class,
+			"http_status", sendErr.HTTPStatus,
+			"code", sendErr.Code,
+			"request_id", sendErr.RequestID,
+		)
+		return
+	}
 	errorClass := "transport"
 	switch {
 	case errors.Is(err, context.Canceled):
