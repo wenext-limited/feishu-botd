@@ -91,6 +91,8 @@ type ChannelSender struct {
 	appSecret       string
 	client          *lark.Client
 	cardAPI         cardKitCardAPI
+	cardReplaceAPI  cardKitCardReplaceAPI
+	pinAPI          pinAPI
 	elementAPI      cardKitElementAPI
 	messageAPI      cardKitMessageAPI
 	reactionAPI     reactionAPI
@@ -125,6 +127,8 @@ func NewChannelSender(appID, appSecret string, logger *slog.Logger) *ChannelSend
 		appSecret:       appSecret,
 		client:          client,
 		cardAPI:         client.Cardkit.V1.Card,
+		cardReplaceAPI:  client.Cardkit.V1.Card,
+		pinAPI:          client.Im.V1.Pin,
 		elementAPI:      client.Cardkit.V1.CardElement,
 		messageAPI:      client.Im.V1.Message,
 		reactionAPI:     client.Im.V1.MessageReaction,
