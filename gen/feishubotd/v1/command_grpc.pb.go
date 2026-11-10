@@ -34,6 +34,9 @@ const (
 	CommandService_PostAgentCard_FullMethodName           = "/feishubotd.v1.CommandService/PostAgentCard"
 	CommandService_UpdateAgentCard_FullMethodName         = "/feishubotd.v1.CommandService/UpdateAgentCard"
 	CommandService_PinAgentMessage_FullMethodName         = "/feishubotd.v1.CommandService/PinAgentMessage"
+	CommandService_CreateAgentChat_FullMethodName         = "/feishubotd.v1.CommandService/CreateAgentChat"
+	CommandService_InviteAgentChatMembers_FullMethodName  = "/feishubotd.v1.CommandService/InviteAgentChatMembers"
+	CommandService_RenameAgentChat_FullMethodName         = "/feishubotd.v1.CommandService/RenameAgentChat"
 )
 
 // CommandServiceClient is the client API for CommandService service.
@@ -105,6 +108,19 @@ type CommandServiceClient interface {
 	// post, response, or follow-up botd retained a route for) to its chat's
 	// pin list. Gated by allow_pins.
 	PinAgentMessage(ctx context.Context, in *PinAgentMessageRequest, opts ...grpc.CallOption) (*PinAgentMessageResponse, error)
+	// CreateAgentChat creates a group chat with the bot as owner, inviting the
+	// given members, and grants it to this provider at runtime: the returned
+	// chat_alias is in the provider's ambient and proactive allowlists and
+	// accepts commands, with no config edit, and the grant survives restarts
+	// (it is kept in state_dir). Gated by allow_create_chats.
+	CreateAgentChat(ctx context.Context, in *CreateAgentChatRequest, opts ...grpc.CallOption) (*CreateAgentChatResponse, error)
+	// InviteAgentChatMembers adds members to a chat this provider created with
+	// CreateAgentChat. Already-members are not an error. Gated by
+	// allow_create_chats.
+	InviteAgentChatMembers(ctx context.Context, in *InviteAgentChatMembersRequest, opts ...grpc.CallOption) (*InviteAgentChatMembersResponse, error)
+	// RenameAgentChat renames a chat this provider created with
+	// CreateAgentChat. Gated by allow_create_chats.
+	RenameAgentChat(ctx context.Context, in *RenameAgentChatRequest, opts ...grpc.CallOption) (*RenameAgentChatResponse, error)
 }
 
 type commandServiceClient struct {
@@ -295,6 +311,36 @@ func (c *commandServiceClient) PinAgentMessage(ctx context.Context, in *PinAgent
 	return out, nil
 }
 
+func (c *commandServiceClient) CreateAgentChat(ctx context.Context, in *CreateAgentChatRequest, opts ...grpc.CallOption) (*CreateAgentChatResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CreateAgentChatResponse)
+	err := c.cc.Invoke(ctx, CommandService_CreateAgentChat_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *commandServiceClient) InviteAgentChatMembers(ctx context.Context, in *InviteAgentChatMembersRequest, opts ...grpc.CallOption) (*InviteAgentChatMembersResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(InviteAgentChatMembersResponse)
+	err := c.cc.Invoke(ctx, CommandService_InviteAgentChatMembers_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *commandServiceClient) RenameAgentChat(ctx context.Context, in *RenameAgentChatRequest, opts ...grpc.CallOption) (*RenameAgentChatResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RenameAgentChatResponse)
+	err := c.cc.Invoke(ctx, CommandService_RenameAgentChat_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // CommandServiceServer is the server API for CommandService service.
 // All implementations must embed UnimplementedCommandServiceServer
 // for forward compatibility.
@@ -364,6 +410,19 @@ type CommandServiceServer interface {
 	// post, response, or follow-up botd retained a route for) to its chat's
 	// pin list. Gated by allow_pins.
 	PinAgentMessage(context.Context, *PinAgentMessageRequest) (*PinAgentMessageResponse, error)
+	// CreateAgentChat creates a group chat with the bot as owner, inviting the
+	// given members, and grants it to this provider at runtime: the returned
+	// chat_alias is in the provider's ambient and proactive allowlists and
+	// accepts commands, with no config edit, and the grant survives restarts
+	// (it is kept in state_dir). Gated by allow_create_chats.
+	CreateAgentChat(context.Context, *CreateAgentChatRequest) (*CreateAgentChatResponse, error)
+	// InviteAgentChatMembers adds members to a chat this provider created with
+	// CreateAgentChat. Already-members are not an error. Gated by
+	// allow_create_chats.
+	InviteAgentChatMembers(context.Context, *InviteAgentChatMembersRequest) (*InviteAgentChatMembersResponse, error)
+	// RenameAgentChat renames a chat this provider created with
+	// CreateAgentChat. Gated by allow_create_chats.
+	RenameAgentChat(context.Context, *RenameAgentChatRequest) (*RenameAgentChatResponse, error)
 	mustEmbedUnimplementedCommandServiceServer()
 }
 
@@ -418,6 +477,15 @@ func (UnimplementedCommandServiceServer) UpdateAgentCard(context.Context, *Updat
 }
 func (UnimplementedCommandServiceServer) PinAgentMessage(context.Context, *PinAgentMessageRequest) (*PinAgentMessageResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method PinAgentMessage not implemented")
+}
+func (UnimplementedCommandServiceServer) CreateAgentChat(context.Context, *CreateAgentChatRequest) (*CreateAgentChatResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CreateAgentChat not implemented")
+}
+func (UnimplementedCommandServiceServer) InviteAgentChatMembers(context.Context, *InviteAgentChatMembersRequest) (*InviteAgentChatMembersResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method InviteAgentChatMembers not implemented")
+}
+func (UnimplementedCommandServiceServer) RenameAgentChat(context.Context, *RenameAgentChatRequest) (*RenameAgentChatResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RenameAgentChat not implemented")
 }
 func (UnimplementedCommandServiceServer) mustEmbedUnimplementedCommandServiceServer() {}
 func (UnimplementedCommandServiceServer) testEmbeddedByValue()                        {}
@@ -678,6 +746,60 @@ func _CommandService_PinAgentMessage_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _CommandService_CreateAgentChat_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateAgentChatRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CommandServiceServer).CreateAgentChat(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CommandService_CreateAgentChat_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CommandServiceServer).CreateAgentChat(ctx, req.(*CreateAgentChatRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _CommandService_InviteAgentChatMembers_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(InviteAgentChatMembersRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CommandServiceServer).InviteAgentChatMembers(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CommandService_InviteAgentChatMembers_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CommandServiceServer).InviteAgentChatMembers(ctx, req.(*InviteAgentChatMembersRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _CommandService_RenameAgentChat_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RenameAgentChatRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CommandServiceServer).RenameAgentChat(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CommandService_RenameAgentChat_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CommandServiceServer).RenameAgentChat(ctx, req.(*RenameAgentChatRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // CommandService_ServiceDesc is the grpc.ServiceDesc for CommandService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -728,6 +850,18 @@ var CommandService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "PinAgentMessage",
 			Handler:    _CommandService_PinAgentMessage_Handler,
+		},
+		{
+			MethodName: "CreateAgentChat",
+			Handler:    _CommandService_CreateAgentChat_Handler,
+		},
+		{
+			MethodName: "InviteAgentChatMembers",
+			Handler:    _CommandService_InviteAgentChatMembers_Handler,
+		},
+		{
+			MethodName: "RenameAgentChat",
+			Handler:    _CommandService_RenameAgentChat_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

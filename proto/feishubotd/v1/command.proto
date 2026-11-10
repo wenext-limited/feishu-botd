@@ -77,6 +77,19 @@ service CommandService {
   // post, response, or follow-up botd retained a route for) to its chat's
   // pin list. Gated by allow_pins.
   rpc PinAgentMessage(PinAgentMessageRequest) returns (PinAgentMessageResponse);
+  // CreateAgentChat creates a group chat with the bot as owner, inviting the
+  // given members, and grants it to this provider at runtime: the returned
+  // chat_alias is in the provider's ambient and proactive allowlists and
+  // accepts commands, with no config edit, and the grant survives restarts
+  // (it is kept in state_dir). Gated by allow_create_chats.
+  rpc CreateAgentChat(CreateAgentChatRequest) returns (CreateAgentChatResponse);
+  // InviteAgentChatMembers adds members to a chat this provider created with
+  // CreateAgentChat. Already-members are not an error. Gated by
+  // allow_create_chats.
+  rpc InviteAgentChatMembers(InviteAgentChatMembersRequest) returns (InviteAgentChatMembersResponse);
+  // RenameAgentChat renames a chat this provider created with
+  // CreateAgentChat. Gated by allow_create_chats.
+  rpc RenameAgentChat(RenameAgentChatRequest) returns (RenameAgentChatResponse);
 }
 
 // ProviderService is the FUTURE pull path (botd asks a registered client to
@@ -761,6 +774,60 @@ message PinAgentMessageRequest {
 }
 
 message PinAgentMessageResponse {
+  reserved 1 to 15;
+}
+
+message CreateAgentChatRequest {
+  string provider = 1; // must match the bearer-authenticated principal
+  // Provider-generated idempotency key: a retry with the same name and
+  // members returns the first call's chat with duplicate=true; the same key
+  // with a different request is rejected. Kept in state_dir, so a retry
+  // after a restart does not create a second chat.
+  string operation_id = 2;
+  // The chat's name, e.g. "[Agents] refund-v2".
+  string name = 3;
+  // Optional chat description.
+  string description = 4;
+  // Feishu open_ids (ou_...) of the people to add. May be empty: the bot is
+  // the owner and only member then.
+  repeated string member_open_ids = 5;
+  reserved 6 to 15;
+}
+
+message CreateAgentChatResponse {
+  // The chat's opaque alias: a PostAgentMessage / PostAgentCard chat_alias,
+  // and the chat_alias inbound and ambient deliveries from it carry.
+  string chat_alias = 1;
+  bool duplicate = 2;
+  // open_ids Feishu could not add (left the tenant, not visible to the app).
+  // The chat exists regardless.
+  repeated string invalid_open_ids = 3;
+  reserved 4 to 15;
+}
+
+message InviteAgentChatMembersRequest {
+  string provider = 1; // must match the bearer-authenticated principal
+  // A chat_alias returned by this provider's CreateAgentChat. Any other
+  // alias is unknown_chat.
+  string chat_alias = 2;
+  repeated string member_open_ids = 3;
+  reserved 4 to 15;
+}
+
+message InviteAgentChatMembersResponse {
+  repeated string invalid_open_ids = 1;
+  reserved 2 to 15;
+}
+
+message RenameAgentChatRequest {
+  string provider = 1; // must match the bearer-authenticated principal
+  // A chat_alias returned by this provider's CreateAgentChat.
+  string chat_alias = 2;
+  string name = 3;
+  reserved 4 to 15;
+}
+
+message RenameAgentChatResponse {
   reserved 1 to 15;
 }
 
