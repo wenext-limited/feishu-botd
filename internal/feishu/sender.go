@@ -231,7 +231,12 @@ func ordinaryMessageParts(req notify.Request) ([]ordinaryMessagePart, *MessageSe
 		elements := postElementsForMarkdown(chunk)
 		fallbackText := fallbackTextForPost(chunk)
 		if index == 0 && mentionUserID != "" {
-			elements = append([]ordinaryPostElement{{Tag: "at", UserID: mentionUserID}}, elements...)
+			mention := ordinaryPostElement{Tag: "at", UserID: mentionUserID}
+			if inline, ok := inlineMentionText(chunk); ok {
+				elements = []ordinaryPostElement{mention, inline}
+			} else {
+				elements = append([]ordinaryPostElement{mention}, elements...)
+			}
 			fallbackText = "@" + mentionUserID + " " + fallbackText
 		}
 		content, err := json.Marshal(ordinaryPost{ZhCn: ordinaryPostLanguage{
@@ -443,4 +448,16 @@ func postElementsForMarkdown(chunk string) []ordinaryPostElement {
 
 func fallbackTextForPost(chunk string) string {
 	return strings.TrimSpace(markdownImage.ReplaceAllString(chunk, ""))
+}
+
+// inlineMentionText keeps a native at element and an ordinary one-line body
+// in the same rendered line. Feishu renders an md element as block content
+// even when it follows at in the same post row, so use text only when doing so
+// cannot discard Markdown semantics. Rich or multiline bodies retain md.
+func inlineMentionText(markdown string) (ordinaryPostElement, bool) {
+	text := strings.TrimSpace(markdown)
+	if text == "" || strings.ContainsAny(text, "\r\n\\`*_{}[]()#+-.!|>~<>") {
+		return ordinaryPostElement{}, false
+	}
+	return ordinaryPostElement{Tag: "text", Text: " " + text}, true
 }
