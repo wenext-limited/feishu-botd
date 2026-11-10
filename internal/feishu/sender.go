@@ -93,6 +93,8 @@ type ChannelSender struct {
 	cardAPI         cardKitCardAPI
 	cardReplaceAPI  cardKitCardReplaceAPI
 	pinAPI          pinAPI
+	chatAPI         chatAPI
+	chatMembersAPI  chatMembersAPI
 	elementAPI      cardKitElementAPI
 	messageAPI      cardKitMessageAPI
 	reactionAPI     reactionAPI
@@ -129,6 +131,8 @@ func NewChannelSender(appID, appSecret string, logger *slog.Logger) *ChannelSend
 		cardAPI:         client.Cardkit.V1.Card,
 		cardReplaceAPI:  client.Cardkit.V1.Card,
 		pinAPI:          client.Im.V1.Pin,
+		chatAPI:         client.Im.V1.Chat,
+		chatMembersAPI:  client.Im.V1.ChatMembers,
 		elementAPI:      client.Cardkit.V1.CardElement,
 		messageAPI:      client.Im.V1.Message,
 		reactionAPI:     client.Im.V1.MessageReaction,
