@@ -166,8 +166,8 @@ func TestDynamicCardsSendCardBuildsCardEntityMessage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("send card: %v", err)
 	}
-	if got != messageID {
-		t.Fatalf("message id = %q, want %q", got, messageID)
+	if got.MessageID != messageID {
+		t.Fatalf("message id = %q, want %q", got.MessageID, messageID)
 	}
 	if api.replyReq != nil {
 		t.Fatal("new card send unexpectedly used reply API")
@@ -205,8 +205,8 @@ func TestDynamicCardsSendCardBuildsCardEntityReply(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reply with card: %v", err)
 	}
-	if got != messageID {
-		t.Fatalf("message id = %q, want %q", got, messageID)
+	if got.MessageID != messageID {
+		t.Fatalf("message id = %q, want %q", got.MessageID, messageID)
 	}
 	if api.createReq != nil {
 		t.Fatal("card reply unexpectedly used create API")
@@ -223,6 +223,48 @@ func TestDynamicCardsSendCardBuildsCardEntityReply(t *testing.T) {
 	}
 	if body.Content == nil || *body.Content != `{"type":"card","data":{"card_id":"7355372766134157313"}}` {
 		t.Fatalf("message content = %v", body.Content)
+	}
+}
+
+func TestDynamicCardsSendCardRepliesInThreadAndReportsIt(t *testing.T) {
+	messageID, threadID := "om_card", "omt_thread"
+	api := &fakeCardKitMessageAPI{replyResp: &larkim.ReplyMessageResp{
+		Data: &larkim.ReplyMessageRespData{MessageId: &messageID, ThreadId: &threadID},
+	}}
+	sender := &ChannelSender{messageAPI: api}
+
+	got, err := sender.SendCard(context.Background(), CardSendRequest{
+		ReplyToMessageID: "om_original",
+		ReplyInThread:    true,
+		CardID:           "7355372766134157313",
+		UUID:             "38cc728b-9ad4-49f8-8b52-82445c054815",
+	})
+	if err != nil {
+		t.Fatalf("reply with card: %v", err)
+	}
+	if got != (CardSent{MessageID: messageID, ThreadID: threadID}) {
+		t.Fatalf("sent = %+v", got)
+	}
+	if body := api.replyReq.Body; body.ReplyInThread == nil || !*body.ReplyInThread {
+		t.Fatalf("reply_in_thread = %v, want true", body.ReplyInThread)
+	}
+}
+
+func TestDynamicCardsSendCardQuoteRepliesByDefault(t *testing.T) {
+	messageID := "om_card"
+	api := &fakeCardKitMessageAPI{replyResp: &larkim.ReplyMessageResp{
+		Data: &larkim.ReplyMessageRespData{MessageId: &messageID},
+	}}
+	sender := &ChannelSender{messageAPI: api}
+	if _, err := sender.SendCard(context.Background(), CardSendRequest{
+		ReplyToMessageID: "om_original",
+		CardID:           "7355372766134157313",
+		UUID:             "38cc728b-9ad4-49f8-8b52-82445c054815",
+	}); err != nil {
+		t.Fatalf("reply with card: %v", err)
+	}
+	if body := api.replyReq.Body; body.ReplyInThread != nil && *body.ReplyInThread {
+		t.Fatal("a card that did not ask for a thread was put in one")
 	}
 }
 

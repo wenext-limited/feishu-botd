@@ -558,7 +558,10 @@ func (r *CommandReceiver) CommandFromEvent(event *larkim.P2MessageReceiveV1) (In
 
 	mentionKeys := r.matchingMentionKeys(msg.Mentions)
 	humanSender := r.isHumanSender(event.Event.Sender)
-	unmentionedReply := chatType != "p2p" && len(mentionKeys) == 0 && strings.TrimSpace(deref(msg.ParentId)) != ""
+	// A message in a thread is a reply too: the thread may be one an agent's
+	// card opened, and ingress decides that by ownership, not here.
+	unmentionedReply := chatType != "p2p" && len(mentionKeys) == 0 &&
+		(strings.TrimSpace(deref(msg.ParentId)) != "" || strings.TrimSpace(deref(msg.ThreadId)) != "")
 	ambientOnly := false
 	if chatType != "p2p" && len(mentionKeys) == 0 && !unmentionedReply {
 		// Neither addressed nor a reply: only an ambient observation could

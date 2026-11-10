@@ -508,11 +508,11 @@ func (b *recordingBackend) CreateCard(_ context.Context, cardJSON string) (strin
 	return "card_" + b.alias, nil
 }
 
-func (b *recordingBackend) SendCard(_ context.Context, req feishu.CardSendRequest) (string, error) {
+func (b *recordingBackend) SendCard(_ context.Context, req feishu.CardSendRequest) (feishu.CardSent, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.cardSends = append(b.cardSends, req)
-	return "om_" + b.alias + "_card", nil
+	return feishu.CardSent{MessageID: "om_" + b.alias + "_card"}, nil
 }
 
 func (b *recordingBackend) UpdateContent(_ context.Context, req feishu.CardContentUpdate) error {

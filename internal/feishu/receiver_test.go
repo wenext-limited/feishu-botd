@@ -84,6 +84,28 @@ func TestCommandFromEventAcceptsUnmentionedGroupReplyAsPrivateCandidate(t *testi
 	}
 }
 
+func TestCommandFromEventAcceptsUnmentionedThreadMessageAsPrivateCandidate(t *testing.T) {
+	r := NewCommandReceiver(CommandReceiverConfig{
+		AppAlias:  "support",
+		AppID:     "cli_test",
+		AppSecret: "secret",
+		Channels:  map[string]string{"ops": "oc_ops"},
+		BotOpenID: "ou_bot",
+	}, nil, nil)
+
+	// The thread may be one an agent's card opened; ingress decides that by
+	// ownership, so the receiver must not drop it for want of a parent.
+	event := messageEvent("evt_thread", "om_in_thread", "oc_ops", "and the other branch?")
+	event.Event.Message.ThreadId = ptr("omt_card")
+	cmd, ok := r.CommandFromEvent(event)
+	if !ok || !cmd.UnmentionedReply {
+		t.Fatalf("unmentioned thread message = %#v, %v; want a private reply candidate", cmd, ok)
+	}
+	if cmd.Metadata["thread_id"] != "omt_card" {
+		t.Fatalf("thread metadata = %#v", cmd.Metadata)
+	}
+}
+
 func TestCommandFromEventStillRejectsUnmentionedGroupMessageWithoutParent(t *testing.T) {
 	r := NewCommandReceiver(CommandReceiverConfig{
 		AppID:     "cli_test",

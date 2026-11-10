@@ -78,11 +78,11 @@ func (b *multiAppTestBackend) CreateCard(_ context.Context, cardJSON string) (st
 	return "card_" + b.alias, nil
 }
 
-func (b *multiAppTestBackend) SendCard(_ context.Context, req feishu.CardSendRequest) (string, error) {
+func (b *multiAppTestBackend) SendCard(_ context.Context, req feishu.CardSendRequest) (feishu.CardSent, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.sentCards = append(b.sentCards, req)
-	return b.messageID, nil
+	return feishu.CardSent{MessageID: b.messageID}, nil
 }
 
 func (b *multiAppTestBackend) UpdateContent(_ context.Context, req feishu.CardContentUpdate) error {

@@ -2630,6 +2630,14 @@ type StartAgentResponseRequest struct {
 	// rejected; retrying the same operation returns duplicate=true.
 	OperationId string                `protobuf:"bytes,3,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
 	Content     *AgentResponseContent `protobuf:"bytes,10,opt,name=content,proto3" json:"content,omitempty"`
+	// Post the card inside a Feishu thread under the triggering message,
+	// opening one on it if it has none, so a group's main timeline keeps only
+	// the question. Honored for a group delivery that replies to its triggering
+	// message; ignored for a direct message. When the card opens the thread,
+	// the thread counts as this provider's: a later message in it reaches the
+	// provider as an unmentioned reply (addressing REPLY), exactly as a reply to
+	// the card itself would. A thread someone else opened is never claimed.
+	ReplyInThread bool `protobuf:"varint,13,opt,name=reply_in_thread,json=replyInThread,proto3" json:"reply_in_thread,omitempty"`
 	// The run timeline as typed steps. It sits on the request rather than inside
 	// content because Update and Finish carry it at the same level, and because a
 	// step list is run progress rather than card body: the collapsible panel is
@@ -2700,6 +2708,13 @@ func (x *StartAgentResponseRequest) GetContent() *AgentResponseContent {
 		return x.Content
 	}
 	return nil
+}
+
+func (x *StartAgentResponseRequest) GetReplyInThread() bool {
+	if x != nil {
+		return x.ReplyInThread
+	}
+	return false
 }
 
 func (x *StartAgentResponseRequest) GetTimelineSteps() []*AgentTimelineStep {
@@ -3040,8 +3055,12 @@ type StartAgentResponseResponse struct {
 	// and is the same string this provider already wrote in its own config.
 	// Feishu ids remain private, as everywhere else on this service.
 	MatchedSenderLabel string `protobuf:"bytes,2,opt,name=matched_sender_label,json=matchedSenderLabel,proto3" json:"matched_sender_label,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// Thread holding the card; empty when the card is not in a thread. The same
+	// opaque identity as InboundAgentMessage.thread_ref, so a provider can tie a
+	// later message in the thread back to this response.
+	ThreadRef     string `protobuf:"bytes,3,opt,name=thread_ref,json=threadRef,proto3" json:"thread_ref,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *StartAgentResponseResponse) Reset() {
@@ -3084,6 +3103,13 @@ func (x *StartAgentResponseResponse) GetResponse() *AgentResponseReceipt {
 func (x *StartAgentResponseResponse) GetMatchedSenderLabel() string {
 	if x != nil {
 		return x.MatchedSenderLabel
+	}
+	return ""
+}
+
+func (x *StartAgentResponseResponse) GetThreadRef() string {
+	if x != nil {
+		return x.ThreadRef
 	}
 	return ""
 }
@@ -5324,16 +5350,17 @@ const file_feishubotd_v1_command_proto_rawDesc = "" +
 	"\x11AgentTimelineStep\x12\x17\n" +
 	"\astep_id\x18\x01 \x01(\tR\x06stepId\x12\x14\n" +
 	"\x05label\x18\x02 \x01(\tR\x05label\x12;\n" +
-	"\x05state\x18\x03 \x01(\x0e2%.feishubotd.v1.AgentTimelineStepStateR\x05state\"\x95\x02\n" +
+	"\x05state\x18\x03 \x01(\x0e2%.feishubotd.v1.AgentTimelineStepStateR\x05state\"\xbd\x02\n" +
 	"\x19StartAgentResponseRequest\x12\x1a\n" +
 	"\bprovider\x18\x01 \x01(\tR\bprovider\x12\x1f\n" +
 	"\vdelivery_id\x18\x02 \x01(\tR\n" +
 	"deliveryId\x12!\n" +
 	"\foperation_id\x18\x03 \x01(\tR\voperationId\x12=\n" +
 	"\acontent\x18\n" +
-	" \x01(\v2#.feishubotd.v1.AgentResponseContentR\acontent\x12G\n" +
+	" \x01(\v2#.feishubotd.v1.AgentResponseContentR\acontent\x12&\n" +
+	"\x0freply_in_thread\x18\r \x01(\bR\rreplyInThread\x12G\n" +
 	"\x0etimeline_steps\x18\f \x03(\v2 .feishubotd.v1.AgentTimelineStepR\rtimelineStepsJ\x04\b\x04\x10\n" +
-	"J\x04\b\v\x10\fJ\x04\b\r\x10 \"\xf4\x02\n" +
+	"J\x04\b\v\x10\fJ\x04\b\x0e\x10 \"\xf4\x02\n" +
 	"\x1aUpdateAgentResponseRequest\x12\x1a\n" +
 	"\bprovider\x18\x01 \x01(\tR\bprovider\x12\x1f\n" +
 	"\vresponse_id\x18\x02 \x01(\tR\n" +
@@ -5367,10 +5394,12 @@ const file_feishubotd_v1_command_proto_rawDesc = "" +
 	"\x05phase\x18\x03 \x01(\x0e2!.feishubotd.v1.AgentResponsePhaseR\x05phase\x12\x1c\n" +
 	"\tduplicate\x18\x04 \x01(\bR\tduplicate\x12\x1f\n" +
 	"\vmessage_ref\x18\x05 \x01(\tR\n" +
-	"messageRef\"\x8f\x01\n" +
+	"messageRef\"\xae\x01\n" +
 	"\x1aStartAgentResponseResponse\x12?\n" +
 	"\bresponse\x18\x01 \x01(\v2#.feishubotd.v1.AgentResponseReceiptR\bresponse\x120\n" +
-	"\x14matched_sender_label\x18\x02 \x01(\tR\x12matchedSenderLabel\"^\n" +
+	"\x14matched_sender_label\x18\x02 \x01(\tR\x12matchedSenderLabel\x12\x1d\n" +
+	"\n" +
+	"thread_ref\x18\x03 \x01(\tR\tthreadRef\"^\n" +
 	"\x1bUpdateAgentResponseResponse\x12?\n" +
 	"\bresponse\x18\x01 \x01(\v2#.feishubotd.v1.AgentResponseReceiptR\bresponse\"^\n" +
 	"\x1bFinishAgentResponseResponse\x12?\n" +

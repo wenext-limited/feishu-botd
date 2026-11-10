@@ -219,6 +219,9 @@ type AgentResponseReceipt struct {
 	Phase      AgentResponsePhase
 	Duplicate  bool
 	MessageRef string
+	// ThreadRef is the thread holding the card, carried on Start alone for the
+	// same reason as MatchedSenderLabel.
+	ThreadRef string
 	// MatchedSenderLabel is carried to the provider on Start alone. It is
 	// settled when the response opens and never changes, so Update, Finish
 	// and Replace leave it off the wire rather than restate it — see
@@ -241,6 +244,10 @@ type StartAgentResponseInput struct {
 	// the same state — the grant itself is the only thing this layer can
 	// still gate on.
 	AllowCoTProgress bool
+	// ReplyInThread puts the card inside a Feishu thread under the triggering
+	// group message. Honored only when the card replies to that message and
+	// the chat is not a direct message.
+	ReplyInThread bool
 }
 
 type UpdateAgentResponseInput struct {
@@ -458,6 +465,8 @@ type agentDelivery struct {
 	cardJSON                 string
 	cardID                   string
 	messageID                string
+	threadID                 string
+	ownsThread               bool
 	messageDedupeKey         string
 	actionDigests            map[string]string
 	sendAmbiguousAt          time.Time
@@ -520,11 +529,16 @@ type agentResponse struct {
 	cardID         string
 	messageID      string
 	messageRef     string
-	actionDigests  map[string]string
-	revision       uint64
-	phase          AgentResponsePhase
-	markdown       string
-	timeline       agentTimelineState
+	// threadRef is the thread holding the card, empty outside one.
+	// ownsThread says the card opened it, which makes every later message in
+	// it a reply to this provider (see resolveAgentReplyOwner).
+	threadRef     string
+	ownsThread    bool
+	actionDigests map[string]string
+	revision      uint64
+	phase         AgentResponsePhase
+	markdown      string
+	timeline      agentTimelineState
 	// cotChatID and cotOriginMessageID are captured once, at Start, from
 	// exactly the resolution Start already does for the card send — even
 	// when Start's own snapshot has no steps yet, so a later Update or
@@ -880,10 +894,11 @@ func (s *Service) StartAgentResponse(ctx context.Context, in StartAgentResponseI
 		return AgentResponseReceipt{}, apiErr
 	}
 	fingerprint := hashJSON(struct {
-		Provider   string
-		DeliveryID string
-		CardJSON   string
-	}{provider, deliveryID, card.json})
+		Provider      string
+		DeliveryID    string
+		CardJSON      string
+		ReplyInThread bool
+	}{provider, deliveryID, card.json, in.ReplyInThread})
 
 	b := s.agentBroker
 	now := time.Now()
@@ -1004,6 +1019,7 @@ func (s *Service) StartAgentResponse(ctx context.Context, in StartAgentResponseI
 		}
 		sendRequest := feishu.CardSendRequest{
 			ReplyToMessageID: replyToMessageID,
+			ReplyInThread:    in.ReplyInThread && replyToMessageID != "" && delivery.input.Metadata["chat_type"] != "p2p",
 			CardID:           delivery.cardID,
 			UUID:             delivery.messageUUID,
 		}
@@ -1011,7 +1027,7 @@ func (s *Service) StartAgentResponse(ctx context.Context, in StartAgentResponseI
 			sendRequest.ChatID = chatID
 		}
 		sendAttemptStartedAt := time.Now()
-		messageID, err := dynamicCards.SendCard(callCtx, sendRequest)
+		sent, err := dynamicCards.SendCard(callCtx, sendRequest)
 		if err != nil {
 			s.logAgentCardFailure("send", delivery.responseID, err)
 			if isCardAPIRejection(err) && !isRetryableCardFailure(err) {
@@ -1030,7 +1046,12 @@ func (s *Service) StartAgentResponse(ctx context.Context, in StartAgentResponseI
 			}
 			return AgentResponseReceipt{}, agentCardCallError(err, "Feishu card send failed")
 		}
-		delivery.messageID = messageID
+		delivery.messageID = sent.MessageID
+		delivery.threadID = sent.ThreadID
+		// The card opened this thread only when it asked to and the message it
+		// answers was in none. A thread someone else opened stays theirs.
+		delivery.ownsThread = sendRequest.ReplyInThread && sent.ThreadID != "" &&
+			strings.TrimSpace(delivery.input.Metadata["thread_id"]) == ""
 	}
 
 	messageRef := feishu.MessageRefForApp(delivery.appAlias, delivery.messageID)
@@ -1047,6 +1068,8 @@ func (s *Service) StartAgentResponse(ctx context.Context, in StartAgentResponseI
 		cardID:         delivery.cardID,
 		messageID:      delivery.messageID,
 		messageRef:     messageRef,
+		threadRef:      feishu.ThreadRefForApp(delivery.appAlias, delivery.threadID),
+		ownsThread:     delivery.ownsThread,
 		actionDigests:  cloneStringMap(delivery.actionDigests),
 		revision:       1,
 		phase:          AgentResponsePhaseStreaming,
@@ -1100,8 +1123,14 @@ func (s *Service) persistAgentOwner(response *agentResponse) *notify.APIError {
 	if s.agentOwners == nil {
 		return nil
 	}
-	if err := s.agentOwners.Put(response.messageRef, response.provider, time.Now()); err != nil {
+	now := time.Now()
+	if err := s.agentOwners.Put(response.messageRef, response.provider, now); err != nil {
 		return notify.NewAPIError(500, "ownership_store_unavailable", "could not persist response ownership", true)
+	}
+	if response.ownsThread && response.threadRef != "" {
+		if err := s.agentOwners.Put(response.threadRef, response.provider, now); err != nil {
+			return notify.NewAPIError(500, "ownership_store_unavailable", "could not persist thread ownership", true)
+		}
 	}
 	return nil
 }
@@ -1587,6 +1616,8 @@ func (d *agentDelivery) abortStartAttempt() {
 	d.cardJSON = ""
 	d.cardID = ""
 	d.messageID = ""
+	d.threadID = ""
+	d.ownsThread = false
 	d.actionDigests = nil
 	d.sendAmbiguousAt = time.Time{}
 	d.sendRetryClosed = false
@@ -1600,6 +1631,8 @@ func (d *agentDelivery) compactAfterStart() {
 	d.cardJSON = ""
 	d.cardID = ""
 	d.messageID = ""
+	d.threadID = ""
+	d.ownsThread = false
 	d.actionDigests = nil
 	d.sendAmbiguousAt = time.Time{}
 	d.sendRetryClosed = false
@@ -1963,7 +1996,7 @@ func phaseForOutcome(outcome AgentResponseOutcome) AgentResponsePhase {
 }
 
 func receiptFor(response *agentResponse, duplicate bool) AgentResponseReceipt {
-	return AgentResponseReceipt{ResponseID: response.responseID, Revision: response.revision, Phase: response.phase, Duplicate: duplicate, MessageRef: response.messageRef, MatchedSenderLabel: response.matchedSenderLabel}
+	return AgentResponseReceipt{ResponseID: response.responseID, Revision: response.revision, Phase: response.phase, Duplicate: duplicate, MessageRef: response.messageRef, ThreadRef: response.threadRef, MatchedSenderLabel: response.matchedSenderLabel}
 }
 
 func operationReceipt(response *agentResponse, op *agentOperation, duplicate bool) AgentResponseReceipt {

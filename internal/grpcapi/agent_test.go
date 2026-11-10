@@ -193,11 +193,15 @@ func (f *fakeAgentSender) CreateCard(_ context.Context, cardJSON string) (string
 	return "card_fixture", nil
 }
 
-func (f *fakeAgentSender) SendCard(_ context.Context, req feishu.CardSendRequest) (string, error) {
+func (f *fakeAgentSender) SendCard(_ context.Context, req feishu.CardSendRequest) (feishu.CardSent, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.cardSends = append(f.cardSends, req)
-	return "message_fixture", nil
+	sent := feishu.CardSent{MessageID: "message_fixture"}
+	if req.ReplyInThread {
+		sent.ThreadID = "omt_fixture"
+	}
+	return sent, nil
 }
 
 func (f *fakeAgentSender) UpdateContent(_ context.Context, req feishu.CardContentUpdate) error {
@@ -406,6 +410,7 @@ func TestGRPCAgentResponseLifecycle(t *testing.T) {
 				Style:       pb.AgentResponseActionStyle_AGENT_RESPONSE_ACTION_STYLE_DANGER,
 			}},
 		},
+		ReplyInThread: true,
 	}
 	started, err := client.StartAgentResponse(context.Background(), startRequest)
 	if err != nil {
@@ -414,6 +419,9 @@ func TestGRPCAgentResponseLifecycle(t *testing.T) {
 	requireAgentReceipt(t, started.GetResponse(), "", 1, pb.AgentResponsePhase_AGENT_RESPONSE_PHASE_STREAMING, false)
 	if got, want := started.GetResponse().GetMessageRef(), feishu.MessageRefForApp(config.DefaultAppAlias, "message_fixture"); got != want {
 		t.Fatalf("response message ref = %q, want %q", got, want)
+	}
+	if got, want := started.GetThreadRef(), feishu.ThreadRefForApp(config.DefaultAppAlias, "omt_fixture"); got != want {
+		t.Fatalf("response thread ref = %q, want %q", got, want)
 	}
 	responseID := started.GetResponse().GetResponseId()
 	if apiErr := svc.DispatchAgentCardAction(context.Background(), service.AgentCardActionInput{
@@ -445,9 +453,12 @@ func TestGRPCAgentResponseLifecycle(t *testing.T) {
 		t.Fatalf("retry start agent response: %v", err)
 	}
 	requireAgentReceipt(t, duplicateStart.GetResponse(), responseID, 1, pb.AgentResponsePhase_AGENT_RESPONSE_PHASE_STREAMING, true)
+	if duplicateStart.GetThreadRef() != started.GetThreadRef() {
+		t.Fatalf("replayed start thread ref = %q, want %q", duplicateStart.GetThreadRef(), started.GetThreadRef())
+	}
 
 	createdCard, cardSends, contentUpdates, settingUpdates := sender.snapshot()
-	if len(cardSends) != 1 || cardSends[0].ReplyToMessageID != "inbound_message_fixture" {
+	if len(cardSends) != 1 || cardSends[0].ReplyToMessageID != "inbound_message_fixture" || !cardSends[0].ReplyInThread {
 		t.Fatalf("card sends = %#v", cardSends)
 	}
 	if len(contentUpdates) != 0 || len(settingUpdates) != 0 {

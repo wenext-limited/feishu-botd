@@ -490,7 +490,16 @@ message StartAgentResponseRequest {
   // rejected; retrying the same operation returns duplicate=true.
   string operation_id = 3;
   AgentResponseContent content = 10;
-  reserved 4 to 9, 11, 13 to 31;
+  reserved 4 to 9, 11, 14 to 31;
+
+  // Post the card inside a Feishu thread under the triggering message,
+  // opening one on it if it has none, so a group's main timeline keeps only
+  // the question. Honored for a group delivery that replies to its triggering
+  // message; ignored for a direct message. When the card opens the thread,
+  // the thread counts as this provider's: a later message in it reaches the
+  // provider as an unmentioned reply (addressing REPLY), exactly as a reply to
+  // the card itself would. A thread someone else opened is never claimed.
+  bool reply_in_thread = 13;
 
   // The run timeline as typed steps. It sits on the request rather than inside
   // content because Update and Finish carry it at the same level, and because a
@@ -594,6 +603,11 @@ message StartAgentResponseResponse {
   // and is the same string this provider already wrote in its own config.
   // Feishu ids remain private, as everywhere else on this service.
   string matched_sender_label = 2;
+
+  // Thread holding the card; empty when the card is not in a thread. The same
+  // opaque identity as InboundAgentMessage.thread_ref, so a provider can tie a
+  // later message in the thread back to this response.
+  string thread_ref = 3;
 }
 
 message UpdateAgentResponseResponse {

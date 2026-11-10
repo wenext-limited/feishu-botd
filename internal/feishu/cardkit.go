@@ -29,7 +29,7 @@ const (
 // card id and message UUID returned/used by the original attempt.
 type DynamicCards interface {
 	CreateCard(ctx context.Context, cardJSON string) (string, error)
-	SendCard(ctx context.Context, req CardSendRequest) (string, error)
+	SendCard(ctx context.Context, req CardSendRequest) (CardSent, error)
 	UpdateContent(ctx context.Context, req CardContentUpdate) error
 	UpdateSettings(ctx context.Context, req CardSettingsUpdate) error
 	BatchUpdate(ctx context.Context, req CardBatchUpdate) error
@@ -40,8 +40,18 @@ type CardSendRequest struct {
 	// Exactly one of ChatID and ReplyToMessageID is required. The adapter never
 	// falls back from a failed reply to a new top-level message.
 	ReplyToMessageID string
-	CardID           string
-	UUID             string
+	// ReplyInThread asks Feishu to answer inside a thread, opening one on the
+	// reply target if it has none. Ignored without ReplyToMessageID.
+	ReplyInThread bool
+	CardID        string
+	UUID          string
+}
+
+// CardSent is where a sent card landed.
+type CardSent struct {
+	MessageID string
+	// ThreadID is the Feishu thread holding the card; empty outside one.
+	ThreadID string
 }
 
 type CardContentUpdate struct {
@@ -134,17 +144,17 @@ func (s *ChannelSender) CreateCard(ctx context.Context, cardJSON string) (string
 	return strings.TrimSpace(*resp.Data.CardId), nil
 }
 
-func (s *ChannelSender) SendCard(ctx context.Context, in CardSendRequest) (string, error) {
+func (s *ChannelSender) SendCard(ctx context.Context, in CardSendRequest) (CardSent, error) {
 	if s.messageAPI == nil {
-		return "", fmt.Errorf("feishu card send is not configured")
+		return CardSent{}, fmt.Errorf("feishu card send is not configured")
 	}
 	cardID, err := validateRequired("card_id", in.CardID, 0)
 	if err != nil {
-		return "", err
+		return CardSent{}, err
 	}
 	uuid, err := validateRequired("message uuid", in.UUID, maxMessageUUIDLength)
 	if err != nil {
-		return "", err
+		return CardSent{}, err
 	}
 
 	content, err := json.Marshal(cardReference{
@@ -152,20 +162,23 @@ func (s *ChannelSender) SendCard(ctx context.Context, in CardSendRequest) (strin
 		Data: cardReferenceData{CardID: cardID},
 	})
 	if err != nil {
-		return "", fmt.Errorf("encode Feishu card reference: %w", err)
+		return CardSent{}, fmt.Errorf("encode Feishu card reference: %w", err)
 	}
 
 	replyTo := strings.TrimSpace(in.ReplyToMessageID)
 	chatID := strings.TrimSpace(in.ChatID)
 	if (replyTo == "") == (chatID == "") {
-		return "", fmt.Errorf("exactly one of chat_id or reply_to_message_id is required")
+		return CardSent{}, fmt.Errorf("exactly one of chat_id or reply_to_message_id is required")
 	}
 	if replyTo != "" {
-		body := larkim.NewReplyMessageReqBodyBuilder().
+		builder := larkim.NewReplyMessageReqBodyBuilder().
 			MsgType(larkim.MsgTypeInteractive).
 			Content(string(content)).
-			Uuid(uuid).
-			Build()
+			Uuid(uuid)
+		if in.ReplyInThread {
+			builder = builder.ReplyInThread(true)
+		}
+		body := builder.Build()
 		req := larkim.NewReplyMessageReqBuilder().
 			MessageId(replyTo).
 			Body(body).
@@ -173,18 +186,18 @@ func (s *ChannelSender) SendCard(ctx context.Context, in CardSendRequest) (strin
 		req.Body = body
 		resp, callErr := s.messageAPI.Reply(ctx, req)
 		if callErr != nil {
-			return "", fmt.Errorf("feishu card reply failed: %w", callErr)
+			return CardSent{}, fmt.Errorf("feishu card reply failed: %w", callErr)
 		}
 		if resp == nil {
-			return "", fmt.Errorf("feishu card reply returned an empty response")
+			return CardSent{}, fmt.Errorf("feishu card reply returned an empty response")
 		}
 		if !resp.Success() {
-			return "", dynamicCardResponseError("card reply", resp.ApiResp, resp.Code, resp.Msg)
+			return CardSent{}, dynamicCardResponseError("card reply", resp.ApiResp, resp.Code, resp.Msg)
 		}
 		if resp.Data == nil || resp.Data.MessageId == nil || strings.TrimSpace(*resp.Data.MessageId) == "" {
-			return "", fmt.Errorf("feishu card reply returned no message id")
+			return CardSent{}, fmt.Errorf("feishu card reply returned no message id")
 		}
-		return strings.TrimSpace(*resp.Data.MessageId), nil
+		return CardSent{MessageID: strings.TrimSpace(*resp.Data.MessageId), ThreadID: strings.TrimSpace(deref(resp.Data.ThreadId))}, nil
 	}
 
 	body := larkim.NewCreateMessageReqBodyBuilder().
@@ -200,18 +213,18 @@ func (s *ChannelSender) SendCard(ctx context.Context, in CardSendRequest) (strin
 	req.Body = body
 	resp, callErr := s.messageAPI.Create(ctx, req)
 	if callErr != nil {
-		return "", fmt.Errorf("feishu card send failed: %w", callErr)
+		return CardSent{}, fmt.Errorf("feishu card send failed: %w", callErr)
 	}
 	if resp == nil {
-		return "", fmt.Errorf("feishu card send returned an empty response")
+		return CardSent{}, fmt.Errorf("feishu card send returned an empty response")
 	}
 	if !resp.Success() {
-		return "", dynamicCardResponseError("card send", resp.ApiResp, resp.Code, resp.Msg)
+		return CardSent{}, dynamicCardResponseError("card send", resp.ApiResp, resp.Code, resp.Msg)
 	}
 	if resp.Data == nil || resp.Data.MessageId == nil || strings.TrimSpace(*resp.Data.MessageId) == "" {
-		return "", fmt.Errorf("feishu card send returned no message id")
+		return CardSent{}, fmt.Errorf("feishu card send returned no message id")
 	}
-	return strings.TrimSpace(*resp.Data.MessageId), nil
+	return CardSent{MessageID: strings.TrimSpace(*resp.Data.MessageId), ThreadID: strings.TrimSpace(deref(resp.Data.ThreadId))}, nil
 }
 
 func (s *ChannelSender) UpdateContent(ctx context.Context, in CardContentUpdate) error {

@@ -121,6 +121,7 @@ func (c *commandServer) StartAgentResponse(ctx context.Context, in *pb.StartAgen
 		OperationID:      in.GetOperationId(),
 		Content:          content,
 		AllowCoTProgress: principal.allowCoTProgress,
+		ReplyInThread:    in.GetReplyInThread(),
 	})
 	if apiErr != nil {
 		return nil, grpcError(apiErr, requestIDFromContext(ctx))
@@ -131,6 +132,7 @@ func (c *commandServer) StartAgentResponse(ctx context.Context, in *pb.StartAgen
 	return &pb.StartAgentResponseResponse{
 		Response:           agentReceiptToProto(receipt),
 		MatchedSenderLabel: receipt.MatchedSenderLabel,
+		ThreadRef:          receipt.ThreadRef,
 	}, nil
 }
 

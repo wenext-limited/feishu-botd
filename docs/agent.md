@@ -680,6 +680,12 @@ typewriter behavior depends on the previous text being a prefix of the next
 snapshot. Update and Finish also carry the optional timeline fields described
 in [the run timeline panel](#the-run-timeline-panel).
 
+Set `reply_in_thread` on Start to keep a group's main timeline to the
+question: the card goes into a thread under the triggering message, and the
+Start response's `thread_ref` names it. When the card opened that thread, every
+later message in it reaches the provider as an unmentioned reply, so people can
+carry on there without mentioning the bot again. Direct messages ignore it.
+
 Every mutation needs a provider-generated `operation_id`. On an ambiguous
 transport failure, retry the same semantic request with the same ID. A
 completed retry returns `duplicate = true`; update and finish retries return

@@ -378,6 +378,14 @@ CardKit JSON 2.0 entity with streaming mode enabled, replies to the inbound
 message, and returns an opaque `response_id`, revision `1`, phase `STREAMING`,
 and a `duplicate` flag.
 
+With `reply_in_thread`, a group card is posted inside a Feishu thread under
+the triggering message, opening one there if it has none; a direct message
+ignores the flag. The response then carries `thread_ref`, the same opaque
+identity an `InboundAgentMessage` in that thread carries. When the card opened
+the thread, botd records the thread as the provider's: a later unmentioned
+message in it is routed to that provider alone with addressing `REPLY`, exactly
+as a reply to the card would be. A thread someone else opened is never claimed.
+
 `UpdateAgentResponse` accepts that handle, a new `operation_id`, the current
 receipt's revision in `expected_revision`, and the complete accumulated
 markdown. It serializes CardKit mutations, updates the card's `agent_answer`

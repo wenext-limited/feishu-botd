@@ -20,6 +20,7 @@ import (
 type fakeAgentBackend struct {
 	cardID    string
 	messageID string
+	threadID  string
 
 	createErr   error
 	sendErr     error
@@ -131,13 +132,13 @@ func (f *fakeAgentBackend) CreateCard(_ context.Context, cardJSON string) (strin
 	return f.cardID, nil
 }
 
-func (f *fakeAgentBackend) SendCard(_ context.Context, req feishu.CardSendRequest) (string, error) {
+func (f *fakeAgentBackend) SendCard(_ context.Context, req feishu.CardSendRequest) (feishu.CardSent, error) {
 	f.callOrder = append(f.callOrder, "send_card")
 	f.sentCards = append(f.sentCards, req)
 	if f.sendErr != nil {
-		return "", f.sendErr
+		return feishu.CardSent{}, f.sendErr
 	}
-	return f.messageID, nil
+	return feishu.CardSent{MessageID: f.messageID, ThreadID: f.threadID}, nil
 }
 
 func (f *fakeAgentBackend) UpdateContent(_ context.Context, req feishu.CardContentUpdate) error {

@@ -370,20 +370,34 @@ func boundedAgentMentions(in []AgentMention) []AgentMention {
 // resolveAgentReplyOwner proves that an inbound parent is an agent-authored
 // message and returns its provider. Unknown, expired, or app-disallowed parents
 // are intentionally indistinguishable from unowned messages.
+// resolveAgentReplyOwner names the provider an unmentioned group reply
+// belongs to: the author of the message it replies to, or else the provider
+// whose response card opened the thread it was posted in. Inside a thread
+// Feishu points a plain message at the thread's root — the person's question,
+// not the card — so the thread is what says the conversation is the agent's.
 func (s *Service) resolveAgentReplyOwner(in CommandInput) (string, bool, *notify.APIError) {
-	messageRef := feishu.MessageRefForApp(in.AppAlias, in.Metadata["parent_id"])
-	if messageRef == "" || s.agentOwners == nil {
+	if s.agentOwners == nil {
 		return "", false, nil
 	}
-	owner, ok, err := s.agentOwners.Lookup(messageRef, time.Now())
-	if err != nil {
-		return "", false, notify.NewAPIError(500, "ownership_store_unavailable", "could not resolve response ownership", true)
+	refs := []string{
+		feishu.MessageRefForApp(in.AppAlias, in.Metadata["parent_id"]),
+		feishu.ThreadRefForApp(in.AppAlias, in.Metadata["thread_id"]),
 	}
-	provider := strings.TrimSpace(owner.Provider)
-	if !ok || provider == "" || !s.appAllowed(provider, in.AppAlias) {
-		return "", false, nil
+	now := time.Now()
+	for _, ref := range refs {
+		if ref == "" {
+			continue
+		}
+		owner, ok, err := s.agentOwners.Lookup(ref, now)
+		if err != nil {
+			return "", false, notify.NewAPIError(500, "ownership_store_unavailable", "could not resolve response ownership", true)
+		}
+		provider := strings.TrimSpace(owner.Provider)
+		if ok && provider != "" && s.appAllowed(provider, in.AppAlias) {
+			return provider, true, nil
+		}
 	}
-	return provider, true, nil
+	return "", false, nil
 }
 
 func (s *Service) acceptsUnconfiguredGroup(in CommandInput) bool {
