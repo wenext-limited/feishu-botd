@@ -616,3 +616,52 @@ func TestAgentCoTNeverRetriesAFailedCreate(t *testing.T) {
 		t.Fatalf("cot completes = %d, want 0: there is no CoT to complete", len(backend.cotCompletes))
 	}
 }
+
+// A card that opens a thread goes first: the CoT API has no thread option and
+// lands beside its origin message, which is in the main timeline until the
+// card turns it into a thread root. Created after, the CoT joins the thread.
+func TestAgentCoTWaitsForACardThatOpensAThread(t *testing.T) {
+	cases := []struct {
+		name     string
+		metadata map[string]string
+		cotFirst bool
+	}{
+		{"opens a thread", map[string]string{"chat_type": "group", "message_id": "om_trigger"}, false},
+		{"already in a thread", map[string]string{"chat_type": "group", "message_id": "om_trigger", "thread_id": "omt_people", "root_id": "om_root"}, true},
+		{"direct message", map[string]string{"chat_type": "p2p", "message_id": "om_trigger"}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			backend := newFakeAgentBackend()
+			backend.threadID = "omt_card"
+			svc := newAgentTestService(backend)
+			mustSubscribeAgent(t, svc, AgentSubscribeOptions{Provider: "agent", Commands: []string{"ask"}})
+			mustDispatchAgentPrompt(t, svc, CommandInput{
+				DeliveryID: "evt_cot_thread", Command: "ask", Prompt: "ask", ChatAlias: "ops",
+				Metadata: tc.metadata,
+			})
+			if _, apiErr := svc.StartAgentResponse(context.Background(), StartAgentResponseInput{
+				Provider: "agent", DeliveryID: "evt_cot_thread", OperationID: "start-1",
+				Content: AgentResponseContent{Markdown: "answer"}, AllowCoTProgress: true, ReplyInThread: true,
+			}); apiErr != nil {
+				t.Fatalf("start: %v", apiErr)
+			}
+			want := []string{"cot_create", "send_card"}
+			if !tc.cotFirst {
+				want = []string{"send_card", "cot_create"}
+			}
+			var got []string
+			for _, call := range backend.callOrder {
+				if call == "cot_create" || call == "send_card" {
+					got = append(got, call)
+				}
+			}
+			if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+				t.Fatalf("call order = %v, want %v", backend.callOrder, want)
+			}
+			if len(backend.cotCreates) != 1 || backend.cotCreates[0].OriginMessageID != "om_trigger" {
+				t.Fatalf("cot creates = %#v", backend.cotCreates)
+			}
+		})
+	}
+}

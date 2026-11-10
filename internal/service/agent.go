@@ -1014,14 +1014,23 @@ func (s *Service) StartAgentResponse(ctx context.Context, in StartAgentResponseI
 		// (the common case: nothing has happened before Start) still opens
 		// a CoT here, with RUN_STARTED alone; steps stream in afterward via
 		// UpdateAgentResponse.
-		if backend.cotMessages != nil && in.AllowCoTProgress {
-			s.createAgentCoT(callCtx, backend.cotMessages, &cot, delivery.responseID, chatID, replyToMessageID, in.Content.TimelineSteps)
-		}
+		//
+		// The one exception is a card that is about to open a thread: the CoT
+		// API has no thread option and lands wherever its origin message
+		// lives, which before the card is the main timeline. So it waits for
+		// the card, after which the origin is a thread root and the CoT goes
+		// into the thread — second there rather than first, but not out in
+		// the room the thread exists to keep clean.
 		sendRequest := feishu.CardSendRequest{
 			ReplyToMessageID: replyToMessageID,
 			ReplyInThread:    in.ReplyInThread && replyToMessageID != "" && delivery.input.Metadata["chat_type"] != "p2p",
 			CardID:           delivery.cardID,
 			UUID:             delivery.messageUUID,
+		}
+		opensThread := sendRequest.ReplyInThread && strings.TrimSpace(delivery.input.Metadata["thread_id"]) == ""
+		wantsCoT := backend.cotMessages != nil && in.AllowCoTProgress
+		if wantsCoT && !opensThread {
+			s.createAgentCoT(callCtx, backend.cotMessages, &cot, delivery.responseID, chatID, replyToMessageID, in.Content.TimelineSteps)
 		}
 		if replyToMessageID == "" {
 			sendRequest.ChatID = chatID
@@ -1050,8 +1059,10 @@ func (s *Service) StartAgentResponse(ctx context.Context, in StartAgentResponseI
 		delivery.threadID = sent.ThreadID
 		// The card opened this thread only when it asked to and the message it
 		// answers was in none. A thread someone else opened stays theirs.
-		delivery.ownsThread = sendRequest.ReplyInThread && sent.ThreadID != "" &&
-			strings.TrimSpace(delivery.input.Metadata["thread_id"]) == ""
+		delivery.ownsThread = opensThread && sent.ThreadID != ""
+		if wantsCoT && opensThread {
+			s.createAgentCoT(callCtx, backend.cotMessages, &cot, delivery.responseID, chatID, replyToMessageID, in.Content.TimelineSteps)
+		}
 	}
 
 	messageRef := feishu.MessageRefForApp(delivery.appAlias, delivery.messageID)
