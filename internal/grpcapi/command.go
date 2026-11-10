@@ -326,6 +326,8 @@ func (c *commandServer) CreateAgentChat(ctx context.Context, in *pb.CreateAgentC
 		ChatAlias:      receipt.ChatAlias,
 		Duplicate:      receipt.Duplicate,
 		InvalidOpenIds: receipt.InvalidOpenIDs,
+		UnaddedOpenIds: receipt.UnaddedOpenIDs,
+		MembersError:   receipt.MembersError,
 	}, nil
 }
 

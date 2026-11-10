@@ -4439,6 +4439,14 @@ type CreateAgentChatResponse struct {
 	// open_ids Feishu could not add (left the tenant, not visible to the app).
 	// The chat exists regardless.
 	InvalidOpenIds []string `protobuf:"bytes,3,rep,name=invalid_open_ids,json=invalidOpenIds,proto3" json:"invalid_open_ids,omitempty"`
+	// When adding the members failed as a whole for a reason a retry will not
+	// fix (e.g. the app lacks im:chat.members:write_only), the chat is still
+	// created and granted: these are the members that were not added, and
+	// members_error is botd's error class (e.g. chat_permission_denied). A
+	// transient failure fails the call instead, and a retry with the same
+	// operation_id adds them.
+	UnaddedOpenIds []string `protobuf:"bytes,4,rep,name=unadded_open_ids,json=unaddedOpenIds,proto3" json:"unadded_open_ids,omitempty"`
+	MembersError   string   `protobuf:"bytes,5,opt,name=members_error,json=membersError,proto3" json:"members_error,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -4492,6 +4500,20 @@ func (x *CreateAgentChatResponse) GetInvalidOpenIds() []string {
 		return x.InvalidOpenIds
 	}
 	return nil
+}
+
+func (x *CreateAgentChatResponse) GetUnaddedOpenIds() []string {
+	if x != nil {
+		return x.UnaddedOpenIds
+	}
+	return nil
+}
+
+func (x *CreateAgentChatResponse) GetMembersError() string {
+	if x != nil {
+		return x.MembersError
+	}
+	return ""
 }
 
 type InviteAgentChatMembersRequest struct {
@@ -5458,12 +5480,14 @@ const file_feishubotd_v1_command_proto_rawDesc = "" +
 	"\foperation_id\x18\x02 \x01(\tR\voperationId\x12\x12\n" +
 	"\x04name\x18\x03 \x01(\tR\x04name\x12 \n" +
 	"\vdescription\x18\x04 \x01(\tR\vdescription\x12&\n" +
-	"\x0fmember_open_ids\x18\x05 \x03(\tR\rmemberOpenIdsJ\x04\b\x06\x10\x10\"\x86\x01\n" +
+	"\x0fmember_open_ids\x18\x05 \x03(\tR\rmemberOpenIdsJ\x04\b\x06\x10\x10\"\xd5\x01\n" +
 	"\x17CreateAgentChatResponse\x12\x1d\n" +
 	"\n" +
 	"chat_alias\x18\x01 \x01(\tR\tchatAlias\x12\x1c\n" +
 	"\tduplicate\x18\x02 \x01(\bR\tduplicate\x12(\n" +
-	"\x10invalid_open_ids\x18\x03 \x03(\tR\x0einvalidOpenIdsJ\x04\b\x04\x10\x10\"\x88\x01\n" +
+	"\x10invalid_open_ids\x18\x03 \x03(\tR\x0einvalidOpenIds\x12(\n" +
+	"\x10unadded_open_ids\x18\x04 \x03(\tR\x0eunaddedOpenIds\x12#\n" +
+	"\rmembers_error\x18\x05 \x01(\tR\fmembersErrorJ\x04\b\x06\x10\x10\"\x88\x01\n" +
 	"\x1dInviteAgentChatMembersRequest\x12\x1a\n" +
 	"\bprovider\x18\x01 \x01(\tR\bprovider\x12\x1d\n" +
 	"\n" +

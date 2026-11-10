@@ -34,6 +34,10 @@ type AgentChatReceipt struct {
 	ChatAlias      string
 	Duplicate      bool
 	InvalidOpenIDs []string
+	// UnaddedOpenIDs and MembersError: CreateAgentChat only, when adding
+	// the members failed definitively but the chat exists.
+	UnaddedOpenIDs []string
+	MembersError   string
 }
 
 // InviteAgentChatMembersInput adds members to a chat the provider created.
@@ -90,11 +94,9 @@ func (s *Service) CreateAgentChat(ctx context.Context, in CreateAgentChatInput) 
 		if !ok || backend.chats == nil {
 			return AgentChatReceipt{}, chatsUnavailable()
 		}
-		invalid, apiErr := s.addAgentChatMembers(ctx, backend, grant, members)
-		if apiErr != nil {
-			return AgentChatReceipt{}, apiErr
-		}
-		return AgentChatReceipt{ChatAlias: grant.ChatAlias, Duplicate: true, InvalidOpenIDs: invalid}, nil
+		receipt, apiErr := s.addCreatedChatMembers(ctx, backend, grant, members)
+		receipt.Duplicate = true
+		return receipt, apiErr
 	}
 	appAlias, ok := s.agentChatApp(provider)
 	if !ok {
@@ -126,9 +128,21 @@ func (s *Service) CreateAgentChat(ctx context.Context, in CreateAgentChatInput) 
 		return AgentChatReceipt{}, notify.NewAPIError(500, "grant_store_unavailable", "could not persist the chat grant", false)
 	}
 	s.logger.Info("agent chat created", "provider", provider, "chat_alias", grant.ChatAlias, "app", appAlias)
+	return s.addCreatedChatMembers(ctx, backend, grant, members)
+}
+
+// addCreatedChatMembers adds a new chat's members. The chat exists and is
+// granted whatever happens here, so a definitive failure (missing
+// permission) is reported in the receipt rather than failing the call: the
+// provider keeps the chat and can tell people who is missing. A transient
+// failure fails the call, and a retry of the same operation adds them.
+func (s *Service) addCreatedChatMembers(ctx context.Context, backend appBackend, grant chatgrant.Grant, members []string) (AgentChatReceipt, *notify.APIError) {
 	invalid, apiErr := s.addAgentChatMembers(ctx, backend, grant, members)
 	if apiErr != nil {
-		return AgentChatReceipt{}, apiErr
+		if apiErr.Retryable {
+			return AgentChatReceipt{}, apiErr
+		}
+		return AgentChatReceipt{ChatAlias: grant.ChatAlias, UnaddedOpenIDs: members, MembersError: apiErr.Code}, nil
 	}
 	return AgentChatReceipt{ChatAlias: grant.ChatAlias, InvalidOpenIDs: invalid}, nil
 }

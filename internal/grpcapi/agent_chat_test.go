@@ -30,6 +30,7 @@ type fakeChatSender struct {
 	adds      map[string][][]string
 	renames   map[string]string
 	createErr error
+	addErr    error
 	invalid   []string
 }
 
@@ -50,6 +51,9 @@ func (f *fakeChatSender) AddChatMembers(_ context.Context, chatID string, openID
 		f.adds = map[string][][]string{}
 	}
 	f.adds[chatID] = append(f.adds[chatID], append([]string(nil), openIDs...))
+	if f.addErr != nil {
+		return nil, f.addErr
+	}
 	return f.invalid, nil
 }
 
@@ -238,5 +242,37 @@ func TestGRPCAgentChatCreateReportsAMissingPermission(t *testing.T) {
 	detail := botdDetail(t, err)
 	if detail == nil || detail.GetCode() != "chat_permission_denied" {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestGRPCAgentChatCreateKeepsTheChatWhenMembersCannotBeAdded(t *testing.T) {
+	conn, sender, registry := startChatUnixServer(t, chatServerOptions{createChats: true})
+	sender.addErr = &feishu.MessageSendError{Operation: "chat_members_add", Class: "api_rejected", Code: 99991672}
+	client := pb.NewCommandServiceClient(conn)
+	req := &pb.CreateAgentChatRequest{Provider: "fixture-agent", OperationId: "op", Name: "[Agents] x", MemberOpenIds: []string{"ou_a", "ou_b"}}
+	resp, err := client.CreateAgentChat(context.Background(), req)
+	if err != nil {
+		t.Fatalf("CreateAgentChat: %v", err)
+	}
+	if resp.GetChatAlias() == "" || resp.GetMembersError() != "chat_permission_denied" ||
+		len(resp.GetUnaddedOpenIds()) != 2 {
+		t.Fatalf("resp = %+v", resp)
+	}
+	if _, ok := registry.ByAlias(resp.GetChatAlias()); !ok {
+		t.Fatal("the chat is granted even though its members were not added")
+	}
+	// Once the permission is there, a retry of the same operation adds them
+	// to the same chat.
+	sender.addErr = nil
+	again, err := client.CreateAgentChat(context.Background(), req)
+	if err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	if again.GetChatAlias() != resp.GetChatAlias() || !again.GetDuplicate() ||
+		len(again.GetUnaddedOpenIds()) != 0 || again.GetMembersError() != "" {
+		t.Fatalf("retry = %+v", again)
+	}
+	if len(sender.creates) != 1 {
+		t.Fatalf("creates = %d", len(sender.creates))
 	}
 }

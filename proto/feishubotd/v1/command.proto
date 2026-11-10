@@ -822,7 +822,15 @@ message CreateAgentChatResponse {
   // open_ids Feishu could not add (left the tenant, not visible to the app).
   // The chat exists regardless.
   repeated string invalid_open_ids = 3;
-  reserved 4 to 15;
+  // When adding the members failed as a whole for a reason a retry will not
+  // fix (e.g. the app lacks im:chat.members:write_only), the chat is still
+  // created and granted: these are the members that were not added, and
+  // members_error is botd's error class (e.g. chat_permission_denied). A
+  // transient failure fails the call instead, and a retry with the same
+  // operation_id adds them.
+  repeated string unadded_open_ids = 4;
+  string members_error = 5;
+  reserved 6 to 15;
 }
 
 message InviteAgentChatMembersRequest {
