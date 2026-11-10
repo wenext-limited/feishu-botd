@@ -145,6 +145,9 @@ is supplied.
 | `PostAgentCard` | Posts a proactive CardKit card rendered from typed content (title, state, markdown, checklist, links) under `PostAgentMessage`'s targets and grants. |
 | `UpdateAgentCard` | Replaces the whole content of a card the provider posted with `PostAgentCard`; updates to one card are serialized and a backlog collapses to its newest entry. |
 | `PinAgentMessage` | Pins a message the provider authored to its chat's pin list (`allow_pins`). |
+| `CreateAgentChat` | Creates a group chat with the bot as owner and grants it to the provider at runtime (`allow_create_chats`). |
+| `InviteAgentChatMembers` | Adds members to a chat the provider created. |
+| `RenameAgentChat` | Renames a chat the provider created. |
 
 Inbound Feishu events are dispatched only for an app whose `commands.enabled`
 is true (the existing `FEISHU_BOTD_COMMANDS_ENABLED` override affects the
@@ -593,6 +596,33 @@ target. `UpdateAgentCard` accepts `provider`, a card's `message_ref`,
 maps Feishu's permission refusals (codes 230027, 230046, 230006, 99991672,
 99991679) to `pin_permission_denied`. See
 [Proactive task cards and pins](agent.md#proactive-task-cards-and-pins).
+
+#### Agent group chats
+
+`CreateAgentChat` accepts `provider`, `operation_id`, `name` (240 bytes),
+`description` (1000 bytes), and up to 50 `member_open_ids`, each an `ou_`
+open_id (`invalid_member` otherwise). It returns `chat_alias`
+(`agent-chat-` + 24 hex digits, a one-way digest of the app and chat id),
+`duplicate`, and `invalid_open_ids`. The chat is created in the provider's
+only allowed app, or the default app when it may access several. The grant
+lives in `state_dir/agent-chat-grants.json`:
+
+```json
+{"version": 1, "grants": [{"provider": "commons", "app_alias": "default",
+  "chat_id": "oc_…", "chat_alias": "agent-chat-…", "name": "[Agents] refund-v2",
+  "created_at": "…", "operation_id": "…", "request_digest": "…"}]}
+```
+
+Unlike the route journal it holds the raw chat id in the clear, as
+`channels` in the config file does. A configured channel alias may not start
+with `agent-chat-`. `InviteAgentChatMembers` (`chat_alias`,
+`member_open_ids`) returns `invalid_open_ids`; `RenameAgentChat`
+(`chat_alias`, `name`) returns nothing. Both answer `unknown_chat`
+(`NOT_FOUND`) for any chat the provider did not create. Reusing an
+`operation_id` with a different request is `operation_conflict`; a missing
+Feishu permission (codes 99991672, 99991679, 232025, 232043) is
+`chat_permission_denied`. See
+[Group chats a provider creates](agent.md#group-chats-a-provider-creates).
 
 #### Agent card actions
 Each `AgentResponseAction` carries a provider-defined `action_id`, label,

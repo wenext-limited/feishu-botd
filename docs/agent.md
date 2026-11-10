@@ -103,7 +103,8 @@ openssl rand -base64 32 > /run/secrets/feishu-botd-example-agent-token
       "allow_legacy_commands": false,
       "allow_ambient_messages": false,
       "allow_proactive_messages": false,
-      "allow_pins": false
+      "allow_pins": false,
+      "allow_create_chats": false
     }
   },
   "commands": {
@@ -479,6 +480,56 @@ CardKit allows 1000 card mutations per minute and 50 per second per app, the
 pin API 1000 per minute and 50 per second with at most 5 per second on one
 message. botd serializes each card's updates but does not pace across cards.
 
+## Group chats a provider creates
+
+A provider that keeps one group per unit of work — the Commons Steward makes
+an `[Agents] <feature>` group for each feature's agent traffic — can have botd
+create the group instead of asking an operator to make it by hand and add its
+alias to `channels`, `ambient_chat_aliases`, and `proactive_chat_aliases`:
+
+```json
+"agent_providers": {
+  "commons": {
+    "allow_ambient_messages": true,
+    "allow_proactive_messages": true,
+    "allow_create_chats": true
+  }
+}
+```
+
+`CreateAgentChat` takes `provider`, `operation_id`, a `name`, an optional
+`description`, and up to 50 `member_open_ids` (`ou_…`). botd creates a private
+group chat with the bot as owner, adds the members (one id Feishu cannot add
+does not fail the call: it is returned in `invalid_open_ids`), and returns the
+chat's `chat_alias`, `agent-chat-<digest>`. From then on that chat is the
+provider's as if an operator had configured it: it is in the provider's
+ambient and proactive allowlists, `PostAgentMessage` / `PostAgentCard` accept
+its alias, and @-mentions, replies, and ambient messages there are delivered
+with that alias even when `allow_unconfigured_group_chats` is false. Only the
+creating provider gets the grant. With `allow_create_chats` the static alias
+lists may be empty.
+
+The grant is kept in `state_dir/agent-chat-grants.json` (mode 0600, rewritten
+atomically) with the operation id and a digest of the request, so a retry of
+the same operation — even after a restart — returns the same alias with
+`duplicate = true` and adds the members again; the same id with a different
+name, description, or members is `operation_conflict`. botd also passes
+Feishu a create `uuid` derived from the operation, so an ambiguous first
+attempt retried within Feishu's window finds its chat.
+
+`InviteAgentChatMembers` adds members to a chat the provider created, and
+`RenameAgentChat` renames one (Commons renames an archived feature's group
+`[Archived] <feature>`). Any other alias, including another provider's chat or
+a configured one, is `unknown_chat`.
+
+Feishu needs `im:chat` or the narrower `im:chat:create` to create,
+`im:chat.members:write_only` (or `im:chat`) to add members, and
+`im:chat:update` (or `im:chat`) to rename. A refusal for a missing scope or
+bot ability is non-retryable `chat_permission_denied` (`FAILED_PRECONDITION`).
+To revoke a grant, remove the bot from the chat, or stop botd and delete the
+entry from `agent-chat-grants.json`. See
+[ADR 0001](adr/0001-runtime-chat-grants.md).
+
 ## Lazy attached topic context
 
 An agent that receives a guide-only prompt can call the server-streaming
@@ -847,6 +898,8 @@ degrade to finishing inside the original card.
   rotating an app secret makes all of that app's routes unaddressable.
   The same journal keeps each `PostAgentCard` card's sealed CardKit id and
   sequence, so `UpdateAgentCard` survives a restart.
+  `agent-chat-grants.json` keeps the chats providers created with
+  `CreateAgentChat`, with their operation ids.
   `PostAgentMessage`, `PostAgentCard`, and `UpdateAgentCard` operation
   receipts and ambient deduplication stay in memory like every other operation
   record.

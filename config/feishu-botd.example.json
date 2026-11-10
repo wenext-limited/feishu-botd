@@ -45,7 +45,8 @@
       "ambient_chat_aliases": [],
       "allow_proactive_messages": false,
       "proactive_chat_aliases": [],
-      "allow_pins": false
+      "allow_pins": false,
+      "allow_create_chats": false
     }
   },
   "commands": {

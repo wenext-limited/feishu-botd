@@ -106,7 +106,8 @@ and per-caller defaults. This example keeps the existing top-level app as
       "allow_legacy_commands": false,
       "allow_ambient_messages": false,
       "allow_proactive_messages": false,
-      "allow_pins": false
+      "allow_pins": false,
+      "allow_create_chats": false
     }
   },
   "commands": {
@@ -230,6 +231,12 @@ on a message the provider authored; it defaults to false and requires
 `allow_proactive_messages`. See
 [Ambient observation and proactive posts](docs/agent.md#ambient-observation-and-proactive-posts)
 and [Proactive task cards and pins](docs/agent.md#proactive-task-cards-and-pins).
+`allow_create_chats` permits `CreateAgentChat`, `InviteAgentChatMembers`, and
+`RenameAgentChat`: botd creates a group chat with the bot as owner and grants
+it to the provider at runtime, with no config edit
+([ADR 0001](docs/adr/0001-runtime-chat-grants.md),
+[Group chats a provider creates](docs/agent.md#group-chats-a-provider-creates)).
+It defaults to false and requires both chat grants and `state_dir`.
 `allowed_apps` optionally limits that provider to configured app aliases. When
 the field is absent, all apps are allowed; an explicit empty list allows none,
 and `null` is rejected. botd applies the allowlist before event fan-out and
