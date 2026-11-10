@@ -44,6 +44,10 @@ service CommandService {
   // when a terminal response handle is unavailable for in-place replacement.
   rpc SendAgentFollowUp(SendAgentFollowUpRequest) returns (SendAgentFollowUpResponse);
 
+  // Retain an existing conversation scope for a durable scheduled task.
+  rpc RetainAgentConversation(RetainAgentConversationRequest) returns (RetainAgentConversationResponse);
+  rpc ReleaseAgentConversation(ReleaseAgentConversationRequest) returns (ReleaseAgentConversationResponse);
+
   // AddAgentReaction places one native Feishu reaction, chosen by the
   // provider rather than the daemon, on the message that triggered this
   // response. Gated by its own grant, separate from AllowMessageReactions
@@ -200,7 +204,7 @@ message InboundAgentMessage {
   // message_ref space as AgentResponseReceipt.message_ref. It is a valid
   // PostAgentMessage reply target for this provider when the message's chat
   // is in the provider's proactive_chat_aliases.
-  string message_ref = 6;
+  string message_ref = 11;
   // Opaque identity of the Feishu thread (topic) holding this message; empty
   // when the message is not in a thread.
   string thread_ref = 7;
@@ -219,6 +223,13 @@ message InboundAgentMessage {
   // byte-for-byte (raw mention keys in plain text, "@participant" in rich
   // text) and an empty list.
   repeated InboundMention mentions = 10;
+  // The sender's company email address, for a provider configured with
+  // allow_sender_email and empty for every other provider. Resolved through
+  // the Contact API from the sender's open_id: enterprise_email, or email
+  // when that is empty. Fail-soft: empty when the app lacks the contact
+  // scope, the lookup fails, or the user has no address. It is personal data,
+  // so a provider should use it to act for this person and never log it.
+  string sender_email = 6;
 }
 
 enum InboundAddressing {
@@ -313,6 +324,9 @@ message AgentAttachedContextMessage {
 }
 
 message AgentAttachedContextHeader {
+  // Snapshot-local participant label of the triggering sender; empty if unknown.
+  // No raw sender identity crosses the provider boundary.
+  string requester_label = 5;
   AgentAttachedContextStatus status = 1;
   repeated AgentAttachedContextMessage messages = 2;
   repeated AgentAttachedContextIssue issues = 3;
@@ -624,13 +638,19 @@ message SendAgentFollowUpRequest {
   // Optional native Feishu mention prepended to the first post paragraph.
   // The id is an opaque provider-safe user identity (normally an open_id).
   string mention_user_id = 12;
-  reserved 4 to 9, 13 to 31;
+  // Optional durable task lease. An invalid lease never falls back to ingress scope.
+  string conversation_lease_id = 13;
+  // Strictly increasing per lease for new logical messages; unchanged on retry.
+  uint64 conversation_lease_sequence = 14;
+  reserved 4 to 9, 15 to 31;
 }
 
 message AgentFollowUpReceipt {
   // Opaque delivery handle. Feishu message, thread, and chat ids stay private.
   string follow_up_id = 1;
   bool duplicate = 2;
+  // Opaque authored-message reference for reply-chain correlation.
+  string message_ref = 3;
 }
 
 message SendAgentFollowUpResponse {
@@ -855,3 +875,21 @@ message RegisterProviderRequest {
 message RegisterProviderResponse {
   bool registered = 1;
 }
+
+// Acquisition requires an unexpired ingress scope; renewal requires that same
+// provider's existing unexpired lease. A lease lasts at most seven days.
+message RetainAgentConversationRequest {
+  string provider = 1;
+  string conversation_id = 2;
+  string lease_id = 3;
+  int64 ttl_seconds = 4;
+  // Only task creation sets acquire. Renewal never recreates a missing lease.
+  bool acquire = 5;
+}
+message RetainAgentConversationResponse { int64 expires_at_unix_seconds = 1; }
+message ReleaseAgentConversationRequest {
+  string provider = 1;
+  string conversation_id = 2;
+  string lease_id = 3;
+}
+message ReleaseAgentConversationResponse {}

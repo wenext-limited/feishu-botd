@@ -1166,7 +1166,7 @@ type InboundAgentMessage struct {
 	// message_ref space as AgentResponseReceipt.message_ref. It is a valid
 	// PostAgentMessage reply target for this provider when the message's chat
 	// is in the provider's proactive_chat_aliases.
-	MessageRef string `protobuf:"bytes,6,opt,name=message_ref,json=messageRef,proto3" json:"message_ref,omitempty"`
+	MessageRef string `protobuf:"bytes,11,opt,name=message_ref,json=messageRef,proto3" json:"message_ref,omitempty"`
 	// Opaque identity of the Feishu thread (topic) holding this message; empty
 	// when the message is not in a thread.
 	ThreadRef string `protobuf:"bytes,7,opt,name=thread_ref,json=threadRef,proto3" json:"thread_ref,omitempty"`
@@ -1184,7 +1184,14 @@ type InboundAgentMessage struct {
 	// member of its chats. Every other provider keeps the historical text
 	// byte-for-byte (raw mention keys in plain text, "@participant" in rich
 	// text) and an empty list.
-	Mentions      []*InboundMention `protobuf:"bytes,10,rep,name=mentions,proto3" json:"mentions,omitempty"`
+	Mentions []*InboundMention `protobuf:"bytes,10,rep,name=mentions,proto3" json:"mentions,omitempty"`
+	// The sender's company email address, for a provider configured with
+	// allow_sender_email and empty for every other provider. Resolved through
+	// the Contact API from the sender's open_id: enterprise_email, or email
+	// when that is empty. Fail-soft: empty when the app lacks the contact
+	// scope, the lookup fails, or the user has no address. It is personal data,
+	// so a provider should use it to act for this person and never log it.
+	SenderEmail   string `protobuf:"bytes,6,opt,name=sender_email,json=senderEmail,proto3" json:"sender_email,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1287,6 +1294,13 @@ func (x *InboundAgentMessage) GetMentions() []*InboundMention {
 		return x.Mentions
 	}
 	return nil
+}
+
+func (x *InboundAgentMessage) GetSenderEmail() string {
+	if x != nil {
+		return x.SenderEmail
+	}
+	return ""
 }
 
 type InboundMention struct {
@@ -1670,13 +1684,16 @@ func (x *AgentAttachedContextMessage) GetVideos() []*AgentAttachedContextVideoDe
 }
 
 type AgentAttachedContextHeader struct {
-	state         protoimpl.MessageState         `protogen:"open.v1"`
-	Status        AgentAttachedContextStatus     `protobuf:"varint,1,opt,name=status,proto3,enum=feishubotd.v1.AgentAttachedContextStatus" json:"status,omitempty"`
-	Messages      []*AgentAttachedContextMessage `protobuf:"bytes,2,rep,name=messages,proto3" json:"messages,omitempty"`
-	Issues        []*AgentAttachedContextIssue   `protobuf:"bytes,3,rep,name=issues,proto3" json:"issues,omitempty"`
-	Truncated     bool                           `protobuf:"varint,4,opt,name=truncated,proto3" json:"truncated,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Snapshot-local participant label of the triggering sender; empty if unknown.
+	// No raw sender identity crosses the provider boundary.
+	RequesterLabel string                         `protobuf:"bytes,5,opt,name=requester_label,json=requesterLabel,proto3" json:"requester_label,omitempty"`
+	Status         AgentAttachedContextStatus     `protobuf:"varint,1,opt,name=status,proto3,enum=feishubotd.v1.AgentAttachedContextStatus" json:"status,omitempty"`
+	Messages       []*AgentAttachedContextMessage `protobuf:"bytes,2,rep,name=messages,proto3" json:"messages,omitempty"`
+	Issues         []*AgentAttachedContextIssue   `protobuf:"bytes,3,rep,name=issues,proto3" json:"issues,omitempty"`
+	Truncated      bool                           `protobuf:"varint,4,opt,name=truncated,proto3" json:"truncated,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *AgentAttachedContextHeader) Reset() {
@@ -1707,6 +1724,13 @@ func (x *AgentAttachedContextHeader) ProtoReflect() protoreflect.Message {
 // Deprecated: Use AgentAttachedContextHeader.ProtoReflect.Descriptor instead.
 func (*AgentAttachedContextHeader) Descriptor() ([]byte, []int) {
 	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *AgentAttachedContextHeader) GetRequesterLabel() string {
+	if x != nil {
+		return x.RequesterLabel
+	}
+	return ""
 }
 
 func (x *AgentAttachedContextHeader) GetStatus() AgentAttachedContextStatus {
@@ -3314,8 +3338,12 @@ type SendAgentFollowUpRequest struct {
 	// Optional native Feishu mention prepended to the first post paragraph.
 	// The id is an opaque provider-safe user identity (normally an open_id).
 	MentionUserId string `protobuf:"bytes,12,opt,name=mention_user_id,json=mentionUserId,proto3" json:"mention_user_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// Optional durable task lease. An invalid lease never falls back to ingress scope.
+	ConversationLeaseId string `protobuf:"bytes,13,opt,name=conversation_lease_id,json=conversationLeaseId,proto3" json:"conversation_lease_id,omitempty"`
+	// Strictly increasing per lease for new logical messages; unchanged on retry.
+	ConversationLeaseSequence uint64 `protobuf:"varint,14,opt,name=conversation_lease_sequence,json=conversationLeaseSequence,proto3" json:"conversation_lease_sequence,omitempty"`
+	unknownFields             protoimpl.UnknownFields
+	sizeCache                 protoimpl.SizeCache
 }
 
 func (x *SendAgentFollowUpRequest) Reset() {
@@ -3390,11 +3418,27 @@ func (x *SendAgentFollowUpRequest) GetMentionUserId() string {
 	return ""
 }
 
+func (x *SendAgentFollowUpRequest) GetConversationLeaseId() string {
+	if x != nil {
+		return x.ConversationLeaseId
+	}
+	return ""
+}
+
+func (x *SendAgentFollowUpRequest) GetConversationLeaseSequence() uint64 {
+	if x != nil {
+		return x.ConversationLeaseSequence
+	}
+	return 0
+}
+
 type AgentFollowUpReceipt struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Opaque delivery handle. Feishu message, thread, and chat ids stay private.
-	FollowUpId    string `protobuf:"bytes,1,opt,name=follow_up_id,json=followUpId,proto3" json:"follow_up_id,omitempty"`
-	Duplicate     bool   `protobuf:"varint,2,opt,name=duplicate,proto3" json:"duplicate,omitempty"`
+	FollowUpId string `protobuf:"bytes,1,opt,name=follow_up_id,json=followUpId,proto3" json:"follow_up_id,omitempty"`
+	Duplicate  bool   `protobuf:"varint,2,opt,name=duplicate,proto3" json:"duplicate,omitempty"`
+	// Opaque authored-message reference for reply-chain correlation.
+	MessageRef    string `protobuf:"bytes,3,opt,name=message_ref,json=messageRef,proto3" json:"message_ref,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3441,6 +3485,13 @@ func (x *AgentFollowUpReceipt) GetDuplicate() bool {
 		return x.Duplicate
 	}
 	return false
+}
+
+func (x *AgentFollowUpReceipt) GetMessageRef() string {
+	if x != nil {
+		return x.MessageRef
+	}
+	return ""
 }
 
 type SendAgentFollowUpResponse struct {
@@ -4858,6 +4909,225 @@ func (x *RegisterProviderResponse) GetRegistered() bool {
 	return false
 }
 
+// Acquisition requires an unexpired ingress scope; renewal requires that same
+// provider's existing unexpired lease. A lease lasts at most seven days.
+type RetainAgentConversationRequest struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Provider       string                 `protobuf:"bytes,1,opt,name=provider,proto3" json:"provider,omitempty"`
+	ConversationId string                 `protobuf:"bytes,2,opt,name=conversation_id,json=conversationId,proto3" json:"conversation_id,omitempty"`
+	LeaseId        string                 `protobuf:"bytes,3,opt,name=lease_id,json=leaseId,proto3" json:"lease_id,omitempty"`
+	TtlSeconds     int64                  `protobuf:"varint,4,opt,name=ttl_seconds,json=ttlSeconds,proto3" json:"ttl_seconds,omitempty"`
+	// Only task creation sets acquire. Renewal never recreates a missing lease.
+	Acquire       bool `protobuf:"varint,5,opt,name=acquire,proto3" json:"acquire,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RetainAgentConversationRequest) Reset() {
+	*x = RetainAgentConversationRequest{}
+	mi := &file_feishubotd_v1_command_proto_msgTypes[61]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RetainAgentConversationRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RetainAgentConversationRequest) ProtoMessage() {}
+
+func (x *RetainAgentConversationRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_feishubotd_v1_command_proto_msgTypes[61]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RetainAgentConversationRequest.ProtoReflect.Descriptor instead.
+func (*RetainAgentConversationRequest) Descriptor() ([]byte, []int) {
+	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{61}
+}
+
+func (x *RetainAgentConversationRequest) GetProvider() string {
+	if x != nil {
+		return x.Provider
+	}
+	return ""
+}
+
+func (x *RetainAgentConversationRequest) GetConversationId() string {
+	if x != nil {
+		return x.ConversationId
+	}
+	return ""
+}
+
+func (x *RetainAgentConversationRequest) GetLeaseId() string {
+	if x != nil {
+		return x.LeaseId
+	}
+	return ""
+}
+
+func (x *RetainAgentConversationRequest) GetTtlSeconds() int64 {
+	if x != nil {
+		return x.TtlSeconds
+	}
+	return 0
+}
+
+func (x *RetainAgentConversationRequest) GetAcquire() bool {
+	if x != nil {
+		return x.Acquire
+	}
+	return false
+}
+
+type RetainAgentConversationResponse struct {
+	state                protoimpl.MessageState `protogen:"open.v1"`
+	ExpiresAtUnixSeconds int64                  `protobuf:"varint,1,opt,name=expires_at_unix_seconds,json=expiresAtUnixSeconds,proto3" json:"expires_at_unix_seconds,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
+}
+
+func (x *RetainAgentConversationResponse) Reset() {
+	*x = RetainAgentConversationResponse{}
+	mi := &file_feishubotd_v1_command_proto_msgTypes[62]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RetainAgentConversationResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RetainAgentConversationResponse) ProtoMessage() {}
+
+func (x *RetainAgentConversationResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_feishubotd_v1_command_proto_msgTypes[62]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RetainAgentConversationResponse.ProtoReflect.Descriptor instead.
+func (*RetainAgentConversationResponse) Descriptor() ([]byte, []int) {
+	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{62}
+}
+
+func (x *RetainAgentConversationResponse) GetExpiresAtUnixSeconds() int64 {
+	if x != nil {
+		return x.ExpiresAtUnixSeconds
+	}
+	return 0
+}
+
+type ReleaseAgentConversationRequest struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Provider       string                 `protobuf:"bytes,1,opt,name=provider,proto3" json:"provider,omitempty"`
+	ConversationId string                 `protobuf:"bytes,2,opt,name=conversation_id,json=conversationId,proto3" json:"conversation_id,omitempty"`
+	LeaseId        string                 `protobuf:"bytes,3,opt,name=lease_id,json=leaseId,proto3" json:"lease_id,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *ReleaseAgentConversationRequest) Reset() {
+	*x = ReleaseAgentConversationRequest{}
+	mi := &file_feishubotd_v1_command_proto_msgTypes[63]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReleaseAgentConversationRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReleaseAgentConversationRequest) ProtoMessage() {}
+
+func (x *ReleaseAgentConversationRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_feishubotd_v1_command_proto_msgTypes[63]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReleaseAgentConversationRequest.ProtoReflect.Descriptor instead.
+func (*ReleaseAgentConversationRequest) Descriptor() ([]byte, []int) {
+	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{63}
+}
+
+func (x *ReleaseAgentConversationRequest) GetProvider() string {
+	if x != nil {
+		return x.Provider
+	}
+	return ""
+}
+
+func (x *ReleaseAgentConversationRequest) GetConversationId() string {
+	if x != nil {
+		return x.ConversationId
+	}
+	return ""
+}
+
+func (x *ReleaseAgentConversationRequest) GetLeaseId() string {
+	if x != nil {
+		return x.LeaseId
+	}
+	return ""
+}
+
+type ReleaseAgentConversationResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReleaseAgentConversationResponse) Reset() {
+	*x = ReleaseAgentConversationResponse{}
+	mi := &file_feishubotd_v1_command_proto_msgTypes[64]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReleaseAgentConversationResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReleaseAgentConversationResponse) ProtoMessage() {}
+
+func (x *ReleaseAgentConversationResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_feishubotd_v1_command_proto_msgTypes[64]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReleaseAgentConversationResponse.ProtoReflect.Descriptor instead.
+func (*ReleaseAgentConversationResponse) Descriptor() ([]byte, []int) {
+	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{64}
+}
+
 var File_feishubotd_v1_command_proto protoreflect.FileDescriptor
 
 const file_feishubotd_v1_command_proto_rawDesc = "" +
@@ -4916,14 +5186,14 @@ const file_feishubotd_v1_command_proto_rawDesc = "" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B\t\n" +
 	"\apayloadJ\x04\b\x06\x10\n" +
-	"J\x04\b\r\x10 \"\xba\x03\n" +
+	"J\x04\b\r\x10 \"\xdd\x03\n" +
 	"\x13InboundAgentMessage\x12\x12\n" +
 	"\x04text\x18\x01 \x01(\tR\x04text\x12\x18\n" +
 	"\acommand\x18\x02 \x01(\tR\acommand\x12!\n" +
 	"\fcommand_text\x18\x03 \x01(\tR\vcommandText\x12/\n" +
 	"\x14reply_to_message_ref\x18\x04 \x01(\tR\x11replyToMessageRef\x12-\n" +
 	"\x12conversation_title\x18\x05 \x01(\tR\x11conversationTitle\x12\x1f\n" +
-	"\vmessage_ref\x18\x06 \x01(\tR\n" +
+	"\vmessage_ref\x18\v \x01(\tR\n" +
 	"messageRef\x12\x1d\n" +
 	"\n" +
 	"thread_ref\x18\a \x01(\tR\tthreadRef\x125\n" +
@@ -4932,7 +5202,8 @@ const file_feishubotd_v1_command_proto_rawDesc = "" +
 	"addressing\x18\t \x01(\x0e2 .feishubotd.v1.InboundAddressingR\n" +
 	"addressing\x129\n" +
 	"\bmentions\x18\n" +
-	" \x03(\v2\x1d.feishubotd.v1.InboundMentionR\bmentions\"=\n" +
+	" \x03(\v2\x1d.feishubotd.v1.InboundMentionR\bmentions\x12!\n" +
+	"\fsender_email\x18\x06 \x01(\tR\vsenderEmail\"=\n" +
 	"\x0eInboundMention\x12\x17\n" +
 	"\auser_id\x18\x01 \x01(\tR\x06userId\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\"c\n" +
@@ -4964,8 +5235,9 @@ const file_feishubotd_v1_command_proto_rawDesc = "" +
 	"authorType\x12\x12\n" +
 	"\x04text\x18\x03 \x01(\tR\x04text\x12J\n" +
 	"\x06images\x18\x04 \x03(\v22.feishubotd.v1.AgentAttachedContextImageDescriptorR\x06images\x12J\n" +
-	"\x06videos\x18\x05 \x03(\v22.feishubotd.v1.AgentAttachedContextVideoDescriptorR\x06videos\"\x87\x02\n" +
-	"\x1aAgentAttachedContextHeader\x12A\n" +
+	"\x06videos\x18\x05 \x03(\v22.feishubotd.v1.AgentAttachedContextVideoDescriptorR\x06videos\"\xb0\x02\n" +
+	"\x1aAgentAttachedContextHeader\x12'\n" +
+	"\x0frequester_label\x18\x05 \x01(\tR\x0erequesterLabel\x12A\n" +
 	"\x06status\x18\x01 \x01(\x0e2).feishubotd.v1.AgentAttachedContextStatusR\x06status\x12F\n" +
 	"\bmessages\x18\x02 \x03(\v2*.feishubotd.v1.AgentAttachedContextMessageR\bmessages\x12@\n" +
 	"\x06issues\x18\x03 \x03(\v2(.feishubotd.v1.AgentAttachedContextIssueR\x06issues\x12\x1c\n" +
@@ -5094,7 +5366,7 @@ const file_feishubotd_v1_command_proto_rawDesc = "" +
 	"\x0etimeline_title\x18! \x01(\tR\rtimelineTitleJ\x04\b\x05\x10\n" +
 	"J\x04\b\f\x10 \"_\n" +
 	"\x1cReplaceAgentResponseResponse\x12?\n" +
-	"\bresponse\x18\x01 \x01(\v2#.feishubotd.v1.AgentResponseReceiptR\bresponse\"\xec\x01\n" +
+	"\bresponse\x18\x01 \x01(\v2#.feishubotd.v1.AgentResponseReceiptR\bresponse\"\xe0\x02\n" +
 	"\x18SendAgentFollowUpRequest\x12\x1a\n" +
 	"\bprovider\x18\x01 \x01(\tR\bprovider\x12'\n" +
 	"\x0fconversation_id\x18\x02 \x01(\tR\x0econversationId\x12!\n" +
@@ -5102,12 +5374,16 @@ const file_feishubotd_v1_command_proto_rawDesc = "" +
 	"\bmarkdown\x18\n" +
 	" \x01(\tR\bmarkdown\x12\x18\n" +
 	"\asummary\x18\v \x01(\tR\asummary\x12&\n" +
-	"\x0fmention_user_id\x18\f \x01(\tR\rmentionUserIdJ\x04\b\x04\x10\n" +
-	"J\x04\b\r\x10 \"V\n" +
+	"\x0fmention_user_id\x18\f \x01(\tR\rmentionUserId\x122\n" +
+	"\x15conversation_lease_id\x18\r \x01(\tR\x13conversationLeaseId\x12>\n" +
+	"\x1bconversation_lease_sequence\x18\x0e \x01(\x04R\x19conversationLeaseSequenceJ\x04\b\x04\x10\n" +
+	"J\x04\b\x0f\x10 \"w\n" +
 	"\x14AgentFollowUpReceipt\x12 \n" +
 	"\ffollow_up_id\x18\x01 \x01(\tR\n" +
 	"followUpId\x12\x1c\n" +
-	"\tduplicate\x18\x02 \x01(\bR\tduplicate\"]\n" +
+	"\tduplicate\x18\x02 \x01(\bR\tduplicate\x12\x1f\n" +
+	"\vmessage_ref\x18\x03 \x01(\tR\n" +
+	"messageRef\"]\n" +
 	"\x19SendAgentFollowUpResponse\x12@\n" +
 	"\tfollow_up\x18\x01 \x01(\v2#.feishubotd.v1.AgentFollowUpReceiptR\bfollowUp\"\xc8\x02\n" +
 	"\x17PostAgentMessageRequest\x12\x1a\n" +
@@ -5218,7 +5494,21 @@ const file_feishubotd_v1_command_proto_rawDesc = "" +
 	"\x18RegisterProviderResponse\x12\x1e\n" +
 	"\n" +
 	"registered\x18\x01 \x01(\bR\n" +
-	"registered*\xb4\x01\n" +
+	"registered\"\xbb\x01\n" +
+	"\x1eRetainAgentConversationRequest\x12\x1a\n" +
+	"\bprovider\x18\x01 \x01(\tR\bprovider\x12'\n" +
+	"\x0fconversation_id\x18\x02 \x01(\tR\x0econversationId\x12\x19\n" +
+	"\blease_id\x18\x03 \x01(\tR\aleaseId\x12\x1f\n" +
+	"\vttl_seconds\x18\x04 \x01(\x03R\n" +
+	"ttlSeconds\x12\x18\n" +
+	"\aacquire\x18\x05 \x01(\bR\aacquire\"X\n" +
+	"\x1fRetainAgentConversationResponse\x125\n" +
+	"\x17expires_at_unix_seconds\x18\x01 \x01(\x03R\x14expiresAtUnixSeconds\"\x81\x01\n" +
+	"\x1fReleaseAgentConversationRequest\x12\x1a\n" +
+	"\bprovider\x18\x01 \x01(\tR\bprovider\x12'\n" +
+	"\x0fconversation_id\x18\x02 \x01(\tR\x0econversationId\x12\x19\n" +
+	"\blease_id\x18\x03 \x01(\tR\aleaseId\"\"\n" +
+	" ReleaseAgentConversationResponse*\xb4\x01\n" +
 	"\x11InboundAddressing\x12\"\n" +
 	"\x1eINBOUND_ADDRESSING_UNSPECIFIED\x10\x00\x12\x1d\n" +
 	"\x19INBOUND_ADDRESSING_DIRECT\x10\x01\x12\x1e\n" +
@@ -5281,7 +5571,7 @@ const file_feishubotd_v1_command_proto_rawDesc = "" +
 	"\x1bAGENT_CARD_STATE_PROCESSING\x10\x01\x12\x1b\n" +
 	"\x17AGENT_CARD_STATE_ACTIVE\x10\x02\x12\x1e\n" +
 	"\x1aAGENT_CARD_STATE_SUSPENDED\x10\x03\x12\x1d\n" +
-	"\x19AGENT_CARD_STATE_ARCHIVED\x10\x042\xc7\x0e\n" +
+	"\x19AGENT_CARD_STATE_ARCHIVED\x10\x042\xbe\x10\n" +
 	"\x0eCommandService\x12P\n" +
 	"\tSubscribe\x12\x1f.feishubotd.v1.SubscribeRequest\x1a .feishubotd.v1.SubscribeResponse0\x01\x12H\n" +
 	"\aRespond\x12\x1d.feishubotd.v1.RespondRequest\x1a\x1e.feishubotd.v1.RespondResponse\x12q\n" +
@@ -5292,7 +5582,9 @@ const file_feishubotd_v1_command_proto_rawDesc = "" +
 	"\x13FinishAgentResponse\x12).feishubotd.v1.FinishAgentResponseRequest\x1a*.feishubotd.v1.FinishAgentResponseResponse\x12o\n" +
 	"\x14ReplaceAgentResponse\x12*.feishubotd.v1.ReplaceAgentResponseRequest\x1a+.feishubotd.v1.ReplaceAgentResponseResponse\x12e\n" +
 	"\x10UploadAgentImage\x12&.feishubotd.v1.UploadAgentImageRequest\x1a'.feishubotd.v1.UploadAgentImageResponse(\x01\x12f\n" +
-	"\x11SendAgentFollowUp\x12'.feishubotd.v1.SendAgentFollowUpRequest\x1a(.feishubotd.v1.SendAgentFollowUpResponse\x12c\n" +
+	"\x11SendAgentFollowUp\x12'.feishubotd.v1.SendAgentFollowUpRequest\x1a(.feishubotd.v1.SendAgentFollowUpResponse\x12x\n" +
+	"\x17RetainAgentConversation\x12-.feishubotd.v1.RetainAgentConversationRequest\x1a..feishubotd.v1.RetainAgentConversationResponse\x12{\n" +
+	"\x18ReleaseAgentConversation\x12..feishubotd.v1.ReleaseAgentConversationRequest\x1a/.feishubotd.v1.ReleaseAgentConversationResponse\x12c\n" +
 	"\x10AddAgentReaction\x12&.feishubotd.v1.AddAgentReactionRequest\x1a'.feishubotd.v1.AddAgentReactionResponse\x12c\n" +
 	"\x10PostAgentMessage\x12&.feishubotd.v1.PostAgentMessageRequest\x1a'.feishubotd.v1.PostAgentMessageResponse\x12Z\n" +
 	"\rPostAgentCard\x12#.feishubotd.v1.PostAgentCardRequest\x1a$.feishubotd.v1.PostAgentCardResponse\x12`\n" +
@@ -5317,7 +5609,7 @@ func file_feishubotd_v1_command_proto_rawDescGZIP() []byte {
 }
 
 var file_feishubotd_v1_command_proto_enumTypes = make([]protoimpl.EnumInfo, 9)
-var file_feishubotd_v1_command_proto_msgTypes = make([]protoimpl.MessageInfo, 63)
+var file_feishubotd_v1_command_proto_msgTypes = make([]protoimpl.MessageInfo, 67)
 var file_feishubotd_v1_command_proto_goTypes = []any{
 	(InboundAddressing)(0),                      // 0: feishubotd.v1.InboundAddressing
 	(AgentAttachedContextStatus)(0),             // 1: feishubotd.v1.AgentAttachedContextStatus
@@ -5389,18 +5681,22 @@ var file_feishubotd_v1_command_proto_goTypes = []any{
 	(*AddAgentReactionResponse)(nil),            // 67: feishubotd.v1.AddAgentReactionResponse
 	(*RegisterProviderRequest)(nil),             // 68: feishubotd.v1.RegisterProviderRequest
 	(*RegisterProviderResponse)(nil),            // 69: feishubotd.v1.RegisterProviderResponse
-	nil,                                         // 70: feishubotd.v1.InboundCommand.MetadataEntry
-	nil,                                         // 71: feishubotd.v1.InboundAgentEvent.MetadataEntry
-	(*MarkdownContent)(nil),                     // 72: feishubotd.v1.MarkdownContent
-	(*CardContent)(nil),                         // 73: feishubotd.v1.CardContent
+	(*RetainAgentConversationRequest)(nil),      // 70: feishubotd.v1.RetainAgentConversationRequest
+	(*RetainAgentConversationResponse)(nil),     // 71: feishubotd.v1.RetainAgentConversationResponse
+	(*ReleaseAgentConversationRequest)(nil),     // 72: feishubotd.v1.ReleaseAgentConversationRequest
+	(*ReleaseAgentConversationResponse)(nil),    // 73: feishubotd.v1.ReleaseAgentConversationResponse
+	nil,                                         // 74: feishubotd.v1.InboundCommand.MetadataEntry
+	nil,                                         // 75: feishubotd.v1.InboundAgentEvent.MetadataEntry
+	(*MarkdownContent)(nil),                     // 76: feishubotd.v1.MarkdownContent
+	(*CardContent)(nil),                         // 77: feishubotd.v1.CardContent
 }
 var file_feishubotd_v1_command_proto_depIdxs = []int32{
 	11, // 0: feishubotd.v1.SubscribeResponse.command:type_name -> feishubotd.v1.InboundCommand
-	70, // 1: feishubotd.v1.InboundCommand.metadata:type_name -> feishubotd.v1.InboundCommand.MetadataEntry
-	72, // 2: feishubotd.v1.RespondRequest.markdown:type_name -> feishubotd.v1.MarkdownContent
-	73, // 3: feishubotd.v1.RespondRequest.card:type_name -> feishubotd.v1.CardContent
+	74, // 1: feishubotd.v1.InboundCommand.metadata:type_name -> feishubotd.v1.InboundCommand.MetadataEntry
+	76, // 2: feishubotd.v1.RespondRequest.markdown:type_name -> feishubotd.v1.MarkdownContent
+	77, // 3: feishubotd.v1.RespondRequest.card:type_name -> feishubotd.v1.CardContent
 	16, // 4: feishubotd.v1.SubscribeAgentEventsResponse.event:type_name -> feishubotd.v1.InboundAgentEvent
-	71, // 5: feishubotd.v1.InboundAgentEvent.metadata:type_name -> feishubotd.v1.InboundAgentEvent.MetadataEntry
+	75, // 5: feishubotd.v1.InboundAgentEvent.metadata:type_name -> feishubotd.v1.InboundAgentEvent.MetadataEntry
 	17, // 6: feishubotd.v1.InboundAgentEvent.message:type_name -> feishubotd.v1.InboundAgentMessage
 	32, // 7: feishubotd.v1.InboundAgentEvent.card_action:type_name -> feishubotd.v1.InboundCardAction
 	33, // 8: feishubotd.v1.InboundAgentEvent.message_reaction:type_name -> feishubotd.v1.InboundMessageReaction
@@ -5447,36 +5743,40 @@ var file_feishubotd_v1_command_proto_depIdxs = []int32{
 	44, // 49: feishubotd.v1.CommandService.ReplaceAgentResponse:input_type -> feishubotd.v1.ReplaceAgentResponseRequest
 	30, // 50: feishubotd.v1.CommandService.UploadAgentImage:input_type -> feishubotd.v1.UploadAgentImageRequest
 	46, // 51: feishubotd.v1.CommandService.SendAgentFollowUp:input_type -> feishubotd.v1.SendAgentFollowUpRequest
-	66, // 52: feishubotd.v1.CommandService.AddAgentReaction:input_type -> feishubotd.v1.AddAgentReactionRequest
-	49, // 53: feishubotd.v1.CommandService.PostAgentMessage:input_type -> feishubotd.v1.PostAgentMessageRequest
-	54, // 54: feishubotd.v1.CommandService.PostAgentCard:input_type -> feishubotd.v1.PostAgentCardRequest
-	56, // 55: feishubotd.v1.CommandService.UpdateAgentCard:input_type -> feishubotd.v1.UpdateAgentCardRequest
-	58, // 56: feishubotd.v1.CommandService.PinAgentMessage:input_type -> feishubotd.v1.PinAgentMessageRequest
-	60, // 57: feishubotd.v1.CommandService.CreateAgentChat:input_type -> feishubotd.v1.CreateAgentChatRequest
-	62, // 58: feishubotd.v1.CommandService.InviteAgentChatMembers:input_type -> feishubotd.v1.InviteAgentChatMembersRequest
-	64, // 59: feishubotd.v1.CommandService.RenameAgentChat:input_type -> feishubotd.v1.RenameAgentChatRequest
-	68, // 60: feishubotd.v1.ProviderService.RegisterProvider:input_type -> feishubotd.v1.RegisterProviderRequest
-	10, // 61: feishubotd.v1.CommandService.Subscribe:output_type -> feishubotd.v1.SubscribeResponse
-	13, // 62: feishubotd.v1.CommandService.Respond:output_type -> feishubotd.v1.RespondResponse
-	15, // 63: feishubotd.v1.CommandService.SubscribeAgentEvents:output_type -> feishubotd.v1.SubscribeAgentEventsResponse
-	27, // 64: feishubotd.v1.CommandService.GetAgentAttachedContext:output_type -> feishubotd.v1.GetAgentAttachedContextResponse
-	41, // 65: feishubotd.v1.CommandService.StartAgentResponse:output_type -> feishubotd.v1.StartAgentResponseResponse
-	42, // 66: feishubotd.v1.CommandService.UpdateAgentResponse:output_type -> feishubotd.v1.UpdateAgentResponseResponse
-	43, // 67: feishubotd.v1.CommandService.FinishAgentResponse:output_type -> feishubotd.v1.FinishAgentResponseResponse
-	45, // 68: feishubotd.v1.CommandService.ReplaceAgentResponse:output_type -> feishubotd.v1.ReplaceAgentResponseResponse
-	31, // 69: feishubotd.v1.CommandService.UploadAgentImage:output_type -> feishubotd.v1.UploadAgentImageResponse
-	48, // 70: feishubotd.v1.CommandService.SendAgentFollowUp:output_type -> feishubotd.v1.SendAgentFollowUpResponse
-	67, // 71: feishubotd.v1.CommandService.AddAgentReaction:output_type -> feishubotd.v1.AddAgentReactionResponse
-	50, // 72: feishubotd.v1.CommandService.PostAgentMessage:output_type -> feishubotd.v1.PostAgentMessageResponse
-	55, // 73: feishubotd.v1.CommandService.PostAgentCard:output_type -> feishubotd.v1.PostAgentCardResponse
-	57, // 74: feishubotd.v1.CommandService.UpdateAgentCard:output_type -> feishubotd.v1.UpdateAgentCardResponse
-	59, // 75: feishubotd.v1.CommandService.PinAgentMessage:output_type -> feishubotd.v1.PinAgentMessageResponse
-	61, // 76: feishubotd.v1.CommandService.CreateAgentChat:output_type -> feishubotd.v1.CreateAgentChatResponse
-	63, // 77: feishubotd.v1.CommandService.InviteAgentChatMembers:output_type -> feishubotd.v1.InviteAgentChatMembersResponse
-	65, // 78: feishubotd.v1.CommandService.RenameAgentChat:output_type -> feishubotd.v1.RenameAgentChatResponse
-	69, // 79: feishubotd.v1.ProviderService.RegisterProvider:output_type -> feishubotd.v1.RegisterProviderResponse
-	61, // [61:80] is the sub-list for method output_type
-	42, // [42:61] is the sub-list for method input_type
+	70, // 52: feishubotd.v1.CommandService.RetainAgentConversation:input_type -> feishubotd.v1.RetainAgentConversationRequest
+	72, // 53: feishubotd.v1.CommandService.ReleaseAgentConversation:input_type -> feishubotd.v1.ReleaseAgentConversationRequest
+	66, // 54: feishubotd.v1.CommandService.AddAgentReaction:input_type -> feishubotd.v1.AddAgentReactionRequest
+	49, // 55: feishubotd.v1.CommandService.PostAgentMessage:input_type -> feishubotd.v1.PostAgentMessageRequest
+	54, // 56: feishubotd.v1.CommandService.PostAgentCard:input_type -> feishubotd.v1.PostAgentCardRequest
+	56, // 57: feishubotd.v1.CommandService.UpdateAgentCard:input_type -> feishubotd.v1.UpdateAgentCardRequest
+	58, // 58: feishubotd.v1.CommandService.PinAgentMessage:input_type -> feishubotd.v1.PinAgentMessageRequest
+	60, // 59: feishubotd.v1.CommandService.CreateAgentChat:input_type -> feishubotd.v1.CreateAgentChatRequest
+	62, // 60: feishubotd.v1.CommandService.InviteAgentChatMembers:input_type -> feishubotd.v1.InviteAgentChatMembersRequest
+	64, // 61: feishubotd.v1.CommandService.RenameAgentChat:input_type -> feishubotd.v1.RenameAgentChatRequest
+	68, // 62: feishubotd.v1.ProviderService.RegisterProvider:input_type -> feishubotd.v1.RegisterProviderRequest
+	10, // 63: feishubotd.v1.CommandService.Subscribe:output_type -> feishubotd.v1.SubscribeResponse
+	13, // 64: feishubotd.v1.CommandService.Respond:output_type -> feishubotd.v1.RespondResponse
+	15, // 65: feishubotd.v1.CommandService.SubscribeAgentEvents:output_type -> feishubotd.v1.SubscribeAgentEventsResponse
+	27, // 66: feishubotd.v1.CommandService.GetAgentAttachedContext:output_type -> feishubotd.v1.GetAgentAttachedContextResponse
+	41, // 67: feishubotd.v1.CommandService.StartAgentResponse:output_type -> feishubotd.v1.StartAgentResponseResponse
+	42, // 68: feishubotd.v1.CommandService.UpdateAgentResponse:output_type -> feishubotd.v1.UpdateAgentResponseResponse
+	43, // 69: feishubotd.v1.CommandService.FinishAgentResponse:output_type -> feishubotd.v1.FinishAgentResponseResponse
+	45, // 70: feishubotd.v1.CommandService.ReplaceAgentResponse:output_type -> feishubotd.v1.ReplaceAgentResponseResponse
+	31, // 71: feishubotd.v1.CommandService.UploadAgentImage:output_type -> feishubotd.v1.UploadAgentImageResponse
+	48, // 72: feishubotd.v1.CommandService.SendAgentFollowUp:output_type -> feishubotd.v1.SendAgentFollowUpResponse
+	71, // 73: feishubotd.v1.CommandService.RetainAgentConversation:output_type -> feishubotd.v1.RetainAgentConversationResponse
+	73, // 74: feishubotd.v1.CommandService.ReleaseAgentConversation:output_type -> feishubotd.v1.ReleaseAgentConversationResponse
+	67, // 75: feishubotd.v1.CommandService.AddAgentReaction:output_type -> feishubotd.v1.AddAgentReactionResponse
+	50, // 76: feishubotd.v1.CommandService.PostAgentMessage:output_type -> feishubotd.v1.PostAgentMessageResponse
+	55, // 77: feishubotd.v1.CommandService.PostAgentCard:output_type -> feishubotd.v1.PostAgentCardResponse
+	57, // 78: feishubotd.v1.CommandService.UpdateAgentCard:output_type -> feishubotd.v1.UpdateAgentCardResponse
+	59, // 79: feishubotd.v1.CommandService.PinAgentMessage:output_type -> feishubotd.v1.PinAgentMessageResponse
+	61, // 80: feishubotd.v1.CommandService.CreateAgentChat:output_type -> feishubotd.v1.CreateAgentChatResponse
+	63, // 81: feishubotd.v1.CommandService.InviteAgentChatMembers:output_type -> feishubotd.v1.InviteAgentChatMembersResponse
+	65, // 82: feishubotd.v1.CommandService.RenameAgentChat:output_type -> feishubotd.v1.RenameAgentChatResponse
+	69, // 83: feishubotd.v1.ProviderService.RegisterProvider:output_type -> feishubotd.v1.RegisterProviderResponse
+	63, // [63:84] is the sub-list for method output_type
+	42, // [42:63] is the sub-list for method input_type
 	42, // [42:42] is the sub-list for extension type_name
 	42, // [42:42] is the sub-list for extension extendee
 	0,  // [0:42] is the sub-list for field type_name
@@ -5520,7 +5820,7 @@ func file_feishubotd_v1_command_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_feishubotd_v1_command_proto_rawDesc), len(file_feishubotd_v1_command_proto_rawDesc)),
 			NumEnums:      9,
-			NumMessages:   63,
+			NumMessages:   67,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

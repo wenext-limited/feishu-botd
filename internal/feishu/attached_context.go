@@ -123,10 +123,12 @@ type AttachedContextMessage struct {
 }
 
 type AttachedContext struct {
-	Status    AttachedContextStatus
-	Messages  []AttachedContextMessage
-	Issues    []AttachedContextIssue
-	Truncated bool
+	// Snapshot-local label only, established by exact triggering sender identity.
+	RequesterLabel string
+	Status         AttachedContextStatus
+	Messages       []AttachedContextMessage
+	Issues         []AttachedContextIssue
+	Truncated      bool
 }
 
 // AttachedContextRequest contains daemon-private Feishu identities captured on
@@ -350,6 +352,17 @@ func (s *sdkAttachedContextLookup) assemble(
 		})
 	}
 
+	// The guide text may be omitted, so identify its sender from candidates,
+	// not from the rendered messages or their order.
+	for _, candidate := range candidates {
+		if candidate.isTrigger {
+			key, kind := attachedContextAuthor(candidate.message)
+			if key != "" && kind == "user" {
+				result.RequesterLabel = participants[key]
+			}
+			break
+		}
+	}
 	if len(result.Messages) > 0 {
 		result.Status = AttachedContextFound
 	} else if unreadableContent {

@@ -1274,3 +1274,71 @@ func TestLoadFromEnvScriptsValidConfigSucceeds(t *testing.T) {
 		t.Fatalf("default timeout = %d, want 120", cfg.Commands.Scripts.TimeoutSeconds)
 	}
 }
+
+func TestLoadFromConfigFileConversationLeaseRequiresStateAndFollowUp(t *testing.T) {
+	for _, testCase := range []struct {
+		name       string
+		entry      string
+		stateEntry string
+		want       bool
+		wantError  string
+	}{
+		{name: "omitted defaults to off"},
+		{
+			name:      "enabled without state is rejected",
+			entry:     `,"allow_conversation_leases":true,"allow_follow_up_messages":true`,
+			want:      true,
+			wantError: "state_dir",
+		},
+		{name: "requires follow-up grant", entry: `,"allow_conversation_leases":true`, stateEntry: `,"state_dir":"/var/lib/feishu-botd"`, wantError: "allow_follow_up_messages"},
+		{
+			name:       "enabled with durable state",
+			entry:      `,"allow_conversation_leases":true,"allow_follow_up_messages":true`,
+			stateEntry: `,"state_dir":"/var/lib/feishu-botd"`,
+			want:       true,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			clearConfigEnv(t)
+			dir := t.TempDir()
+			tokenPath := filepath.Join(dir, "agent-token")
+			const token = "fixture-agent-token-0123456789abcdef0123456789"
+			if err := os.WriteFile(tokenPath, []byte(token+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			configPath := filepath.Join(dir, "feishu-botd.json")
+			configJSON := `{
+  "feishu": {"app_id":"app_fixture","app_secret":"secret_fixture"},
+  "listeners": {"grpc_socket":"/tmp/feishu-botd.fixture.sock"},
+  "commands": {"enabled":true},
+  "agent_providers": {
+    "fixture-agent": {
+      "auth_token_file":"` + tokenPath + `",
+      "allow_unmatched_messages":true` + testCase.entry + `
+    }
+  }` + testCase.stateEntry + `
+}`
+			if err := os.WriteFile(configPath, []byte(configJSON), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("FEISHU_BOTD_CONFIG", configPath)
+
+			cfg, err := LoadFromEnv()
+			if testCase.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), testCase.wantError) {
+					t.Fatalf("error = %v, want substring %q", err, testCase.wantError)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("load provider config: %v", err)
+			}
+			if got := cfg.AgentProviders["fixture-agent"].AllowConversationLeases; got != testCase.want {
+				t.Fatalf("allow_conversation_leases = %t, want %t", got, testCase.want)
+			}
+			if testCase.want && cfg.StateDir != "/var/lib/feishu-botd" {
+				t.Fatalf("state dir = %q", cfg.StateDir)
+			}
+		})
+	}
+}

@@ -442,3 +442,32 @@ func hasAttachedContextIssue(issues []AttachedContextIssue, code AttachedContext
 	}
 	return false
 }
+
+func TestAttachedContextIdentifiesRequesterEvenWhenGuideTextIsOmitted(t *testing.T) {
+	for _, known := range []bool{true, false} {
+		trigger := threadMessage("om_trigger", "text", `{"text":"look above"}`, "3000", "ou_requester", "user")
+		if !known {
+			trigger.Sender = nil
+		}
+		history := &fakeThreadMessageAPI{responses: []*larkim.ListMessageResp{listMessageResponse(false, "",
+			trigger,
+			threadMessage("om_requester_earlier", "text", `{"text":"same words"}`, "2000", "ou_requester", "user"),
+			threadMessage("om_coworker", "text", `{"text":"same words"}`, "1000", "ou_coworker", "user"),
+		)}}
+		lookup := newSDKAttachedContextLookup(history, &orderedFakeMessageResourceAPI{})
+		got, err := lookup.LookupAttachedContext(context.Background(), AttachedContextRequest{ThreadID: "omt_topic", TriggerMessageID: "om_trigger"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := ""
+		if known {
+			want = "participant-2"
+		}
+		if got.RequesterLabel != want {
+			t.Fatalf("known=%v requester=%q want=%q", known, got.RequesterLabel, want)
+		}
+		if len(got.Messages) != 2 {
+			t.Fatalf("guide should remain omitted: %#v", got.Messages)
+		}
+	}
+}

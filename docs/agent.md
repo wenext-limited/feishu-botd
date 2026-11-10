@@ -47,6 +47,11 @@ delivery does not support store apps):
    `im.message.reaction.created_v1` and `im.message.reaction.deleted_v1`.
    To expose the current group title, grant the permission required by
    `GET /open-apis/im/v1/chats/:chat_id`; title lookup is fail-soft.
+   To hand a provider granted `allow_sender_email` the sender's address, grant
+   `contact:user.employee:readonly` (it covers `enterprise_email`) and
+   `contact:user.email:readonly` (it covers `email`), and make sure the app's
+   contact visibility range (通讯录权限范围) includes the people who message the
+   bot. The lookup is fail-soft too: without them the address is empty.
 7. Publish a new app version, make the bot available to the intended users, and
    add it to every group in which it should answer.
 
@@ -100,6 +105,7 @@ openssl rand -base64 32 > /run/secrets/feishu-botd-example-agent-token
       "allow_follow_up_messages": false,
       "allow_message_reactions": true,
       "allow_image_upload": false,
+      "allow_sender_email": false,
       "allow_legacy_commands": false,
       "allow_ambient_messages": false,
       "allow_proactive_messages": false,
@@ -245,7 +251,9 @@ to false and is inert without `allow_attached_context` also set — it is not
 an independent grant.
 `allow_image_upload` separately permits the outbound image upload described
 below, and likewise defaults to false: it is the only grant that writes a
-durable tenant-side object from bytes the provider supplied. Requests
+durable tenant-side object from bytes the provider supplied.
+`allow_sender_email` separately permits `sender_email`, described below; it
+defaults to false because the address is personal data. Requests
 outside this scope fail before broker registration. Event selection also
 considers `allowed_apps`: a disallowed exact-command subscriber cannot suppress
 an allowed unmatched subscriber. Grant only the minimum selectors needed;
@@ -309,6 +317,19 @@ root it hangs off; empty outside a thread and on the root), and `addressing`:
 messages also carry the current, trimmed `conversation_title` when the bounded
 five-minute lookup succeeds. The title is user-controlled context, not an
 authorization value; direct messages and failed lookups carry an empty title.
+
+A provider granted `allow_sender_email` also receives `sender_email`: the
+sender's `enterprise_email`, or `email` when that is empty, read through
+`GET /open-apis/contact/v3/users/:user_id` by open_id. This is the order dial
+uses when a person signs in with Feishu, so a provider can name the person to
+dial with it. Every other provider receives an empty string, and botd makes no
+Contact call unless some provider that may see the app holds the grant. The
+lookup is bounded to three seconds and cached per sender (an hour for an
+address, ten minutes for none or a failure). It never blocks or fails a
+message: a missing scope, a failed lookup, or a user with no address leaves it
+empty, and botd logs that once, without the address or the sender's id, until
+the next successful lookup. Treat the value as personal data and keep it out
+of logs.
 
 An unmentioned group reply is only an ingress candidate. botd hashes its parent
 id, resolves the existing 24-hour ownership record, checks the provider's app
@@ -941,3 +962,48 @@ unaddressed message in an ungranted group reaches nobody. Confirm the reply reac
 authoring provider, an unmentioned non-reply is ignored, nominal events reach
 the intended provider, retry/queue-failure behavior is exercised, and no raw
 identifiers or user content appear in logs.
+
+### Durable scheduled follow-ups
+
+Daily or standing tasks must not reuse the ordinary, TTL-limited ingress grant
+as if it were a permanent route. Deployments may explicitly enable
+`allow_conversation_leases` for a provider that already has
+`allow_follow_up_messages`, with `state_dir` configured. The default is off.
+
+While the provider still has a live grant for an inbound conversation, call
+`RetainAgentConversation(provider, conversation_id, lease_id, ttl_seconds, acquire=true)`.
+Use the standing task's immutable ID as `lease_id`; a lease is bound to that
+provider and conversation. `ttl_seconds` is 1–604800 (seven days). Set `acquire=false` for periodic renewal of an existing unexpired lease, without
+a new inbound message. Renewal never recreates a missing or cancelled lease. Renew before
+expiry; an expired or released lease cannot authorize its own reacquisition.
+An old task whose ingress grant already expired needs a new inbound message
+in its authorized conversation before it can acquire a lease.
+
+Supply `conversation_lease_id` and a positive `conversation_lease_sequence` on
+`SendAgentFollowUp`. Sequence numbers increase for each new logical message and
+stay unchanged on retries. A sequence must not advance while the previous send
+is incomplete. The daemon retains the most recent 256 completed operation
+records and a durable high-water mark: a retry of a retired sequence returns
+`operation_retired` and never sends again. Completed retries within the ledger
+return the same receipt, including its opaque `message_ref`. The reference is
+also registered in the agent-authored-message ownership store, so replies can
+route back to the author without exposing raw Feishu message IDs.
+
+Never reuse a task ID. Call `ReleaseAgentConversation` when the task is cancelled or finishes. Release
+persists a revocation tombstone for seven days, including when acquisition has
+not arrived yet. It is idempotent and waits for an accepted send already in flight; after it returns
+success, no new send can use that lease. A delayed acquisition is rejected during
+the maximum seven-day lease/retry horizon; renewal remains unable to recreate the
+lease even after that bounded tombstone is pruned. An acquisition is exclusively
+for a new immutable task ID, never a periodic maintenance retry. Lease sends fail closed if the lease is
+missing, expired, released, belongs to another provider, or the app is no longer
+allowed. They never fall back to an ordinary conversation grant. Image upload
+continues to use its separately authorized ordinary conversation scope; this
+lease version grants no additional image-upload access.
+
+`agent-conversation-leases.json` is private daemon state (0600) under `state_dir`.
+It contains the private route and operation ledger, is written atomically before
+sending, and survives restarts. Corrupt state fails startup. An ambiguous send
+that outlives Feishu's message UUID dedupe window is not retried as a fresh send.
+Keep this file with the daemon's state backups. Disabling the provider capability
+revokes the ability to renew or send using leases even while state remains.

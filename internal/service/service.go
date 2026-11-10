@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"feishu-botd/internal/chatgrant"
@@ -19,7 +20,7 @@ import (
 )
 
 // Version is the reported service version, shared by both transports.
-const Version = "0.2.0"
+const Version = "0.3.0"
 
 // Provider names the upstream message provider in responses.
 const Provider = "feishu"
@@ -46,6 +47,11 @@ type appBackend struct {
 	agentCards      feishu.AgentCards
 	pinner          feishu.MessagePinner
 	chats           feishu.AgentChats
+	// senderEmails resolves and caches senders' company addresses for
+	// providers granted allow_sender_email; senderEmailWarned keeps a failing
+	// lookup to one log line until the next success.
+	senderEmails      *feishu.SenderEmailCache
+	senderEmailWarned *atomic.Bool
 }
 
 // Service owns the send/dedupe/readiness flow. It is safe for concurrent use
@@ -75,7 +81,8 @@ type Service struct {
 	agentCardLanes   *agentCardLanes
 	// agentChatMu serializes CreateAgentChat, so one operation id cannot
 	// create two chats.
-	agentChatMu sync.Mutex
+	agentChatMu        sync.Mutex
+	conversationLeases *conversationLeases
 }
 
 type agentOwnershipStore interface {
@@ -138,6 +145,10 @@ func newService(
 		if contactUsers, ok := sender.(feishu.ContactUsers); ok {
 			backend.contactUsers = contactUsers
 		}
+		if emails, ok := sender.(feishu.ContactEmails); ok {
+			backend.senderEmails = feishu.NewSenderEmailCache(emails)
+		}
+		backend.senderEmailWarned = &atomic.Bool{}
 		if images, ok := sender.(feishu.ImageUploader); ok {
 			backend.images = images
 		}
@@ -165,6 +176,7 @@ func newService(
 	agentBroker := newAgentBroker(cfg.DedupeTTL)
 	agentBroker.mentionIdentities = cfg.ProviderAllowsAmbientMessages
 	agentBroker.ambientChat = cfg.ProviderAllowsAmbientChat
+	agentBroker.allowsSenderEmail = cfg.ProviderAllowsSenderEmail
 	return &Service{
 		cfg:                   cfg,
 		backends:              backends,

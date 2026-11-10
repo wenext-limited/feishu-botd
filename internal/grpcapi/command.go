@@ -202,13 +202,20 @@ func (c *commandServer) SendAgentFollowUp(ctx context.Context, in *pb.SendAgentF
 	if err := authorizeAgentFollowUp(ctx, in.GetProvider()); err != nil {
 		return nil, err
 	}
+	if in.GetConversationLeaseId() != "" {
+		if err := authorizeAgentConversationLease(ctx, in.GetProvider()); err != nil {
+			return nil, err
+		}
+	}
 	receipt, apiErr := c.svc.SendAgentFollowUp(ctx, service.SendAgentFollowUpInput{
-		Provider:       in.GetProvider(),
-		ConversationID: in.GetConversationId(),
-		OperationID:    in.GetOperationId(),
-		Markdown:       in.GetMarkdown(),
-		Summary:        in.GetSummary(),
-		MentionUserID:  in.GetMentionUserId(),
+		Provider:                  in.GetProvider(),
+		ConversationID:            in.GetConversationId(),
+		OperationID:               in.GetOperationId(),
+		Markdown:                  in.GetMarkdown(),
+		Summary:                   in.GetSummary(),
+		MentionUserID:             in.GetMentionUserId(),
+		ConversationLeaseID:       in.GetConversationLeaseId(),
+		ConversationLeaseSequence: in.GetConversationLeaseSequence(),
 	})
 	if apiErr != nil {
 		return nil, grpcError(apiErr, requestIDFromContext(ctx))
@@ -426,6 +433,7 @@ func agentEventToProto(event service.AgentEvent) *pb.SubscribeAgentEventsRespons
 			MessageRef: event.Message.MessageRef, ThreadRef: event.Message.ThreadRef,
 			ThreadRootMessageRef: event.Message.ThreadRootMessageRef,
 			Addressing:           agentAddressingToProto(event.Message.Addressing),
+			SenderEmail:          event.Message.SenderEmail,
 		}
 		for _, mention := range event.Message.Mentions {
 			message.Mentions = append(message.Mentions, &pb.InboundMention{UserId: mention.UserID, Name: mention.Name})
@@ -564,7 +572,7 @@ func messageReactionOperationToProto(in service.MessageReactionOperation) pb.Mes
 }
 
 func agentFollowUpReceiptToProto(in service.AgentFollowUpReceipt) *pb.AgentFollowUpReceipt {
-	return &pb.AgentFollowUpReceipt{FollowUpId: in.FollowUpID, Duplicate: in.Duplicate}
+	return &pb.AgentFollowUpReceipt{FollowUpId: in.FollowUpID, Duplicate: in.Duplicate, MessageRef: in.MessageRef}
 }
 
 func agentPhaseToProto(in service.AgentResponsePhase) pb.AgentResponsePhase {
@@ -580,4 +588,24 @@ func agentPhaseToProto(in service.AgentResponsePhase) pb.AgentResponsePhase {
 	default:
 		return pb.AgentResponsePhase_AGENT_RESPONSE_PHASE_UNSPECIFIED
 	}
+}
+
+func (c *commandServer) RetainAgentConversation(ctx context.Context, in *pb.RetainAgentConversationRequest) (*pb.RetainAgentConversationResponse, error) {
+	if err := authorizeAgentConversationLease(ctx, in.GetProvider()); err != nil {
+		return nil, err
+	}
+	expires, apiErr := c.svc.RetainAgentConversation(ctx, in.GetProvider(), in.GetConversationId(), in.GetLeaseId(), in.GetTtlSeconds(), in.GetAcquire())
+	if apiErr != nil {
+		return nil, grpcError(apiErr, requestIDFromContext(ctx))
+	}
+	return &pb.RetainAgentConversationResponse{ExpiresAtUnixSeconds: expires}, nil
+}
+func (c *commandServer) ReleaseAgentConversation(ctx context.Context, in *pb.ReleaseAgentConversationRequest) (*pb.ReleaseAgentConversationResponse, error) {
+	if err := authorizeAgentConversationLease(ctx, in.GetProvider()); err != nil {
+		return nil, err
+	}
+	if apiErr := c.svc.ReleaseAgentConversation(ctx, in.GetProvider(), in.GetConversationId(), in.GetLeaseId()); apiErr != nil {
+		return nil, grpcError(apiErr, requestIDFromContext(ctx))
+	}
+	return &pb.ReleaseAgentConversationResponse{}, nil
 }

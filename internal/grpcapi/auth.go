@@ -17,23 +17,24 @@ import (
 type providerPrincipalKey struct{}
 
 type providerPrincipal struct {
-	provider               string
-	allowedCommands        map[string]struct{}
-	allowedApps            []string
-	allowedAppsConfigured  bool
-	allowUnmatchedMessages bool
-	allowCardActions       bool
-	allowAttachedContext   bool
-	allowFollowUpMessages  bool
-	allowImageUpload       bool
-	allowMessageReactions  bool
-	allowLegacyCommands    bool
-	allowCoTProgress       bool
-	allowAgentReactions    bool
-	allowAmbientMessages   bool
-	allowProactiveMessages bool
-	allowPins              bool
-	allowCreateChats       bool
+	provider                string
+	allowedCommands         map[string]struct{}
+	allowedApps             []string
+	allowedAppsConfigured   bool
+	allowUnmatchedMessages  bool
+	allowCardActions        bool
+	allowAttachedContext    bool
+	allowFollowUpMessages   bool
+	allowConversationLeases bool
+	allowImageUpload        bool
+	allowMessageReactions   bool
+	allowLegacyCommands     bool
+	allowCoTProgress        bool
+	allowAgentReactions     bool
+	allowAmbientMessages    bool
+	allowProactiveMessages  bool
+	allowPins               bool
+	allowCreateChats        bool
 }
 
 type providerCredential struct {
@@ -66,23 +67,24 @@ func newProviderAuthenticator(providers map[string]config.AgentProviderConfig) p
 		}
 		authenticator.credentials = append(authenticator.credentials, providerCredential{
 			principal: providerPrincipal{
-				provider:               provider,
-				allowedCommands:        allowedCommands,
-				allowedApps:            allowedApps,
-				allowedAppsConfigured:  allowedAppsConfigured,
-				allowUnmatchedMessages: providerCfg.AllowUnmatchedMessages,
-				allowCardActions:       providerCfg.AllowCardActions,
-				allowAttachedContext:   providerCfg.AllowAttachedContext,
-				allowFollowUpMessages:  providerCfg.AllowFollowUpMessages,
-				allowImageUpload:       providerCfg.AllowImageUpload,
-				allowMessageReactions:  providerCfg.AllowMessageReactions,
-				allowLegacyCommands:    providerCfg.AllowLegacyCommands,
-				allowCoTProgress:       providerCfg.AllowCoTProgress,
-				allowAgentReactions:    providerCfg.AllowAgentReactions,
-				allowAmbientMessages:   providerCfg.AllowAmbientMessages,
-				allowProactiveMessages: providerCfg.AllowProactiveMessages,
-				allowPins:              providerCfg.AllowPins,
-				allowCreateChats:       providerCfg.AllowCreateChats,
+				provider:                provider,
+				allowedCommands:         allowedCommands,
+				allowedApps:             allowedApps,
+				allowedAppsConfigured:   allowedAppsConfigured,
+				allowUnmatchedMessages:  providerCfg.AllowUnmatchedMessages,
+				allowCardActions:        providerCfg.AllowCardActions,
+				allowAttachedContext:    providerCfg.AllowAttachedContext,
+				allowFollowUpMessages:   providerCfg.AllowFollowUpMessages,
+				allowConversationLeases: providerCfg.AllowConversationLeases,
+				allowImageUpload:        providerCfg.AllowImageUpload,
+				allowMessageReactions:   providerCfg.AllowMessageReactions,
+				allowLegacyCommands:     providerCfg.AllowLegacyCommands,
+				allowCoTProgress:        providerCfg.AllowCoTProgress,
+				allowAgentReactions:     providerCfg.AllowAgentReactions,
+				allowAmbientMessages:    providerCfg.AllowAmbientMessages,
+				allowProactiveMessages:  providerCfg.AllowProactiveMessages,
+				allowPins:               providerCfg.AllowPins,
+				allowCreateChats:        providerCfg.AllowCreateChats,
 			},
 			digest: sha256.Sum256([]byte(providerCfg.AuthToken)),
 		})
@@ -110,6 +112,8 @@ func isAgentMethod(fullMethod string) bool {
 		pb.CommandService_ReplaceAgentResponse_FullMethodName,
 		pb.CommandService_UploadAgentImage_FullMethodName,
 		pb.CommandService_SendAgentFollowUp_FullMethodName,
+		pb.CommandService_RetainAgentConversation_FullMethodName,
+		pb.CommandService_ReleaseAgentConversation_FullMethodName,
 		pb.CommandService_AddAgentReaction_FullMethodName,
 		pb.CommandService_PostAgentMessage_FullMethodName,
 		pb.CommandService_PostAgentCard_FullMethodName,
@@ -426,4 +430,15 @@ func providerAuthStreamInterceptor(authenticator providerAuthenticator, scopeLeg
 		ctx := context.WithValue(ss.Context(), providerPrincipalKey{}, principal)
 		return handler(srv, &contextStream{ServerStream: ss, ctx: ctx})
 	}
+}
+
+func authorizeAgentConversationLease(ctx context.Context, requested string) error {
+	if err := authorizeAgentFollowUp(ctx, requested); err != nil {
+		return err
+	}
+	principal, _ := authenticatedProvider(ctx)
+	if !principal.allowConversationLeases {
+		return providerScopeDenied(ctx)
+	}
+	return nil
 }

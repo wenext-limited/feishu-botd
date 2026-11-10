@@ -111,6 +111,9 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 			defer routes.Close()
 			svc.SetAgentMessageRouteStore(routes)
 		}
+		if err := svc.OpenAgentConversationLeases(cfg.StateDir); err != nil {
+			return fmt.Errorf("open conversation leases: %w", err)
+		}
 	}
 	httpServer := httpapi.NewServer(cfg, svc, logger)
 	grpcServer := grpcapi.NewServer(cfg, svc, logger)

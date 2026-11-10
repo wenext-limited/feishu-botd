@@ -103,6 +103,7 @@ and per-caller defaults. This example keeps the existing top-level app as
       "allow_attached_video": false,
       "allow_follow_up_messages": false,
       "allow_image_upload": false,
+      "allow_sender_email": false,
       "allow_legacy_commands": false,
       "allow_ambient_messages": false,
       "allow_proactive_messages": false,
@@ -237,6 +238,11 @@ it to the provider at runtime, with no config edit
 ([ADR 0001](docs/adr/0001-runtime-chat-grants.md),
 [Group chats a provider creates](docs/agent.md#group-chats-a-provider-creates)).
 It defaults to false and requires both chat grants and `state_dir`.
+`allow_sender_email` separately hands the provider the sender's company email
+address on every inbound message (`InboundAgentMessage.sender_email`), so it can
+act for that person elsewhere. It is personal data and defaults to false; botd
+looks addresses up only when some provider holds the grant. See
+[docs/agent.md](docs/agent.md) for the Feishu scope it needs.
 `allowed_apps` optionally limits that provider to configured app aliases. When
 the field is absent, all apps are allowed; an explicit empty list allows none,
 and `null` is rejected. botd applies the allowlist before event fan-out and

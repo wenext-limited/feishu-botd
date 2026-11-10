@@ -28,7 +28,8 @@ func TestGRPCAgentAttachedContextStreamsHeaderThenBoundedImageChunks(t *testing.
 	sender := &fakeAgentSender{
 		fakeSender: fakeSender{messageID: "unused_fixture"},
 		attachedContext: feishu.AttachedContext{
-			Status: feishu.AttachedContextFound,
+			RequesterLabel: "participant-1",
+			Status:         feishu.AttachedContextFound,
 			Messages: []feishu.AttachedContextMessage{{
 				AuthorLabel: "participant-1", AuthorType: "user", Text: "crashes on launch",
 				Images: []feishu.AttachedContextImage{{MediaType: "image/png", Data: imageData}},
@@ -72,6 +73,9 @@ func TestGRPCAgentAttachedContextStreamsHeaderThenBoundedImageChunks(t *testing.
 	if header == nil || header.GetStatus() != pb.AgentAttachedContextStatus_AGENT_ATTACHED_CONTEXT_STATUS_FOUND ||
 		len(header.GetMessages()) != 1 || len(header.GetMessages()[0].GetImages()) != 1 {
 		t.Fatalf("header = %#v", header)
+	}
+	if header.GetRequesterLabel() != "participant-1" {
+		t.Fatalf("requester label = %q", header.GetRequesterLabel())
 	}
 	message := header.GetMessages()[0]
 	if message.GetAuthorLabel() != "participant-1" || message.GetText() != "crashes on launch" {
@@ -616,5 +620,18 @@ func TestAgentEnumMappings(t *testing.T) {
 		if got := agentPhaseToProto(test.service); got != test.want {
 			t.Errorf("agentPhaseToProto(%v) = %v, want %v", test.service, got, test.want)
 		}
+	}
+}
+
+func TestAgentEventToProtoCarriesSenderEmail(t *testing.T) {
+	t.Parallel()
+
+	out := agentEventToProto(service.AgentEvent{
+		DeliveryID: "delivery_email_fixture",
+		SenderID:   "sender_fixture",
+		Message:    &service.AgentMessage{Text: "hi", SenderEmail: "lisi@zhenxinmail.com"},
+	}).GetEvent()
+	if got := out.GetMessage().GetSenderEmail(); got != "lisi@zhenxinmail.com" {
+		t.Fatalf("sender_email = %q", got)
 	}
 }

@@ -65,6 +65,9 @@ type AgentMessage struct {
 	CommandText       string
 	ReplyToMessageRef string
 	ConversationTitle string
+	// SenderEmail is set only on the copy sent to a provider granted
+	// allow_sender_email.
+	SenderEmail string
 
 	// MessageRef is this inbound message's provider-safe identity, in the same
 	// space as AgentResponseReceipt.MessageRef.
@@ -367,6 +370,9 @@ type agentBroker struct {
 	// function denies: no provider sees mention identities or ambient events.
 	mentionIdentities func(provider string) bool
 	ambientChat       func(provider, chatAlias string) bool
+	// allowsSenderEmail reports a provider's allow_sender_email grant. Nil
+	// denies every provider.
+	allowsSenderEmail func(provider string) bool
 }
 
 type messageObservation struct {
@@ -458,6 +464,10 @@ type agentDelivery struct {
 	sendRetryClosed          bool
 	sendRetryCode            string
 	response                 *agentResponse
+
+	// Retain only the private lookup keys when response start drops input.
+	attachedContext feishu.AttachedContextRequest
+
 	// uploadedImages maps an upload operation id to the image_key it minted, so
 	// a retried upload does not spend a second one. It lives on the delivery
 	// rather than the response because an image is useful before Start and
@@ -733,8 +743,13 @@ func (b *agentBroker) dispatchMessageForProvider(in CommandInput, provider strin
 			allowedProviders:         allowed,
 			expiresAt:                now.Add(b.ttl),
 			attachedContextExpiresAt: now.Add(agentAttachedContextTTL),
-			state:                    agentDeliveryOpen,
-			messageDedupeKey:         messageDedupeKey,
+			attachedContext: feishu.AttachedContextRequest{
+				ThreadID:          strings.TrimSpace(in.Metadata["thread_id"]),
+				TriggerMessageID:  strings.TrimSpace(in.Metadata["message_id"]),
+				TriggerCreateTime: strings.TrimSpace(in.Metadata["create_time"]),
+			},
+			state:            agentDeliveryOpen,
+			messageDedupeKey: messageDedupeKey,
 		}
 		b.recordConversationLocked(in, allowed, now)
 		if messageDedupeKey != "" {
@@ -819,10 +834,11 @@ func agentMessageEvent(in CommandInput, addressing AgentAddressing) AgentEvent {
 	}
 }
 
-// eventForProvider applies the one per-provider difference in message
-// content: a provider holding the ambient grant already observes every member
-// of its chats, so it also gets mention identities — names in the text and
-// the mentions list. Every other provider keeps the legacy prompt exactly.
+// eventForProvider applies the per-provider differences in message content:
+// a provider holding the ambient grant already observes every member of its
+// chats, so it also gets mention identities — names in the text and the
+// mentions list (every other provider keeps the legacy prompt exactly); and
+// only a provider granted allow_sender_email gets the sender's email.
 func (b *agentBroker) eventForProvider(event AgentEvent, in CommandInput, provider string) AgentEvent {
 	out := cloneAgentEvent(event)
 	if out.Message != nil && b.mentionIdentities != nil && b.mentionIdentities(provider) {
@@ -830,6 +846,9 @@ func (b *agentBroker) eventForProvider(event AgentEvent, in CommandInput, provid
 			out.Message.Text = in.NamedPrompt
 		}
 		out.Message.Mentions = cloneAgentMentions(in.Mentions)
+	}
+	if out.Message != nil && in.SenderEmail != "" && b.allowsSenderEmail != nil && b.allowsSenderEmail(provider) {
+		out.Message.SenderEmail = in.SenderEmail
 	}
 	return out
 }

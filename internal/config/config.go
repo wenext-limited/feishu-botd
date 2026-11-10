@@ -80,14 +80,15 @@ type Config struct {
 // AuthToken is loaded from the provider's configured token file and must never
 // be serialized or logged.
 type AgentProviderConfig struct {
-	AuthToken              string
-	AllowedCommands        []string
-	AllowUnmatchedMessages bool
-	AllowCardActions       bool
-	AllowAttachedContext   bool
-	AllowFollowUpMessages  bool
-	AllowMessageReactions  bool
-	AllowLegacyCommands    bool
+	AuthToken               string
+	AllowedCommands         []string
+	AllowUnmatchedMessages  bool
+	AllowCardActions        bool
+	AllowAttachedContext    bool
+	AllowFollowUpMessages   bool
+	AllowConversationLeases bool
+	AllowMessageReactions   bool
+	AllowLegacyCommands     bool
 	// AllowImageUpload permits the provider to spend the bot's identity and
 	// upload quota putting images into Feishu. It is separate from every other
 	// grant because it is the only one that writes a durable tenant-side object
@@ -136,6 +137,11 @@ type AgentProviderConfig struct {
 	// were named in AmbientChatAliases and ProactiveChatAliases, so it
 	// requires both of those grants and a state dir to keep the grants in.
 	AllowCreateChats bool
+	// AllowSenderEmail permits the provider to receive the sender's company
+	// email address on every inbound message (InboundAgentMessage.sender_email),
+	// resolved by the daemon through the Contact API. It is personal data, so
+	// omission always denies, and a provider without it never causes a lookup.
+	AllowSenderEmail bool
 	// WorkingReactionEmoji, when non-empty, is the Feishu emoji key (e.g.
 	// "OnIt") the daemon places on the triggering message for the duration of
 	// a response and removes once it closes. Entirely daemon-driven — the
@@ -288,6 +294,26 @@ func (c Config) ProviderAllowsApp(provider, appAlias string) bool {
 func (c Config) ProviderAllowsAttachedContext(provider string) bool {
 	providerCfg, configured := c.AgentProviders[strings.TrimSpace(provider)]
 	return configured && providerCfg.AllowAttachedContext
+}
+
+// ProviderAllowsSenderEmail is an explicit personal-data grant: the sender's
+// company email address rides on every inbound message the provider receives.
+// Omission always denies.
+func (c Config) ProviderAllowsSenderEmail(provider string) bool {
+	providerCfg, configured := c.AgentProviders[strings.TrimSpace(provider)]
+	return configured && providerCfg.AllowSenderEmail
+}
+
+// AnyProviderAllowsSenderEmail reports whether some provider that may see
+// appAlias holds the sender-email grant, so the daemon looks an address up
+// only when someone could receive it.
+func (c Config) AnyProviderAllowsSenderEmail(appAlias string) bool {
+	for provider, providerCfg := range c.AgentProviders {
+		if providerCfg.AllowSenderEmail && c.ProviderAllowsApp(provider, appAlias) {
+			return true
+		}
+	}
+	return false
 }
 
 // ProviderAllowsAttachedVideo is a sensitive-read grant layered on top of
@@ -526,6 +552,7 @@ func LoadFromEnv() (Config, error) {
 			AllowCardActions:         providerCfg.AllowCardActions,
 			AllowAttachedContext:     providerCfg.AllowAttachedContext,
 			AllowFollowUpMessages:    providerCfg.AllowFollowUpMessages,
+			AllowConversationLeases:  providerCfg.AllowConversationLeases,
 			AllowMessageReactions:    providerCfg.AllowMessageReactions,
 			AllowLegacyCommands:      providerCfg.AllowLegacyCommands,
 			AllowImageUpload:         providerCfg.AllowImageUpload,
@@ -538,6 +565,7 @@ func LoadFromEnv() (Config, error) {
 			ProactiveChatAliases:     cloneStrings(providerCfg.ProactiveChatAliases),
 			AllowPins:                providerCfg.AllowPins,
 			AllowCreateChats:         providerCfg.AllowCreateChats,
+			AllowSenderEmail:         providerCfg.AllowSenderEmail,
 			WorkingReactionEmoji:     providerCfg.WorkingReactionEmoji,
 			WorkingReactionOverrides: providerCfg.WorkingReactionSenderOverrides,
 			AllowedApps:              allowedApps,
@@ -551,6 +579,9 @@ func LoadFromEnv() (Config, error) {
 		return Config{}, err
 	}
 	for provider, providerCfg := range cfg.AgentProviders {
+		if providerCfg.AllowConversationLeases && (!providerCfg.AllowFollowUpMessages || cfg.StateDir == "") {
+			return Config{}, fmt.Errorf("provider %q allow_conversation_leases requires allow_follow_up_messages and state_dir", provider)
+		}
 		if providerCfg.AllowMessageReactions && cfg.StateDir == "" {
 			return Config{}, fmt.Errorf("provider %q allow_message_reactions requires state_dir or FEISHU_BOTD_STATE_DIR", provider)
 		}
@@ -657,26 +688,28 @@ type configFile struct {
 }
 
 type fileAgentProviderConfig struct {
-	AuthTokenFile          string             `json:"auth_token_file"`
-	AllowedCommands        []string           `json:"allowed_commands"`
-	AllowedApps            optionalStringList `json:"allowed_apps"`
-	AllowUnmatchedMessages bool               `json:"allow_unmatched_messages"`
-	AllowCardActions       bool               `json:"allow_card_actions"`
-	AllowAttachedContext   bool               `json:"allow_attached_context"`
-	AllowFollowUpMessages  bool               `json:"allow_follow_up_messages"`
-	AllowMessageReactions  bool               `json:"allow_message_reactions"`
-	AllowLegacyCommands    bool               `json:"allow_legacy_commands"`
-	AllowImageUpload       bool               `json:"allow_image_upload"`
-	AllowAttachedVideo     bool               `json:"allow_attached_video"`
-	AllowAgentReactions    bool               `json:"allow_agent_reactions"`
-	AllowCoTProgress       bool               `json:"allow_cot_progress"`
-	AllowAmbientMessages   bool               `json:"allow_ambient_messages"`
-	AmbientChatAliases     []string           `json:"ambient_chat_aliases"`
-	AllowProactiveMessages bool               `json:"allow_proactive_messages"`
-	ProactiveChatAliases   []string           `json:"proactive_chat_aliases"`
-	AllowPins              bool               `json:"allow_pins"`
-	AllowCreateChats       bool               `json:"allow_create_chats"`
-	WorkingReactionEmoji   string             `json:"working_reaction_emoji"`
+	AuthTokenFile           string             `json:"auth_token_file"`
+	AllowedCommands         []string           `json:"allowed_commands"`
+	AllowedApps             optionalStringList `json:"allowed_apps"`
+	AllowUnmatchedMessages  bool               `json:"allow_unmatched_messages"`
+	AllowCardActions        bool               `json:"allow_card_actions"`
+	AllowAttachedContext    bool               `json:"allow_attached_context"`
+	AllowFollowUpMessages   bool               `json:"allow_follow_up_messages"`
+	AllowConversationLeases bool               `json:"allow_conversation_leases"`
+	AllowMessageReactions   bool               `json:"allow_message_reactions"`
+	AllowLegacyCommands     bool               `json:"allow_legacy_commands"`
+	AllowImageUpload        bool               `json:"allow_image_upload"`
+	AllowAttachedVideo      bool               `json:"allow_attached_video"`
+	AllowAgentReactions     bool               `json:"allow_agent_reactions"`
+	AllowCoTProgress        bool               `json:"allow_cot_progress"`
+	AllowAmbientMessages    bool               `json:"allow_ambient_messages"`
+	AmbientChatAliases      []string           `json:"ambient_chat_aliases"`
+	AllowProactiveMessages  bool               `json:"allow_proactive_messages"`
+	ProactiveChatAliases    []string           `json:"proactive_chat_aliases"`
+	AllowPins               bool               `json:"allow_pins"`
+	AllowCreateChats        bool               `json:"allow_create_chats"`
+	AllowSenderEmail        bool               `json:"allow_sender_email"`
+	WorkingReactionEmoji    string             `json:"working_reaction_emoji"`
 	// WorkingReactionSenderOverrides maps a sender's Feishu display name to a
 	// working reaction emoji, resolved via a live Contact API call — see
 	// AgentProviderConfig.WorkingReactionOverrides.
@@ -1360,6 +1393,7 @@ func normalizeAgentProviderConfigs(in map[string]fileAgentProviderConfig) (map[s
 			AllowCardActions:               providerCfg.AllowCardActions,
 			AllowAttachedContext:           providerCfg.AllowAttachedContext,
 			AllowFollowUpMessages:          providerCfg.AllowFollowUpMessages,
+			AllowConversationLeases:        providerCfg.AllowConversationLeases,
 			AllowMessageReactions:          providerCfg.AllowMessageReactions,
 			AllowLegacyCommands:            providerCfg.AllowLegacyCommands,
 			AllowImageUpload:               providerCfg.AllowImageUpload,
@@ -1372,6 +1406,7 @@ func normalizeAgentProviderConfigs(in map[string]fileAgentProviderConfig) (map[s
 			ProactiveChatAliases:           proactiveChats,
 			AllowPins:                      providerCfg.AllowPins,
 			AllowCreateChats:               providerCfg.AllowCreateChats,
+			AllowSenderEmail:               providerCfg.AllowSenderEmail,
 			WorkingReactionEmoji:           providerCfg.WorkingReactionEmoji,
 			WorkingReactionSenderOverrides: reactionOverrides,
 		}

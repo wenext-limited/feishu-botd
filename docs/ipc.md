@@ -271,6 +271,11 @@ message. Replies to unowned messages leave it empty. Group messages may add
 the current bounded `conversation_title`; lookup failure leaves it empty.
 Neither value contains a raw Feishu route, and the title must never be used as
 authorization.
+A provider granted `allow_sender_email` also receives
+`InboundAgentMessage.sender_email`, the sender's company address
+(`enterprise_email`, else `email`); it is empty for every other provider and
+whenever the fail-soft Contact lookup yields nothing. Older providers ignore
+the field.
 An unmentioned group reply is delivered only when the persisted 24-hour owner
 record identifies an app-allowed provider; it is pinned to that provider and
 cannot enter the legacy command or local-script paths. Unknown and expired
@@ -698,3 +703,10 @@ Tooling (installed under `$(go env GOPATH)/bin`):
 
 Non-Go clients run their own generator against `proto/` (e.g. `tonic`/`prost`
 for Rust). The `.proto` files are the only shared artifact.
+
+`RetainAgentConversation` and `ReleaseAgentConversation` are provider-authenticated
+RPCs gated by `allow_conversation_leases` and `allow_follow_up_messages`. They
+manage bounded durable route leases, using only opaque conversation and task
+identifiers. Leased `SendAgentFollowUp` additionally carries
+`conversation_lease_id` and `conversation_lease_sequence`; see
+[durable scheduled follow-ups](agent.md#durable-scheduled-follow-ups).
