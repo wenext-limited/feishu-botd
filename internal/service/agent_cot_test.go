@@ -618,8 +618,8 @@ func TestAgentCoTNeverRetriesAFailedCreate(t *testing.T) {
 }
 
 // A card that opens a thread goes first: the CoT API has no thread option and
-// lands beside its origin message, which is in the main timeline until the
-// card turns it into a thread root. Created after, the CoT joins the thread.
+// is shown beside its origin message in the main timeline, even once that
+// message is a thread root. So the CoT waits for the card and binds to it.
 func TestAgentCoTWaitsForACardThatOpensAThread(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -659,7 +659,13 @@ func TestAgentCoTWaitsForACardThatOpensAThread(t *testing.T) {
 			if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
 				t.Fatalf("call order = %v, want %v", backend.callOrder, want)
 			}
-			if len(backend.cotCreates) != 1 || backend.cotCreates[0].OriginMessageID != "om_trigger" {
+			// A CoT is shown beside its origin, so in a thread the card opened
+			// it binds to the card, which is inside the thread.
+			origin := "om_trigger"
+			if !tc.cotFirst {
+				origin = backend.messageID
+			}
+			if len(backend.cotCreates) != 1 || backend.cotCreates[0].OriginMessageID != origin {
 				t.Fatalf("cot creates = %#v", backend.cotCreates)
 			}
 		})

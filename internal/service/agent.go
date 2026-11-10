@@ -990,6 +990,9 @@ func (s *Service) StartAgentResponse(ctx context.Context, in StartAgentResponseI
 	// even lazily. Pre-existing and narrow enough to accept rather than
 	// thread routing state through delivery for.
 	var chatID, replyToMessageID string
+	// cotOriginMessageID is what the CoT binds to: the triggering message, or
+	// the card when the card opened a thread (see below).
+	var cotOriginMessageID string
 	var cot agentCoTState
 	if delivery.messageID == "" {
 		if delivery.input.ChatAlias == "direct" || delivery.input.UnconfiguredGroup {
@@ -1016,10 +1019,10 @@ func (s *Service) StartAgentResponse(ctx context.Context, in StartAgentResponseI
 		// UpdateAgentResponse.
 		//
 		// The one exception is a card that is about to open a thread: the CoT
-		// API has no thread option and lands wherever its origin message
-		// lives, which before the card is the main timeline. So it waits for
-		// the card, after which the origin is a thread root and the CoT goes
-		// into the thread — second there rather than first, but not out in
+		// API has no thread option and is shown beside its origin message in
+		// the main timeline — even once that message has become a thread
+		// root. So it waits for the card and binds to the card, which lives
+		// inside the thread: second there rather than first, but not out in
 		// the room the thread exists to keep clean.
 		sendRequest := feishu.CardSendRequest{
 			ReplyToMessageID: replyToMessageID,
@@ -1029,8 +1032,9 @@ func (s *Service) StartAgentResponse(ctx context.Context, in StartAgentResponseI
 		}
 		opensThread := sendRequest.ReplyInThread && strings.TrimSpace(delivery.input.Metadata["thread_id"]) == ""
 		wantsCoT := backend.cotMessages != nil && in.AllowCoTProgress
+		cotOriginMessageID = replyToMessageID
 		if wantsCoT && !opensThread {
-			s.createAgentCoT(callCtx, backend.cotMessages, &cot, delivery.responseID, chatID, replyToMessageID, in.Content.TimelineSteps)
+			s.createAgentCoT(callCtx, backend.cotMessages, &cot, delivery.responseID, chatID, cotOriginMessageID, in.Content.TimelineSteps)
 		}
 		if replyToMessageID == "" {
 			sendRequest.ChatID = chatID
@@ -1060,8 +1064,11 @@ func (s *Service) StartAgentResponse(ctx context.Context, in StartAgentResponseI
 		// The card opened this thread only when it asked to and the message it
 		// answers was in none. A thread someone else opened stays theirs.
 		delivery.ownsThread = opensThread && sent.ThreadID != ""
+		if opensThread && sent.ThreadID != "" {
+			cotOriginMessageID = sent.MessageID
+		}
 		if wantsCoT && opensThread {
-			s.createAgentCoT(callCtx, backend.cotMessages, &cot, delivery.responseID, chatID, replyToMessageID, in.Content.TimelineSteps)
+			s.createAgentCoT(callCtx, backend.cotMessages, &cot, delivery.responseID, chatID, cotOriginMessageID, in.Content.TimelineSteps)
 		}
 	}
 
@@ -1093,7 +1100,7 @@ func (s *Service) StartAgentResponse(ctx context.Context, in StartAgentResponseI
 		// something to bind to, and this is the only point in the response's
 		// life where these are resolved.
 		cotChatID:          chatID,
-		cotOriginMessageID: replyToMessageID,
+		cotOriginMessageID: cotOriginMessageID,
 		cot:                cot,
 	}
 	if backend.cotMessages != nil {
