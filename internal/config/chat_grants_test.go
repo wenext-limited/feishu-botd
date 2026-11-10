@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"feishu-botd/internal/chatgrant"
 )
 
 const (
@@ -133,6 +135,17 @@ func TestChatGrantsRejectInconsistentOrUnresolvableShapes(t *testing.T) {
 			wantError: "allow_proactive_messages requires state_dir",
 		},
 		{
+			name:      "create chats requires the ambient and proactive grants",
+			entry:     `,"allow_create_chats":true,"allow_proactive_messages":true,"proactive_chat_aliases":["ops"]`,
+			topLevel:  `,"state_dir":"/var/lib/feishu-botd"`,
+			wantError: "allow_create_chats requires allow_ambient_messages, allow_proactive_messages, and state_dir",
+		},
+		{
+			name:      "create chats requires state",
+			entry:     `,"allow_create_chats":true,"allow_ambient_messages":true,"allow_proactive_messages":true`,
+			wantError: "allow_proactive_messages requires state_dir",
+		},
+		{
 			name:      "pins require the proactive grant",
 			entry:     `,"allow_pins":true`,
 			wantError: "allow_pins requires allow_proactive_messages",
@@ -228,5 +241,43 @@ func TestPinGrantDefaultsOffAndLoadsBesideTheProactiveGrant(t *testing.T) {
 	}
 	if !cfg.ProviderAllowsPins("commons") || cfg.ProviderAllowsPins("someone-else") || cfg.ProviderAllowsPins("") {
 		t.Fatal("allow_pins did not scope to its provider")
+	}
+}
+
+func TestCreateChatsGrantAddsRuntimeChatsToBothAllowlists(t *testing.T) {
+	cfg, err := loadChatGrantConfig(t, `,
+      "allow_ambient_messages":true,
+      "allow_proactive_messages":true,
+      "allow_create_chats":true`,
+		`,"state_dir":"/var/lib/feishu-botd"`)
+	if err != nil {
+		t.Fatalf("load config (create chats needs no static aliases): %v", err)
+	}
+	if !cfg.ProviderAllowsCreateChats("commons") || cfg.ProviderAllowsCreateChats("other") {
+		t.Fatal("create chats grant is not provider-scoped")
+	}
+	alias := chatgrant.AliasFor(DefaultAppAlias, "oc_created")
+	if cfg.ProviderAllowsAmbientChat("commons", alias) || cfg.ProviderAllowsProactiveChat("commons", alias) {
+		t.Fatal("an unknown runtime alias was allowed")
+	}
+	cfg.RuntimeChats = chatgrant.NewMemory()
+	if err := cfg.RuntimeChats.Add(chatgrant.Grant{Provider: "commons", AppAlias: DefaultAppAlias, ChatID: "oc_created", ChatAlias: alias}); err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.ProviderAllowsAmbientChat("commons", alias) || !cfg.ProviderAllowsProactiveChat("commons", alias) {
+		t.Fatal("a created chat is not in the provider's allowlists")
+	}
+	if !cfg.AmbientChatEnabled(DefaultAppAlias, alias) {
+		t.Fatal("ambient ingress ignores the created chat")
+	}
+	if app, chatID, ok := cfg.ResolveChannel(alias); !ok || app != DefaultAppAlias || chatID != "oc_created" {
+		t.Fatalf("resolve = %q %q %v", app, chatID, ok)
+	}
+}
+
+func TestConfiguredChannelsCannotUseTheRuntimeAliasPrefix(t *testing.T) {
+	_, err := loadChatGrantConfig(t, ``, `,"channels":{"agent-chat-x":"oc_x"}`)
+	if err == nil || !strings.Contains(err.Error(), "reserved prefix") {
+		t.Fatalf("err = %v", err)
 	}
 }

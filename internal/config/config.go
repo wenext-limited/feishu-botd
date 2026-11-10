@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"feishu-botd/internal/chatgrant"
 )
 
 const (
@@ -68,6 +70,9 @@ type Config struct {
 	Services       map[string]ServiceConfig
 	DedupeTTL      time.Duration
 	SendTimeout    time.Duration
+	// RuntimeChats holds the chats providers created with CreateAgentChat.
+	// It is shared by every copy of the Config; nil holds none.
+	RuntimeChats *chatgrant.Registry
 }
 
 // AgentProviderConfig binds one agent (and, when configured, legacy command)
@@ -125,6 +130,12 @@ type AgentProviderConfig struct {
 	// the chat. It addresses messages through the same retained routes as
 	// PostAgentMessage, so it requires AllowProactiveMessages.
 	AllowPins bool
+	// AllowCreateChats permits CreateAgentChat, InviteAgentChatMembers, and
+	// RenameAgentChat: creating group chats with the bot as owner. A chat the
+	// provider creates is granted to it at runtime (RuntimeChats), as if it
+	// were named in AmbientChatAliases and ProactiveChatAliases, so it
+	// requires both of those grants and a state dir to keep the grants in.
+	AllowCreateChats bool
 	// WorkingReactionEmoji, when non-empty, is the Feishu emoji key (e.g.
 	// "OnIt") the daemon places on the triggering message for the duration of
 	// a response and removes once it closes. Entirely daemon-driven — the
@@ -210,6 +221,9 @@ func (c Config) ResolveChannel(alias string) (appAlias, chatID string, ok bool) 
 		}
 		chatID = strings.TrimSpace(route.ChatID)
 		return appAlias, chatID, chatID != ""
+	}
+	if grant, granted := c.RuntimeChats.ByAlias(alias); granted {
+		return grant.AppAlias, grant.ChatID, true
 	}
 	if c.ChannelRoutes != nil {
 		return "", "", false
@@ -311,7 +325,8 @@ func (c Config) ProviderAllowsAmbientMessages(provider string) bool {
 func (c Config) ProviderAllowsAmbientChat(provider, chatAlias string) bool {
 	providerCfg, configured := c.AgentProviders[strings.TrimSpace(provider)]
 	return configured && providerCfg.AllowAmbientMessages &&
-		containsChatAlias(providerCfg.AmbientChatAliases, chatAlias)
+		(containsChatAlias(providerCfg.AmbientChatAliases, chatAlias) ||
+			providerCfg.AllowCreateChats && c.RuntimeChats.Granted(provider, normalizeChannelName(chatAlias)))
 }
 
 // ProviderAllowsProactiveMessages reports whether the provider may call
@@ -332,7 +347,15 @@ func (c Config) ProviderAllowsPins(provider string) bool {
 func (c Config) ProviderAllowsProactiveChat(provider, chatAlias string) bool {
 	providerCfg, configured := c.AgentProviders[strings.TrimSpace(provider)]
 	return configured && providerCfg.AllowProactiveMessages &&
-		containsChatAlias(providerCfg.ProactiveChatAliases, chatAlias)
+		(containsChatAlias(providerCfg.ProactiveChatAliases, chatAlias) ||
+			providerCfg.AllowCreateChats && c.RuntimeChats.Granted(provider, normalizeChannelName(chatAlias)))
+}
+
+// ProviderAllowsCreateChats reports whether the provider may call
+// CreateAgentChat, InviteAgentChatMembers, and RenameAgentChat.
+func (c Config) ProviderAllowsCreateChats(provider string) bool {
+	providerCfg, configured := c.AgentProviders[strings.TrimSpace(provider)]
+	return configured && providerCfg.AllowCreateChats
 }
 
 // ProactiveProvidersForChat returns, in deterministic order, every provider
@@ -514,6 +537,7 @@ func LoadFromEnv() (Config, error) {
 			AllowProactiveMessages:   providerCfg.AllowProactiveMessages,
 			ProactiveChatAliases:     cloneStrings(providerCfg.ProactiveChatAliases),
 			AllowPins:                providerCfg.AllowPins,
+			AllowCreateChats:         providerCfg.AllowCreateChats,
 			WorkingReactionEmoji:     providerCfg.WorkingReactionEmoji,
 			WorkingReactionOverrides: providerCfg.WorkingReactionSenderOverrides,
 			AllowedApps:              allowedApps,
@@ -541,6 +565,15 @@ func LoadFromEnv() (Config, error) {
 		if providerCfg.AllowPins && !providerCfg.AllowProactiveMessages {
 			return Config{}, fmt.Errorf("provider %q allow_pins requires allow_proactive_messages", provider)
 		}
+		// A created chat is granted for ambient and proactive messages, and
+		// the grant is kept under state_dir.
+		if providerCfg.AllowCreateChats &&
+			(!providerCfg.AllowProactiveMessages || !providerCfg.AllowAmbientMessages || cfg.StateDir == "") {
+			return Config{}, fmt.Errorf("provider %q allow_create_chats requires allow_ambient_messages, allow_proactive_messages, and state_dir", provider)
+		}
+	}
+	if err := validateRuntimeChatAliasPrefix(cfg); err != nil {
+		return Config{}, err
 	}
 	if err := validateAgentProviderTokens(cfg.AgentProviders, ""); err != nil {
 		return Config{}, err
@@ -642,6 +675,7 @@ type fileAgentProviderConfig struct {
 	AllowProactiveMessages bool               `json:"allow_proactive_messages"`
 	ProactiveChatAliases   []string           `json:"proactive_chat_aliases"`
 	AllowPins              bool               `json:"allow_pins"`
+	AllowCreateChats       bool               `json:"allow_create_chats"`
 	WorkingReactionEmoji   string             `json:"working_reaction_emoji"`
 	// WorkingReactionSenderOverrides maps a sender's Feishu display name to a
 	// working reaction emoji, resolved via a live Contact API call — see
@@ -1337,6 +1371,7 @@ func normalizeAgentProviderConfigs(in map[string]fileAgentProviderConfig) (map[s
 			AllowProactiveMessages:         providerCfg.AllowProactiveMessages,
 			ProactiveChatAliases:           proactiveChats,
 			AllowPins:                      providerCfg.AllowPins,
+			AllowCreateChats:               providerCfg.AllowCreateChats,
 			WorkingReactionEmoji:           providerCfg.WorkingReactionEmoji,
 			WorkingReactionSenderOverrides: reactionOverrides,
 		}
@@ -1419,6 +1454,8 @@ func validateAgentProviderChatGrants(cfg Config) error {
 			{"allow_proactive_messages", "proactive_chat_aliases", providerCfg.AllowProactiveMessages, providerCfg.ProactiveChatAliases},
 		} {
 			switch {
+			case grant.allowed && len(grant.aliases) == 0 && providerCfg.AllowCreateChats:
+				// The chats it creates are its grant.
 			case grant.allowed && len(grant.aliases) == 0:
 				return fmt.Errorf("provider %q %s requires at least one %s entry", provider, grant.flag, grant.field)
 			case !grant.allowed && len(grant.aliases) > 0:
@@ -1429,6 +1466,25 @@ func validateAgentProviderChatGrants(cfg Config) error {
 					return err
 				}
 			}
+		}
+	}
+	return nil
+}
+
+// validateRuntimeChatAliasPrefix keeps configured channel names out of the
+// runtime-grant alias space, so a created chat's alias cannot shadow one.
+func validateRuntimeChatAliasPrefix(cfg Config) error {
+	names := make([]string, 0, len(cfg.Channels)+len(cfg.ChannelRoutes))
+	for alias := range cfg.Channels {
+		names = append(names, alias)
+	}
+	for alias := range cfg.ChannelRoutes {
+		names = append(names, alias)
+	}
+	sort.Strings(names)
+	for _, alias := range names {
+		if chatgrant.IsAlias(normalizeChannelName(alias)) {
+			return fmt.Errorf("channel alias %q uses the reserved prefix %q", alias, chatgrant.AliasPrefix)
 		}
 	}
 	return nil
