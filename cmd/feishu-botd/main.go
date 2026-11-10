@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"feishu-botd/internal/chatgrant"
 	"feishu-botd/internal/config"
 	"feishu-botd/internal/dedupe"
 	"feishu-botd/internal/feishu"
@@ -85,6 +86,15 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		return err
 	}
 
+	// Chats providers created with CreateAgentChat: loaded before anything
+	// copies cfg, so the service and every receiver share one registry.
+	if cfg.StateDir != "" {
+		grants, err := chatgrant.Open(cfg.StateDir)
+		if err != nil {
+			return fmt.Errorf("open agent chat grants: %w", err)
+		}
+		cfg.RuntimeChats = grants
+	}
 	store := dedupe.NewMemoryStore(cfg.DedupeTTL)
 	svc := service.NewMultiAppService(cfg, senders, store, logger)
 	if cfg.StateDir != "" {
@@ -156,6 +166,10 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 			BotNames:                    app.Commands.BotNames,
 			AmbientChat: func(chatAlias string) bool {
 				return cfg.AmbientChatEnabled(appAlias, chatAlias)
+			},
+			RuntimeChatAlias: func(chatID string) (string, bool) {
+				grant, ok := cfg.RuntimeChats.ByChat(appAlias, chatID)
+				return grant.ChatAlias, ok
 			},
 			ConnectionStateChanged: func(alias string, state feishu.ConnectionState) {
 				svc.SetAppConnectionState(alias, string(state))

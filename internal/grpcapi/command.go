@@ -301,6 +301,56 @@ func (c *commandServer) PinAgentMessage(ctx context.Context, in *pb.PinAgentMess
 	return &pb.PinAgentMessageResponse{}, nil
 }
 
+func (c *commandServer) CreateAgentChat(ctx context.Context, in *pb.CreateAgentChatRequest) (*pb.CreateAgentChatResponse, error) {
+	if err := authorizeAgentChats(ctx, in.GetProvider()); err != nil {
+		return nil, err
+	}
+	receipt, apiErr := c.svc.CreateAgentChat(ctx, service.CreateAgentChatInput{
+		Provider:      in.GetProvider(),
+		OperationID:   in.GetOperationId(),
+		Name:          in.GetName(),
+		Description:   in.GetDescription(),
+		MemberOpenIDs: in.GetMemberOpenIds(),
+	})
+	if apiErr != nil {
+		return nil, grpcError(apiErr, requestIDFromContext(ctx))
+	}
+	return &pb.CreateAgentChatResponse{
+		ChatAlias:      receipt.ChatAlias,
+		Duplicate:      receipt.Duplicate,
+		InvalidOpenIds: receipt.InvalidOpenIDs,
+	}, nil
+}
+
+func (c *commandServer) InviteAgentChatMembers(ctx context.Context, in *pb.InviteAgentChatMembersRequest) (*pb.InviteAgentChatMembersResponse, error) {
+	if err := authorizeAgentChats(ctx, in.GetProvider()); err != nil {
+		return nil, err
+	}
+	receipt, apiErr := c.svc.InviteAgentChatMembers(ctx, service.InviteAgentChatMembersInput{
+		Provider:      in.GetProvider(),
+		ChatAlias:     in.GetChatAlias(),
+		MemberOpenIDs: in.GetMemberOpenIds(),
+	})
+	if apiErr != nil {
+		return nil, grpcError(apiErr, requestIDFromContext(ctx))
+	}
+	return &pb.InviteAgentChatMembersResponse{InvalidOpenIds: receipt.InvalidOpenIDs}, nil
+}
+
+func (c *commandServer) RenameAgentChat(ctx context.Context, in *pb.RenameAgentChatRequest) (*pb.RenameAgentChatResponse, error) {
+	if err := authorizeAgentChats(ctx, in.GetProvider()); err != nil {
+		return nil, err
+	}
+	if apiErr := c.svc.RenameAgentChat(ctx, service.RenameAgentChatInput{
+		Provider:  in.GetProvider(),
+		ChatAlias: in.GetChatAlias(),
+		Name:      in.GetName(),
+	}); apiErr != nil {
+		return nil, grpcError(apiErr, requestIDFromContext(ctx))
+	}
+	return &pb.RenameAgentChatResponse{}, nil
+}
+
 // agentCardContentFromProto maps the wire enum onto the service's. An unknown
 // value stays out of range so the service rejects it rather than dropping it.
 func agentCardContentFromProto(in *pb.AgentCardContent) service.AgentCardContent {

@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"feishu-botd/internal/chatgrant"
 	"feishu-botd/internal/config"
 	"feishu-botd/internal/dedupe"
 	"feishu-botd/internal/feishu"
@@ -44,6 +45,7 @@ type appBackend struct {
 	poster          feishu.MessagePoster
 	agentCards      feishu.AgentCards
 	pinner          feishu.MessagePinner
+	chats           feishu.AgentChats
 }
 
 // Service owns the send/dedupe/readiness flow. It is safe for concurrent use
@@ -71,6 +73,9 @@ type Service struct {
 	agentCardPosts   *agentPostLedger
 	agentCardUpdates *agentCardUpdateLedger
 	agentCardLanes   *agentCardLanes
+	// agentChatMu serializes CreateAgentChat, so one operation id cannot
+	// create two chats.
+	agentChatMu sync.Mutex
 }
 
 type agentOwnershipStore interface {
@@ -110,6 +115,10 @@ func newService(
 	if logger == nil {
 		logger = slog.Default()
 	}
+	// Set before anything binds a cfg method value, so every copy shares it.
+	if cfg.RuntimeChats == nil {
+		cfg.RuntimeChats = chatgrant.NewMemory()
+	}
 	backends := make(map[string]appBackend, len(senders))
 	for rawAlias, sender := range senders {
 		alias := effectiveAppAlias(rawAlias)
@@ -140,6 +149,9 @@ func newService(
 		}
 		if pinner, ok := sender.(feishu.MessagePinner); ok {
 			backend.pinner = pinner
+		}
+		if chats, ok := sender.(feishu.AgentChats); ok {
+			backend.chats = chats
 		}
 		backends[alias] = backend
 	}

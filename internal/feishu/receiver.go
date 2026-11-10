@@ -34,6 +34,11 @@ type CommandReceiverConfig struct {
 	BotNames                    []string
 	ChatTitleLookup             ChatTitleLookup
 
+	// RuntimeChatAlias resolves a chat a provider created with
+	// CreateAgentChat, which is in no static channel map, to its alias. Such
+	// a chat is handled like a configured one. Nil resolves none.
+	RuntimeChatAlias func(chatID string) (string, bool)
+
 	// AmbientChat reports whether an unmentioned, non-reply group message in
 	// chatAlias may become an ambient candidate, because some provider holds
 	// the ambient grant for that chat. Nil keeps the historical behavior of
@@ -510,6 +515,9 @@ func (r *CommandReceiver) CommandFromEvent(event *larkim.P2MessageReceiveV1) (In
 	case "group", "topic_group":
 		var ok bool
 		chatAlias, ok = r.chatAliases[chatID]
+		if !ok && r.cfg.RuntimeChatAlias != nil {
+			chatAlias, ok = r.cfg.RuntimeChatAlias(chatID)
+		}
 		if !ok {
 			if !r.cfg.AllowUnconfiguredGroupChats {
 				return InboundCommand{}, false

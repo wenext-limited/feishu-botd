@@ -851,3 +851,26 @@ func expectedCardActionDeliveryID(eventID string) string {
 func ptr(s string) *string {
 	return &s
 }
+
+func TestCommandFromEventHandlesARuntimeGrantedChatLikeAConfiguredOne(t *testing.T) {
+	r := NewCommandReceiver(CommandReceiverConfig{
+		AppID:     "cli_test",
+		AppSecret: "secret",
+		Channels:  map[string]string{"ops": "oc_ops"},
+		BotOpenID: "ou_bot",
+		RuntimeChatAlias: func(chatID string) (string, bool) {
+			if chatID == "oc_created" {
+				return "agent-chat-0123", true
+			}
+			return "", false
+		},
+	}, nil, nil)
+	mention := &larkim.MentionEvent{Key: ptr("@_user_1"), MentionedType: ptr("app")}
+	cmd, ok := r.CommandFromEvent(messageEvent("evt_rt", "om_rt", "oc_created", "@_user_1 status", mention))
+	if !ok || cmd.ChatAlias != "agent-chat-0123" || cmd.UnconfiguredGroup || cmd.ChatID != "oc_created" {
+		t.Fatalf("command = %#v ok=%v", cmd, ok)
+	}
+	if _, ok := r.CommandFromEvent(messageEvent("evt_other", "om_other", "oc_other", "@_user_1 status", mention)); ok {
+		t.Fatal("an unknown, ungranted group was accepted")
+	}
+}

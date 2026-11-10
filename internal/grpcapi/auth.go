@@ -33,6 +33,7 @@ type providerPrincipal struct {
 	allowAmbientMessages   bool
 	allowProactiveMessages bool
 	allowPins              bool
+	allowCreateChats       bool
 }
 
 type providerCredential struct {
@@ -81,6 +82,7 @@ func newProviderAuthenticator(providers map[string]config.AgentProviderConfig) p
 				allowAmbientMessages:   providerCfg.AllowAmbientMessages,
 				allowProactiveMessages: providerCfg.AllowProactiveMessages,
 				allowPins:              providerCfg.AllowPins,
+				allowCreateChats:       providerCfg.AllowCreateChats,
 			},
 			digest: sha256.Sum256([]byte(providerCfg.AuthToken)),
 		})
@@ -112,7 +114,10 @@ func isAgentMethod(fullMethod string) bool {
 		pb.CommandService_PostAgentMessage_FullMethodName,
 		pb.CommandService_PostAgentCard_FullMethodName,
 		pb.CommandService_UpdateAgentCard_FullMethodName,
-		pb.CommandService_PinAgentMessage_FullMethodName:
+		pb.CommandService_PinAgentMessage_FullMethodName,
+		pb.CommandService_CreateAgentChat_FullMethodName,
+		pb.CommandService_InviteAgentChatMembers_FullMethodName,
+		pb.CommandService_RenameAgentChat_FullMethodName:
 		return true
 	default:
 		return false
@@ -308,6 +313,20 @@ func authorizeAgentPin(ctx context.Context, requested string) error {
 	}
 	principal, _ := authenticatedProvider(ctx)
 	if !principal.allowPins {
+		return providerScopeDenied(ctx)
+	}
+	return nil
+}
+
+// authorizeAgentChats gates CreateAgentChat, InviteAgentChatMembers, and
+// RenameAgentChat. Which chats may be invited to or renamed is the service's
+// narrower check against the chats the provider created.
+func authorizeAgentChats(ctx context.Context, requested string) error {
+	if err := requireProviderIdentity(ctx, requested); err != nil {
+		return err
+	}
+	principal, _ := authenticatedProvider(ctx)
+	if !principal.allowCreateChats {
 		return providerScopeDenied(ctx)
 	}
 	return nil
