@@ -73,6 +73,10 @@ type Config struct {
 	// RuntimeChats holds the chats providers created with CreateAgentChat.
 	// It is shared by every copy of the Config; nil holds none.
 	RuntimeChats *chatgrant.Registry
+	// SourceFiles lists every file this Config was read from: the config
+	// file and each bearer-token file. A reload watcher hashes them to see
+	// that the configuration on disk has changed.
+	SourceFiles []string
 }
 
 // AgentProviderConfig binds one agent (and, when configured, legacy command)
@@ -480,6 +484,10 @@ func LoadFromEnv() (Config, error) {
 		return Config{}, err
 	}
 
+	var sourceFiles []string
+	if path := strings.TrimSpace(os.Getenv("FEISHU_BOTD_CONFIG")); path != "" {
+		sourceFiles = append(sourceFiles, path)
+	}
 	legacyCommands := commandConfigFromEnv(fileCfg.Commands)
 	legacyChannels := mergeStringMaps(fileCfg.Channels, loadChannels(os.Environ()))
 	cfg := Config{
@@ -540,6 +548,7 @@ func LoadFromEnv() (Config, error) {
 		if err != nil {
 			return Config{}, fmt.Errorf("load provider %q token: %w", provider, err)
 		}
+		sourceFiles = append(sourceFiles, providerCfg.AuthTokenFile)
 		allowedApps := []string(nil)
 		allowedAppsConfigured := providerCfg.AllowedApps.Set
 		if allowedAppsConfigured {
@@ -646,10 +655,12 @@ func LoadFromEnv() (Config, error) {
 			return Config{}, fmt.Errorf("general bearer token must be at least %d bytes", minimumBearerTokenBytes)
 		}
 		cfg.AuthToken = token
+		sourceFiles = append(sourceFiles, tokenFile)
 	}
 	if err := validateAgentProviderTokens(cfg.AgentProviders, cfg.AuthToken); err != nil {
 		return Config{}, err
 	}
+	cfg.SourceFiles = sortedUnique(sourceFiles)
 	return cfg, nil
 }
 
