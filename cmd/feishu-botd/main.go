@@ -40,6 +40,9 @@ var errReceiverUnavailable = errors.New("Feishu receiver unavailable")
 type componentResult struct {
 	component string
 	err       error
+	// receiver is set for an app receiver's runtime exit, so the run loop
+	// can tell a reload's deliberate stop from a failure.
+	receiver appReceiver
 }
 
 type appReceiver interface {
@@ -56,15 +59,31 @@ func main() {
 		os.Exit(2)
 	}
 
+	// Register for SIGHUP before anything slow: its default action would
+	// terminate the daemon.
+	hup := make(chan os.Signal, 1)
+	signal.Notify(hup, syscall.SIGHUP)
+	defer signal.Stop(hup)
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := run(ctx, cfg, logger); err != nil {
+	if err := run(ctx, cfg, logger, runOptions{reload: hup, watchInterval: watchIntervalFromEnv(logger)}); err != nil {
 		logger.Error("daemon stopped", "error", err)
 		os.Exit(1)
 	}
 }
 
-func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
+// runOptions carries process-level wiring that is not configuration.
+type runOptions struct {
+	// reload delivers a request to reload the config (SIGHUP). Nil never
+	// does.
+	reload <-chan os.Signal
+	// watchInterval is how often the config and token files are checked
+	// for changes; zero turns the watcher off.
+	watchInterval time.Duration
+}
+
+func run(ctx context.Context, cfg config.Config, logger *slog.Logger, opts runOptions) error {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -97,6 +116,9 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	}
 	store := dedupe.NewMemoryStore(cfg.DedupeTTL)
 	svc := service.NewMultiAppService(cfg, senders, store, logger)
+	// routes stays nil unless a provider may post proactively; a reload
+	// re-keys it when apps change.
+	var routes *messageroute.Store
 	if cfg.StateDir != "" {
 		owners, err := ownership.Open(cfg.StateDir, agentOwnershipTTL)
 		if err != nil {
@@ -104,11 +126,12 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		}
 		svc.SetAgentOwnershipStore(owners)
 		if cfg.AnyProviderAllowsProactiveMessages() {
-			routes, err := messageroute.Open(cfg.StateDir, agentMessageRouteTTL, messageRouteKeys(apps), time.Now())
+			opened, err := messageroute.Open(cfg.StateDir, agentMessageRouteTTL, messageRouteKeys(apps), time.Now())
 			if err != nil {
 				return fmt.Errorf("open agent message route state: %w", err)
 			}
-			defer routes.Close()
+			defer opened.Close()
+			routes = opened
 			svc.SetAgentMessageRouteStore(routes)
 		}
 		if err := svc.OpenAgentConversationLeases(cfg.StateDir); err != nil {
@@ -121,115 +144,27 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	runCtx, cancelRun := context.WithCancel(ctx)
 	defer cancelRun()
 
-	scriptSubs, err := startScriptExecutors(runCtx, apps, aliases, svc, logger)
-	if err != nil {
-		return err
-	}
+	componentCh := make(chan componentResult, len(aliases)+16)
+	manager := newAppManager(runCtx, svc, logger, componentCh, startupTimeout(cfg))
 	receivers := make(map[string]appReceiver, len(aliases))
 	for _, alias := range aliases {
-		appAlias := alias
-		app := apps[appAlias]
-		var commandHandler feishu.CommandHandler
-		if app.Commands.Enabled {
-			commandHandler = func(ctx context.Context, cmd feishu.InboundCommand) error {
-				_, apiErr := svc.DispatchCommand(ctx, service.CommandInput{
-					AppAlias:          cmd.AppAlias,
-					DeliveryID:        cmd.DeliveryID,
-					Command:           cmd.Command,
-					Text:              cmd.Text,
-					Prompt:            cmd.Prompt,
-					ConversationID:    cmd.ConversationID,
-					ChatAlias:         cmd.ChatAlias,
-					SenderID:          cmd.SenderID,
-					Metadata:          cmd.Metadata,
-					ConversationTitle: cmd.ConversationTitle,
-					ChatID:            cmd.ChatID,
-					UnconfiguredGroup: cmd.UnconfiguredGroup,
-					UnmentionedReply:  cmd.UnmentionedReply,
-					AmbientOnly:       cmd.AmbientOnly,
-					HumanSender:       cmd.HumanSender,
-					NamedPrompt:       cmd.NamedPrompt,
-					Mentions:          agentMentions(cmd.Mentions),
-				})
-				if apiErr != nil {
-					return apiErr
-				}
-				return nil
-			}
-		}
-		receiver := feishu.NewCommandReceiver(feishu.CommandReceiverConfig{
-			AppAlias:                    appAlias,
-			AppID:                       app.AppID,
-			AppSecret:                   app.AppSecret,
-			Channels:                    app.Channels,
-			AllowUnconfiguredGroupChats: app.Commands.AllowUnconfiguredGroupChats,
-			BotOpenID:                   app.Commands.BotOpenID,
-			BotUserID:                   app.Commands.BotUserID,
-			BotUnionID:                  app.Commands.BotUnionID,
-			BotNames:                    app.Commands.BotNames,
-			AmbientChat: func(chatAlias string) bool {
-				return cfg.AmbientChatEnabled(appAlias, chatAlias)
-			},
-			RuntimeChatAlias: func(chatID string) (string, bool) {
-				grant, ok := cfg.RuntimeChats.ByChat(appAlias, chatID)
-				return grant.ChatAlias, ok
-			},
-			ConnectionStateChanged: func(alias string, state feishu.ConnectionState) {
-				svc.SetAppConnectionState(alias, string(state))
-			},
-		}, commandHandler, logger)
-		if app.Commands.Enabled {
-			receiver.SetCardActionHandler(func(ctx context.Context, action feishu.InboundCardAction) error {
-				if apiErr := svc.DispatchInboundCardAction(ctx, action); apiErr != nil {
-					return apiErr
-				}
-				return nil
-			})
-		}
-		receiver.SetMessageReactionHandler(func(ctx context.Context, reaction feishu.InboundMessageReaction) error {
-			operation := service.MessageReactionUnspecified
-			switch reaction.Operation {
-			case feishu.MessageReactionAdded:
-				operation = service.MessageReactionAdded
-			case feishu.MessageReactionRemoved:
-				operation = service.MessageReactionRemoved
-			}
-			if apiErr := svc.DispatchAgentMessageReaction(ctx, service.AgentMessageReactionInput{
-				AppAlias:     reaction.AppAlias,
-				DeliveryID:   reaction.DeliveryID,
-				MessageRef:   reaction.MessageRef,
-				SenderID:     reaction.SenderID,
-				ReactionType: reaction.ReactionType,
-				Operation:    operation,
-			}); apiErr != nil {
-				return apiErr
-			}
-			return nil
-		})
-		receivers[appAlias] = receiver
+		receivers[alias] = manager.build(alias, apps[alias])
 	}
-
-	var cleanupOnce sync.Once
-	cleanupApps := func() {
-		cleanupOnce.Do(func() {
-			for _, alias := range aliases {
-				receivers[alias].Close()
-			}
-			for _, sub := range scriptSubs {
-				sub.Close()
-			}
-		})
+	for _, alias := range aliases {
+		if err := manager.startScripts(alias); err != nil {
+			manager.closeAll()
+			return err
+		}
 	}
-	defer cleanupApps()
+	defer manager.closeAll()
 
 	// Receiver Start blocks for the lifetime of a successful SDK connection.
 	// Each wrapper reports initial readiness separately, then forwards only an
 	// unexpected later return to the shared component channel.
-	componentCh := make(chan componentResult, len(receivers)+4)
 	startupCh := startAppReceivers(runCtx, aliases, receivers, componentCh)
 	if err := waitForAppReceivers(runCtx, startupTimeout(cfg), len(receivers), startupCh); err != nil {
 		cancelRun()
-		cleanupApps()
+		manager.closeAll()
 		if ctx.Err() != nil {
 			return nil
 		}
@@ -239,27 +174,48 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	listenerCount := startListeners(runCtx, cfg, httpServer, grpcServer, componentCh)
 	if listenerCount == 0 {
 		cancelRun()
-		cleanupApps()
+		manager.closeAll()
 		return errors.New("no listeners are configured")
 	}
 
+	reloads := &reloader{
+		svc:        svc,
+		httpServer: httpServer,
+		grpcServer: grpcServer,
+		apps:       manager,
+		routes:     routes,
+		logger:     logger,
+		timeout:    startupTimeout(cfg),
+		load:       config.LoadFromEnv,
+	}
+	go reloads.serve(runCtx, opts.reload, opts.watchInterval)
+
 	var runErr error
-	select {
-	case <-ctx.Done():
-		logger.Info("shutdown requested")
-	case result := <-componentCh:
-		switch {
-		case result.err == nil:
-			runErr = fmt.Errorf("%s stopped unexpectedly", result.component)
-		case errors.Is(result.err, http.ErrServerClosed):
-			// Treat the HTTP server's normal shutdown sentinel as clean.
-		default:
-			runErr = fmt.Errorf("%s stopped: %w", result.component, result.err)
+wait:
+	for {
+		select {
+		case <-ctx.Done():
+			logger.Info("shutdown requested")
+			break wait
+		case result := <-componentCh:
+			// A receiver a reload replaced or removed is expected to stop.
+			if result.receiver != nil && !manager.isCurrent(result.receiver) {
+				continue
+			}
+			switch {
+			case result.err == nil:
+				runErr = fmt.Errorf("%s stopped unexpectedly", result.component)
+			case errors.Is(result.err, http.ErrServerClosed):
+				// Treat the HTTP server's normal shutdown sentinel as clean.
+			default:
+				runErr = fmt.Errorf("%s stopped: %w", result.component, result.err)
+			}
+			break wait
 		}
 	}
 
 	cancelRun()
-	cleanupApps()
+	manager.closeAll()
 	if err := shutdownServers(httpServer, grpcServer); err != nil {
 		if runErr != nil {
 			return errors.Join(runErr, err)
@@ -376,6 +332,7 @@ func startAppReceivers(
 				componentCh <- componentResult{
 					component: fmt.Sprintf("Feishu app %q receiver", appAlias),
 					err:       safeReceiverError(err),
+					receiver:  receiver,
 				}
 			case err := <-done:
 				if err == nil {

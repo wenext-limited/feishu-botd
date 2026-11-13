@@ -202,6 +202,47 @@ The corresponding private config uses
 "/run/secrets/example-agent-token"`. Do not mount the general bearer into the
 agent container.
 
+## Reloading configuration
+
+botd re-reads its configuration without a restart. It reloads on `SIGHUP`
+and, when `FEISHU_BOTD_CONFIG` is set, whenever the config file or any token
+file it names changes. The watcher checks file contents every two seconds and
+waits for two checks to agree, so it never reads a half-written file. Set
+`FEISHU_BOTD_CONFIG_WATCH=off` to rely on `SIGHUP` alone, or to a duration
+such as `5s` to change the interval.
+
+```sh
+launchctl kill HUP gui/$(id -u)/technology.wenext.feishu-botd   # launchd
+docker compose kill -s HUP feishu-botd                          # Compose
+```
+
+A reload validates the whole new config first, using the same loader as
+startup, and checks the credentials of every app it adds or re-credits. If
+anything fails, botd logs `config reload rejected` with the reason and keeps
+running on the previous config. Otherwise it applies only what changed:
+
+| Change | Effect |
+| --- | --- |
+| Channels, `default_channel`, `services`, commands, bot identity, scripts, `send_timeout_seconds` | Applied in place. No Feishu connection is touched. |
+| An app added or removed | Only that app's connection starts or stops. |
+| An app's `app_id` or `app_secret` | Only that app reconnects; its old connection closes once the new one is up. |
+| A provider added | Its token works at once. |
+| A provider's token file contents or grants changed, or the provider removed | Only that provider's open streams end with `UNAVAILABLE` (`provider_reconfigured`); a client that reconnects gets the new grants. Every other provider's streams stay open. |
+| `listeners.auth_token_file` contents | The general bearer changes at once. |
+
+These settings take effect only after a restart: `listeners.*` socket paths
+and binds, `listeners.allow_non_loopback_bind`, `state_dir`, and
+`dedupe_ttl_seconds`. So does the reply-route journal when the first provider
+gets `allow_proactive_messages` (until then its reply routes live in memory).
+A reload that changes one of them applies everything else and logs a warning
+naming them. `/readyz` lists them under `config.restart_required` until the
+restart. Environment variables are read once, at process start.
+
+Each applied reload logs `config reload applied` with the new generation, the
+apps started, stopped, reconnected, or updated, and the providers added or
+reset. `/readyz` and gRPC `Ready` report the generation and last outcome under
+`config` (see [api.md](./api.md#get-readyz)).
+
 ## macOS launchd
 
 On a Mac whose agent providers also run natively, run the daemon natively too:
