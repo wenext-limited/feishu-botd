@@ -83,7 +83,7 @@ func (s *Service) UploadAgentImage(ctx context.Context, in AgentImageUploadInput
 	case len(in.Data) == 0:
 		return AgentImageUploadResult{}, notify.BadRequest("missing_image", "image bytes are required")
 	}
-	if !s.cfg.ProviderAllowsImageUpload(provider) {
+	if !s.cfg().ProviderAllowsImageUpload(provider) {
 		return AgentImageUploadResult{}, notify.NewAPIError(403, "provider_scope_denied", "provider capability is not allowed", false)
 	}
 
@@ -110,7 +110,7 @@ func (s *Service) UploadAgentImage(ctx context.Context, in AgentImageUploadInput
 		}, nil
 	}
 
-	callCtx, cancel := context.WithTimeout(ctx, s.cfg.SendTimeout)
+	callCtx, cancel := context.WithTimeout(ctx, s.cfg().SendTimeout)
 	defer cancel()
 	imageKey, mediaType, err := uploader.UploadImage(callCtx, in.Data)
 	if err != nil {
@@ -152,7 +152,7 @@ func (s *Service) resolveImageUploadTarget(
 		operationID,
 		func(resolvedApp string) bool { return s.appAllowed(provider, resolvedApp) },
 		now,
-		s.cfg.SendTimeout,
+		s.cfg().SendTimeout,
 	)
 	if !ok {
 		return imageUploadTarget{}, unknownConversationError()

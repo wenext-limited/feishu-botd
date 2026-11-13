@@ -32,7 +32,7 @@ func (s *Service) GetAgentAttachedContext(ctx context.Context, in AgentAttachedC
 	if len(provider) > 64 || len(deliveryID) > 160 {
 		return feishu.AttachedContext{}, notify.BadRequest("field_too_large", "one or more fields are too large")
 	}
-	if !s.cfg.ProviderAllowsAttachedContext(provider) {
+	if !s.cfg().ProviderAllowsAttachedContext(provider) {
 		return feishu.AttachedContext{}, notify.NewAPIError(403, "provider_scope_denied", "provider capability is not allowed", false)
 	}
 
@@ -55,7 +55,7 @@ func (s *Service) GetAgentAttachedContext(ctx context.Context, in AgentAttachedC
 	// is already conjoined with ProviderAllowsAttachedContext, so a provider
 	// that only has allow_attached_video (misconfigured, since it is inert
 	// alone) still gets the pre-video-carry placeholder behavior.
-	request.AllowVideo = s.cfg.ProviderAllowsAttachedVideo(provider)
+	request.AllowVideo = s.cfg().ProviderAllowsAttachedVideo(provider)
 
 	result, err := backend.attachedContext.LookupAttachedContext(ctx, request)
 	if err != nil {

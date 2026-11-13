@@ -28,8 +28,8 @@ func (s *Service) Ready(ctx context.Context) (bool, map[string]string) {
 	}
 	ready := true
 
-	apps := s.cfg.EffectiveApps()
-	aliases := s.cfg.AppAliases()
+	apps := s.cfg().EffectiveApps()
+	aliases := s.cfg().AppAliases()
 	if len(aliases) == 0 {
 		checks["feishu_auth"] = "missing_credentials"
 		ready = false
@@ -41,7 +41,7 @@ func (s *Service) Ready(ctx context.Context) (bool, map[string]string) {
 			break
 		}
 	}
-	if len(s.cfg.Channels) == 0 && !commandsEnabled {
+	if len(s.cfg().Channels) == 0 && !commandsEnabled {
 		checks["channels"] = "missing_channels"
 		ready = false
 	}
@@ -56,7 +56,7 @@ func (s *Service) Ready(ctx context.Context) (bool, map[string]string) {
 		err   error
 	}
 	authResults := make(chan authCheckResult, len(aliases))
-	checkCtx, cancelAuthChecks := context.WithTimeout(ctx, s.cfg.SendTimeout)
+	checkCtx, cancelAuthChecks := context.WithTimeout(ctx, s.cfg().SendTimeout)
 	defer cancelAuthChecks()
 	pending := make(map[string]struct{}, len(aliases))
 	for _, alias := range aliases {

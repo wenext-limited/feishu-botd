@@ -36,6 +36,9 @@ func (c *commandServer) Subscribe(in *pb.SubscribeRequest, stream pb.CommandServ
 			return nil
 		case cmd, ok := <-sub.C:
 			if !ok {
+				if sub.ClosedByReload() {
+					return providerReconfigured(stream.Context())
+				}
 				return nil
 			}
 			if err := stream.Send(commandToProto(cmd)); err != nil {
@@ -96,6 +99,9 @@ func (c *commandServer) SubscribeAgentEvents(in *pb.SubscribeAgentEventsRequest,
 			return nil
 		case event, ok := <-sub.C:
 			if !ok {
+				if sub.ClosedByReload() {
+					return providerReconfigured(stream.Context())
+				}
 				return nil
 			}
 			if err := stream.Send(agentEventToProto(event)); err != nil {

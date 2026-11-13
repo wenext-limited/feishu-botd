@@ -226,6 +226,13 @@ func providerIdentityMismatch(ctx context.Context) error {
 	return grpcError(notify.NewAPIError(403, "provider_identity_mismatch", "provider does not match authenticated credential", false), requestIDFromContext(ctx))
 }
 
+// providerReconfigured ends a provider's stream after a config reload changed
+// its token or grants. Unavailable tells a well-behaved client to reconnect,
+// which re-authenticates it under the new config.
+func providerReconfigured(ctx context.Context) error {
+	return grpcError(notify.NewAPIError(503, "provider_reconfigured", "provider configuration changed; reconnect", true), requestIDFromContext(ctx))
+}
+
 func providerScopeDenied(ctx context.Context) error {
 	return grpcError(notify.NewAPIError(403, "provider_scope_denied", "requested provider capability is not allowed", false), requestIDFromContext(ctx))
 }
@@ -378,24 +385,54 @@ func normalizeSubscriptionCommand(command string) string {
 	return strings.ToLower(strings.TrimLeft(strings.TrimSpace(command), "/"))
 }
 
-func authUnaryInterceptor(token string, scopeLegacy bool) grpc.UnaryServerInterceptor {
+// authState is everything the interceptors check a credential against. The
+// server swaps it whole on a config reload, so one call never sees half of
+// an old config and half of a new one.
+type authState struct {
+	providers    providerAuthenticator
+	generalToken string
+	// scopeLegacy puts the legacy Subscribe/Respond RPCs behind provider
+	// credentials and Unix callers behind the general bearer; it is on
+	// whenever any agent provider is configured.
+	scopeLegacy bool
+}
+
+func newAuthState(cfg config.Config) *authState {
+	return &authState{
+		providers:    newProviderAuthenticator(cfg.AgentProviders),
+		generalToken: cfg.AuthToken,
+		scopeLegacy:  len(cfg.AgentProviders) > 0,
+	}
+}
+
+// generalAuthRequired reports whether a non-provider, non-health RPC needs
+// the general bearer. TCP always does; Unix does once providers exist.
+func (a *authState) generalAuthRequired(requireAuth bool) bool {
+	return requireAuth || a.scopeLegacy
+}
+
+func authUnaryInterceptor(state func() *authState, requireAuth bool) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-		if isHealthMethod(info.FullMethod) || requiresProviderAuth(info.FullMethod, scopeLegacy) {
+		auth := state()
+		if !auth.generalAuthRequired(requireAuth) ||
+			isHealthMethod(info.FullMethod) || requiresProviderAuth(info.FullMethod, auth.scopeLegacy) {
 			return handler(ctx, req)
 		}
-		if !authorized(ctx, token) {
+		if !authorized(ctx, auth.generalToken) {
 			return nil, unauthenticated(ctx)
 		}
 		return handler(ctx, req)
 	}
 }
 
-func authStreamInterceptor(token string, scopeLegacy bool) grpc.StreamServerInterceptor {
+func authStreamInterceptor(state func() *authState, requireAuth bool) grpc.StreamServerInterceptor {
 	return func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
-		if isHealthMethod(info.FullMethod) || requiresProviderAuth(info.FullMethod, scopeLegacy) {
+		auth := state()
+		if !auth.generalAuthRequired(requireAuth) ||
+			isHealthMethod(info.FullMethod) || requiresProviderAuth(info.FullMethod, auth.scopeLegacy) {
 			return handler(srv, ss)
 		}
-		if !authorized(ss.Context(), token) {
+		if !authorized(ss.Context(), auth.generalToken) {
 			return unauthenticated(ss.Context())
 		}
 		return handler(srv, ss)
@@ -405,12 +442,13 @@ func authStreamInterceptor(token string, scopeLegacy bool) grpc.StreamServerInte
 // providerAuth interceptors are installed on every listener, including Unix
 // sockets. Socket access establishes local reachability; the provider-specific
 // bearer establishes which logical provider that peer is allowed to act as.
-func providerAuthUnaryInterceptor(authenticator providerAuthenticator, scopeLegacy bool) grpc.UnaryServerInterceptor {
+func providerAuthUnaryInterceptor(state func() *authState) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-		if !requiresProviderAuth(info.FullMethod, scopeLegacy) {
+		auth := state()
+		if !requiresProviderAuth(info.FullMethod, auth.scopeLegacy) {
 			return handler(ctx, req)
 		}
-		principal, ok := authenticator.authenticate(ctx)
+		principal, ok := auth.providers.authenticate(ctx)
 		if !ok {
 			return nil, providerUnauthenticated(ctx)
 		}
@@ -418,12 +456,13 @@ func providerAuthUnaryInterceptor(authenticator providerAuthenticator, scopeLega
 	}
 }
 
-func providerAuthStreamInterceptor(authenticator providerAuthenticator, scopeLegacy bool) grpc.StreamServerInterceptor {
+func providerAuthStreamInterceptor(state func() *authState) grpc.StreamServerInterceptor {
 	return func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
-		if !requiresProviderAuth(info.FullMethod, scopeLegacy) {
+		auth := state()
+		if !requiresProviderAuth(info.FullMethod, auth.scopeLegacy) {
 			return handler(srv, ss)
 		}
-		principal, ok := authenticator.authenticate(ss.Context())
+		principal, ok := auth.providers.authenticate(ss.Context())
 		if !ok {
 			return providerUnauthenticated(ss.Context())
 		}

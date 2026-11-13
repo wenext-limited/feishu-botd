@@ -36,6 +36,24 @@ adds `feishu_auth.<alias>` (`ok`, `missing_credentials`, or `unavailable`) and
 state other than `connected` returns `503 unready`. It does not send a test
 message or expose SDK error text.
 
+A `config` object beside `checks` reports the config botd is running on. It is
+informational and never makes botd unready:
+
+```json
+"config": {
+  "generation": 3,
+  "last_reload": "ok",
+  "last_reload_at": "2026-11-13T09:30:00Z",
+  "restart_required": ["listeners.grpc_socket"]
+}
+```
+
+`generation` is 1 at start and goes up by one for every applied reload.
+`last_reload` is `""` before any reload, then `ok` or `rejected` (botd kept
+the previous config). `restart_required` lists settings changed on disk that
+take effect only after a restart. gRPC `BotdHealthService.Ready` returns the
+same fields as `ReadyResponse.config`.
+
 ## `POST /v1/notify`
 
 Sends one notification to a configured local channel.

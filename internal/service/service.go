@@ -56,13 +56,21 @@ type appBackend struct {
 
 // Service owns the send/dedupe/readiness flow. It is safe for concurrent use
 // because its dependencies (sender, store) are themselves concurrency-safe and
-// its configuration is an immutable snapshot taken at construction.
+// its configuration is an immutable snapshot that a reload replaces whole.
 type Service struct {
-	cfg      config.Config
-	backends map[string]appBackend
-	store    *dedupe.MemoryStore
-	logger   *slog.Logger
-	redactor *redactor
+	cfgRef atomic.Pointer[config.Config]
+	// backends is replaced whole, under backendsMu, when a reload starts or
+	// stops an app; a reader keeps the map it loaded.
+	backendsMu  sync.RWMutex
+	backends    map[string]appBackend
+	store       *dedupe.MemoryStore
+	logger      *slog.Logger
+	redactorRef atomic.Pointer[redactor]
+	// generation counts the configs this service has run on: 1 at start,
+	// one more for every applied reload.
+	generation atomic.Uint64
+	reloadMu   sync.Mutex
+	reload     ReloadStatus
 
 	legacyCapabilityCheck bool
 	connectionMu          sync.RWMutex
@@ -128,43 +136,7 @@ func newService(
 	}
 	backends := make(map[string]appBackend, len(senders))
 	for rawAlias, sender := range senders {
-		alias := effectiveAppAlias(rawAlias)
-		backend := appBackend{sender: sender}
-		if cards, ok := sender.(feishu.DynamicCards); ok {
-			backend.dynamicCards = cards
-		}
-		if lookup, ok := sender.(feishu.AttachedContextLookup); ok {
-			backend.attachedContext = lookup
-		}
-		if cot, ok := sender.(feishu.CoTMessages); ok {
-			backend.cotMessages = cot
-		}
-		if reactions, ok := sender.(feishu.ReactionMessages); ok {
-			backend.reactions = reactions
-		}
-		if contactUsers, ok := sender.(feishu.ContactUsers); ok {
-			backend.contactUsers = contactUsers
-		}
-		if emails, ok := sender.(feishu.ContactEmails); ok {
-			backend.senderEmails = feishu.NewSenderEmailCache(emails)
-		}
-		backend.senderEmailWarned = &atomic.Bool{}
-		if images, ok := sender.(feishu.ImageUploader); ok {
-			backend.images = images
-		}
-		if poster, ok := sender.(feishu.MessagePoster); ok {
-			backend.poster = poster
-		}
-		if cards, ok := sender.(feishu.AgentCards); ok {
-			backend.agentCards = cards
-		}
-		if pinner, ok := sender.(feishu.MessagePinner); ok {
-			backend.pinner = pinner
-		}
-		if chats, ok := sender.(feishu.AgentChats); ok {
-			backend.chats = chats
-		}
-		backends[alias] = backend
+		backends[effectiveAppAlias(rawAlias)] = newAppBackend(sender)
 	}
 	var connectionStates map[string]string
 	if trackConnections {
@@ -174,15 +146,10 @@ func newService(
 		}
 	}
 	agentBroker := newAgentBroker(cfg.DedupeTTL)
-	agentBroker.mentionIdentities = cfg.ProviderAllowsAmbientMessages
-	agentBroker.ambientChat = cfg.ProviderAllowsAmbientChat
-	agentBroker.allowsSenderEmail = cfg.ProviderAllowsSenderEmail
-	return &Service{
-		cfg:                   cfg,
+	svc := &Service{
 		backends:              backends,
 		store:                 store,
 		logger:                logger,
-		redactor:              newRedactor(cfg),
 		legacyCapabilityCheck: !trackConnections,
 		connectionStates:      connectionStates,
 		inboundRoutes:         newInboundRouteRegistry(cfg.DedupeTTL),
@@ -197,6 +164,77 @@ func newService(
 		agentCardUpdates: newAgentCardUpdateLedger(cfg.DedupeTTL),
 		agentCardLanes:   newAgentCardLanes(),
 	}
+	svc.cfgRef.Store(&cfg)
+	svc.redactorRef.Store(newRedactor(cfg))
+	svc.generation.Store(1)
+	// The broker asks the live config, so a reload changes these grants for
+	// the next delivery without touching any open stream.
+	agentBroker.mentionIdentities = func(provider string) bool {
+		return svc.cfg().ProviderAllowsAmbientMessages(provider)
+	}
+	agentBroker.ambientChat = func(provider, chatAlias string) bool {
+		return svc.cfg().ProviderAllowsAmbientChat(provider, chatAlias)
+	}
+	agentBroker.allowsSenderEmail = func(provider string) bool {
+		return svc.cfg().ProviderAllowsSenderEmail(provider)
+	}
+	return svc
+}
+
+// cfg returns the config snapshot in force. Callers must not mutate it;
+// tests may, before any concurrent use.
+func (s *Service) cfg() *config.Config {
+	return s.cfgRef.Load()
+}
+
+func (s *Service) redactor() *redactor {
+	return s.redactorRef.Load()
+}
+
+func (s *Service) backendMap() map[string]appBackend {
+	s.backendsMu.RLock()
+	defer s.backendsMu.RUnlock()
+	return s.backends
+}
+
+// newAppBackend binds the optional Feishu capabilities one app's sender
+// implements.
+func newAppBackend(sender feishu.Sender) appBackend {
+	backend := appBackend{sender: sender, senderEmailWarned: &atomic.Bool{}}
+	if cards, ok := sender.(feishu.DynamicCards); ok {
+		backend.dynamicCards = cards
+	}
+	if lookup, ok := sender.(feishu.AttachedContextLookup); ok {
+		backend.attachedContext = lookup
+	}
+	if cot, ok := sender.(feishu.CoTMessages); ok {
+		backend.cotMessages = cot
+	}
+	if reactions, ok := sender.(feishu.ReactionMessages); ok {
+		backend.reactions = reactions
+	}
+	if contactUsers, ok := sender.(feishu.ContactUsers); ok {
+		backend.contactUsers = contactUsers
+	}
+	if emails, ok := sender.(feishu.ContactEmails); ok {
+		backend.senderEmails = feishu.NewSenderEmailCache(emails)
+	}
+	if images, ok := sender.(feishu.ImageUploader); ok {
+		backend.images = images
+	}
+	if poster, ok := sender.(feishu.MessagePoster); ok {
+		backend.poster = poster
+	}
+	if cards, ok := sender.(feishu.AgentCards); ok {
+		backend.agentCards = cards
+	}
+	if pinner, ok := sender.(feishu.MessagePinner); ok {
+		backend.pinner = pinner
+	}
+	if chats, ok := sender.(feishu.AgentChats); ok {
+		backend.chats = chats
+	}
+	return backend
 }
 
 func effectiveAppAlias(alias string) string {
@@ -212,12 +250,12 @@ func isDefaultAppAlias(alias string) bool {
 }
 
 func (s *Service) backendForApp(alias string) (appBackend, bool) {
-	backend, ok := s.backends[effectiveAppAlias(alias)]
+	backend, ok := s.backendMap()[effectiveAppAlias(alias)]
 	return backend, ok && backend.sender != nil
 }
 
 func (s *Service) hasDynamicCards() bool {
-	for _, backend := range s.backends {
+	for _, backend := range s.backendMap() {
 		if backend.dynamicCards != nil {
 			return true
 		}
@@ -226,7 +264,7 @@ func (s *Service) hasDynamicCards() bool {
 }
 
 func (s *Service) appAllowed(provider, appAlias string) bool {
-	return s.cfg.ProviderAllowsApp(provider, effectiveAppAlias(appAlias))
+	return s.cfg().ProviderAllowsApp(provider, effectiveAppAlias(appAlias))
 }
 
 // SetAppConnectionState records a fixed-vocabulary receiver state. Unknown app

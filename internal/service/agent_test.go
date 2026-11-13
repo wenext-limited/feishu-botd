@@ -448,7 +448,7 @@ func TestAgentAcceptsAllowedUnconfiguredGroupWithoutReachingLegacyCommands(t *te
 		t.Fatalf("disabled unconfigured group policy error = %v", apiErr)
 	}
 
-	svc.cfg.Commands.AllowUnconfiguredGroupChats = true
+	svc.cfg().Commands.AllowUnconfiguredGroupChats = true
 	if _, apiErr := svc.DispatchCommand(context.Background(), in); apiErr != nil {
 		t.Fatalf("dispatch allowed unconfigured group: %v", apiErr)
 	}
@@ -470,7 +470,7 @@ func TestAgentAcceptsAllowedUnconfiguredGroupWithoutReachingLegacyCommands(t *te
 
 func TestAgentRejectsMalformedUnconfiguredGroupRoutes(t *testing.T) {
 	svc := newAgentTestService(newFakeAgentBackend())
-	svc.cfg.Commands.AllowUnconfiguredGroupChats = true
+	svc.cfg().Commands.AllowUnconfiguredGroupChats = true
 	tests := []struct {
 		name     string
 		chatID   string

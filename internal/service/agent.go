@@ -10,6 +10,7 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"feishu-botd/internal/feishu"
@@ -123,6 +124,14 @@ type AgentMessageReaction struct {
 type AgentSubscription struct {
 	C     <-chan AgentEvent
 	close func()
+	reset *atomic.Bool
+}
+
+// ClosedByReload reports whether C closed because a config reload changed
+// or removed this provider. The transport then tells the provider to
+// reconnect rather than ending the stream as if it had finished.
+func (s *AgentSubscription) ClosedByReload() bool {
+	return s != nil && s.reset != nil && s.reset.Load()
 }
 
 func (s *AgentSubscription) Close() {
@@ -437,6 +446,7 @@ type agentSubscriber struct {
 	includeMessageReactions  bool
 	includeAmbientMessages   bool
 	ch                       chan AgentEvent
+	reset                    *atomic.Bool
 }
 
 type agentDeliveryState int
@@ -611,6 +621,7 @@ func (s *Service) SubscribeAgentEvents(ctx context.Context, in AgentSubscribeOpt
 		close: func() {
 			s.agentBroker.unsubscribe(sub.id)
 		},
+		reset: sub.reset,
 	}, nil
 }
 
@@ -651,6 +662,7 @@ func (b *agentBroker) subscribe(in AgentSubscribeOptions) (*agentSubscriber, *no
 		includeMessageReactions:  in.IncludeMessageReactions,
 		includeAmbientMessages:   in.IncludeAmbientMessages,
 		ch:                       make(chan AgentEvent, agentSubscriptionBuffer),
+		reset:                    &atomic.Bool{},
 	}
 	b.subscribers[sub.id] = sub
 	return sub, nil
@@ -665,6 +677,24 @@ func (b *agentBroker) unsubscribe(id uint64) {
 	}
 	delete(b.subscribers, id)
 	close(sub.ch)
+}
+
+// closeProviders ends every subscription of the named providers, marking it
+// as closed by a reload. It returns how many it closed.
+func (b *agentBroker) closeProviders(providers map[string]struct{}) int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	closed := 0
+	for id, sub := range b.subscribers {
+		if _, reset := providers[sub.provider]; !reset {
+			continue
+		}
+		sub.reset.Store(true)
+		delete(b.subscribers, id)
+		close(sub.ch)
+		closed++
+	}
+	return closed
 }
 
 // dispatchMessage and dispatchMessageToProvider also return the providers
@@ -906,7 +936,7 @@ func (s *Service) StartAgentResponse(ctx context.Context, in StartAgentResponseI
 		provider,
 		deliveryID,
 		now,
-		now.Add(messageUUIDDedupeWindow+s.cfg.SendTimeout),
+		now.Add(messageUUIDDedupeWindow+s.cfg().SendTimeout),
 	)
 	if !ok {
 		return AgentResponseReceipt{}, notify.NewAPIError(404, "unknown_delivery", "unknown delivery", false)
@@ -957,14 +987,14 @@ func (s *Service) StartAgentResponse(ctx context.Context, in StartAgentResponseI
 	if delivery.sendRetryClosed {
 		return AgentResponseReceipt{}, closedAgentSendError(delivery.sendRetryCode)
 	}
-	if !delivery.sendAmbiguousAt.IsZero() && messageRetryWindowExhausted(time.Now(), s.cfg.SendTimeout, delivery.sendAmbiguousAt) {
+	if !delivery.sendAmbiguousAt.IsZero() && messageRetryWindowExhausted(time.Now(), s.cfg().SendTimeout, delivery.sendAmbiguousAt) {
 		delivery.sendRetryClosed = true
 		delivery.sendRetryCode = "send_retry_expired"
 		return AgentResponseReceipt{}, closedAgentSendError(delivery.sendRetryCode)
 	}
 	delivery.state = agentDeliveryStarting
 
-	callCtx, cancel := context.WithTimeout(ctx, s.cfg.SendTimeout)
+	callCtx, cancel := context.WithTimeout(ctx, s.cfg().SendTimeout)
 	defer cancel()
 	if delivery.cardID == "" {
 		cardID, err := dynamicCards.CreateCard(callCtx, delivery.cardJSON)
@@ -1002,7 +1032,7 @@ func (s *Service) StartAgentResponse(ctx context.Context, in StartAgentResponseI
 				return AgentResponseReceipt{}, notify.NewAPIError(404, "unknown_delivery", "unknown delivery", false)
 			}
 		} else {
-			routeApp, routeChatID, exists := s.cfg.ResolveChannel(delivery.input.ChatAlias)
+			routeApp, routeChatID, exists := s.cfg().ResolveChannel(delivery.input.ChatAlias)
 			if !exists || routeApp != delivery.appAlias {
 				delivery.abortStartAttempt()
 				return AgentResponseReceipt{}, notify.NewAPIError(404, "unknown_delivery", "unknown delivery", false)
@@ -1218,7 +1248,7 @@ func (s *Service) applyAgentUpdate(
 		op.contentUUID = operationUUID("content", response.responseID, operationID, 64)
 		response.planTimelineCalls(op, operationID, op.contentSeq, timeline)
 	}
-	callCtx, cancel := context.WithTimeout(ctx, s.cfg.SendTimeout)
+	callCtx, cancel := context.WithTimeout(ctx, s.cfg().SendTimeout)
 	defer cancel()
 	if !op.contentDone {
 		if apiErr := s.applyAgentContent(callCtx, dynamicCards, response, op, operationID, "update"); apiErr != nil {
@@ -1485,7 +1515,7 @@ func (s *Service) applyAgentFinish(
 		op.settingsJSON = agentFinishSettings(summary)
 		op.phase = phase
 	}
-	callCtx, cancel := context.WithTimeout(ctx, s.cfg.SendTimeout)
+	callCtx, cancel := context.WithTimeout(ctx, s.cfg().SendTimeout)
 	defer cancel()
 	if op.contentSeq != 0 && !op.contentDone {
 		if apiErr := s.applyAgentContent(callCtx, dynamicCards, response, op, operationID, "finish content"); apiErr != nil {

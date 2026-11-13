@@ -325,3 +325,37 @@ func TestPersistentStoreKeepsACardItsAuthorshipAndNeverRewindsItsSequence(t *tes
 		t.Fatal("a negative card sequence was accepted")
 	}
 }
+
+func TestSetKeysReseals(t *testing.T) {
+	dir := t.TempDir()
+	store := openTestStore(t, dir, testKeys(), testNow)
+	if err := store.Put("msgref_support", inboundRoute("commons"), testNow); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	other := inboundRoute("commons")
+	other.AppAlias = "default"
+	if err := store.Put("msgref_default", other, testNow); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+
+	// support is re-credited; default is removed.
+	rotated := map[string][]byte{"support": SealKey("support", "new-support-secret")}
+	if err := store.SetKeys(rotated, testNow); err != nil {
+		t.Fatalf("set keys: %v", err)
+	}
+	if _, ok, _ := store.Lookup("msgref_default", testNow); ok {
+		t.Fatal("a removed app's route survived SetKeys")
+	}
+	if err := store.Put("msgref_after", inboundRoute("commons"), testNow); err != nil {
+		t.Fatalf("put after set keys: %v", err)
+	}
+	_ = store.Close()
+
+	reopened := openTestStore(t, dir, rotated, testNow.Add(time.Minute))
+	for _, key := range []string{"msgref_support", "msgref_after"} {
+		route, ok, err := reopened.Lookup(key, testNow.Add(time.Minute))
+		if err != nil || !ok || route.ChatID != "oc_private_refund" {
+			t.Fatalf("%s after reopen = %#v ok=%t err=%v", key, route, ok, err)
+		}
+	}
+}

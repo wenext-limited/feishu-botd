@@ -249,7 +249,7 @@ func (s *Service) PostAgentCard(ctx context.Context, in PostAgentCardInput) (Age
 	if apiErr != nil {
 		return AgentPostReceipt{}, apiErr
 	}
-	if !s.cfg.ProviderAllowsProactiveMessages(provider) {
+	if !s.cfg().ProviderAllowsProactiveMessages(provider) {
 		return AgentPostReceipt{}, notify.NewAPIError(403, "provider_scope_denied", "requested provider capability is not allowed", false)
 	}
 	inThread := in.ReplyInThread && replyRef != ""
@@ -261,7 +261,7 @@ func (s *Service) PostAgentCard(ctx context.Context, in PostAgentCardInput) (Age
 	}{chatAlias, replyRef, inThread, cardJSON})
 
 	now := time.Now()
-	replay, apiErr := s.agentCardPosts.begin(provider, operationID, fingerprint, now, s.cfg.SendTimeout)
+	replay, apiErr := s.agentCardPosts.begin(provider, operationID, fingerprint, now, s.cfg().SendTimeout)
 	if apiErr != nil {
 		return AgentPostReceipt{}, apiErr
 	}
@@ -283,7 +283,7 @@ func (s *Service) PostAgentCard(ctx context.Context, in PostAgentCardInput) (Age
 		return AgentPostReceipt{}, notify.NotImplemented("agent_card_unavailable", "proactive cards are unavailable for this sender")
 	}
 
-	callCtx, cancel := context.WithTimeout(ctx, s.cfg.SendTimeout)
+	callCtx, cancel := context.WithTimeout(ctx, s.cfg().SendTimeout)
 	defer cancel()
 	correlation := hashJSON([2]string{provider, operationID})
 	cardID := s.agentCardPosts.card(provider, operationID)
@@ -340,16 +340,16 @@ func (s *Service) lookupAuthoredRoute(provider, messageRef string, now time.Time
 	route, ok := s.lookupMessageRoute(messageRef, now)
 	if !ok || !route.Authored || route.MessageID == "" || !route.Allows(provider) ||
 		feishu.MessageRefForApp(route.AppAlias, route.MessageID) != messageRef ||
-		!s.appAllowed(provider, route.AppAlias) || !s.cfg.ProviderAllowsProactiveChat(provider, route.ChatAlias) {
+		!s.appAllowed(provider, route.AppAlias) || !s.cfg().ProviderAllowsProactiveChat(provider, route.ChatAlias) {
 		return messageroute.Route{}, unknownMessageError()
 	}
 	// As for a reply target, the message's chat must still be the one its
 	// alias named when botd posted there.
 	if route.UnconfiguredGroup {
-		if !s.cfg.AllowsUnconfiguredGroupChats(route.AppAlias) {
+		if !s.cfg().AllowsUnconfiguredGroupChats(route.AppAlias) {
 			return messageroute.Route{}, unknownMessageError()
 		}
-	} else if appAlias, chatID, ok := s.cfg.ResolveChannel(route.ChatAlias); !ok || appAlias != route.AppAlias || route.ChatID != "" && chatID != route.ChatID {
+	} else if appAlias, chatID, ok := s.cfg().ResolveChannel(route.ChatAlias); !ok || appAlias != route.AppAlias || route.ChatID != "" && chatID != route.ChatID {
 		return messageroute.Route{}, unknownMessageError()
 	}
 	return route, nil
@@ -379,7 +379,7 @@ func (s *Service) UpdateAgentCard(ctx context.Context, in UpdateAgentCardInput) 
 	if apiErr != nil {
 		return AgentCardUpdateReceipt{}, apiErr
 	}
-	if !s.cfg.ProviderAllowsProactiveMessages(provider) {
+	if !s.cfg().ProviderAllowsProactiveMessages(provider) {
 		return AgentCardUpdateReceipt{}, notify.NewAPIError(403, "provider_scope_denied", "requested provider capability is not allowed", false)
 	}
 	if route, apiErr := s.lookupAuthoredRoute(provider, messageRef, time.Now()); apiErr != nil || route.CardID == "" {
@@ -426,7 +426,7 @@ func (s *Service) UpdateAgentCard(ctx context.Context, in UpdateAgentCardInput) 
 		return AgentCardUpdateReceipt{}, notify.NewAPIError(500, "message_route_store_unavailable", "could not persist message route", true)
 	}
 
-	callCtx, cancel := context.WithTimeout(ctx, s.cfg.SendTimeout)
+	callCtx, cancel := context.WithTimeout(ctx, s.cfg().SendTimeout)
 	defer cancel()
 	err := backend.agentCards.ReplaceCard(callCtx, feishu.CardReplaceRequest{
 		CardID:   route.CardID,
@@ -469,7 +469,7 @@ func (s *Service) PinAgentMessage(ctx context.Context, in PinAgentMessageInput) 
 	if len(provider) > 64 || len(messageRef) > 160 {
 		return notify.BadRequest("field_too_large", "one or more fields are too large")
 	}
-	if !s.cfg.ProviderAllowsPins(provider) {
+	if !s.cfg().ProviderAllowsPins(provider) {
 		return notify.NewAPIError(403, "provider_scope_denied", "requested provider capability is not allowed", false)
 	}
 	route, apiErr := s.lookupAuthoredRoute(provider, messageRef, time.Now())
@@ -480,7 +480,7 @@ func (s *Service) PinAgentMessage(ctx context.Context, in PinAgentMessageInput) 
 	if !ok || backend.pinner == nil {
 		return notify.NotImplemented("agent_pin_unavailable", "pins are unavailable for this sender")
 	}
-	callCtx, cancel := context.WithTimeout(ctx, s.cfg.SendTimeout)
+	callCtx, cancel := context.WithTimeout(ctx, s.cfg().SendTimeout)
 	defer cancel()
 	if err := backend.pinner.PinMessage(callCtx, route.MessageID); err != nil {
 		s.logFeishuFailure("agent pin", "message", messageRef, err)

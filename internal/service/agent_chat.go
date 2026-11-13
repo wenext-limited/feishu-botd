@@ -79,14 +79,14 @@ func (s *Service) CreateAgentChat(ctx context.Context, in CreateAgentChatInput) 
 		len(description) > maxAgentChatDescriptionBytes {
 		return AgentChatReceipt{}, notify.BadRequest("field_too_large", "one or more fields are too large")
 	}
-	if !s.cfg.ProviderAllowsCreateChats(provider) {
+	if !s.cfg().ProviderAllowsCreateChats(provider) {
 		return AgentChatReceipt{}, providerScopeDenied()
 	}
 	digest := agentChatDigest(name, description, members)
 
 	s.agentChatMu.Lock()
 	defer s.agentChatMu.Unlock()
-	if grant, ok := s.cfg.RuntimeChats.ByOperation(provider, operationID); ok {
+	if grant, ok := s.cfg().RuntimeChats.ByOperation(provider, operationID); ok {
 		if grant.RequestDigest != digest {
 			return AgentChatReceipt{}, notify.NewAPIError(409, "operation_conflict", "operation id reused with a different request", false)
 		}
@@ -106,7 +106,7 @@ func (s *Service) CreateAgentChat(ctx context.Context, in CreateAgentChatInput) 
 	if !ok || backend.chats == nil {
 		return AgentChatReceipt{}, chatsUnavailable()
 	}
-	callCtx, cancel := context.WithTimeout(ctx, s.cfg.SendTimeout)
+	callCtx, cancel := context.WithTimeout(ctx, s.cfg().SendTimeout)
 	defer cancel()
 	chatID, err := backend.chats.CreateChat(callCtx, feishuChatCreateRequest(name, description, agentChatUUID(provider, operationID)))
 	if err != nil {
@@ -123,7 +123,7 @@ func (s *Service) CreateAgentChat(ctx context.Context, in CreateAgentChatInput) 
 		OperationID:   operationID,
 		RequestDigest: digest,
 	}
-	if err := s.cfg.RuntimeChats.Add(grant); err != nil {
+	if err := s.cfg().RuntimeChats.Add(grant); err != nil {
 		s.logger.Error("agent chat grant was not saved; the chat exists without a grant", "error", err)
 		return AgentChatReceipt{}, notify.NewAPIError(500, "grant_store_unavailable", "could not persist the chat grant", false)
 	}
@@ -177,13 +177,13 @@ func (s *Service) RenameAgentChat(ctx context.Context, in RenameAgentChatInput) 
 	if apiErr != nil {
 		return apiErr
 	}
-	callCtx, cancel := context.WithTimeout(ctx, s.cfg.SendTimeout)
+	callCtx, cancel := context.WithTimeout(ctx, s.cfg().SendTimeout)
 	defer cancel()
 	if err := backend.chats.RenameChat(callCtx, grant.ChatID, name); err != nil {
 		s.logFeishuFailure("agent chat rename", "chat", grant.ChatAlias, err)
 		return chatCallError(err, "Feishu chat rename failed")
 	}
-	if err := s.cfg.RuntimeChats.Rename(grant.ChatAlias, name); err != nil {
+	if err := s.cfg().RuntimeChats.Rename(grant.ChatAlias, name); err != nil {
 		s.logger.Warn("agent chat name was not saved", "chat_alias", grant.ChatAlias, "error", err)
 	}
 	return nil
@@ -200,10 +200,10 @@ func (s *Service) ownedAgentChat(rawProvider, rawAlias string) (chatgrant.Grant,
 	case alias == "":
 		return chatgrant.Grant{}, appBackend{}, notify.BadRequest("missing_chat_alias", "chat_alias is required")
 	}
-	if !s.cfg.ProviderAllowsCreateChats(provider) {
+	if !s.cfg().ProviderAllowsCreateChats(provider) {
 		return chatgrant.Grant{}, appBackend{}, providerScopeDenied()
 	}
-	grant, ok := s.cfg.RuntimeChats.ByAlias(alias)
+	grant, ok := s.cfg().RuntimeChats.ByAlias(alias)
 	if !ok || grant.Provider != provider || !s.appAllowed(provider, grant.AppAlias) {
 		return chatgrant.Grant{}, appBackend{}, notify.NewAPIError(404, "unknown_chat", "unknown chat", false)
 	}
@@ -218,7 +218,7 @@ func (s *Service) addAgentChatMembers(ctx context.Context, backend appBackend, g
 	if len(members) == 0 {
 		return nil, nil
 	}
-	callCtx, cancel := context.WithTimeout(ctx, s.cfg.SendTimeout)
+	callCtx, cancel := context.WithTimeout(ctx, s.cfg().SendTimeout)
 	defer cancel()
 	invalid, err := backend.chats.AddChatMembers(callCtx, grant.ChatID, members)
 	if err != nil {
@@ -232,7 +232,7 @@ func (s *Service) addAgentChatMembers(ctx context.Context, backend appBackend, g
 // it may access, or the default app when it may access several.
 func (s *Service) agentChatApp(provider string) (string, bool) {
 	var allowed []string
-	for _, alias := range s.cfg.AppAliases() {
+	for _, alias := range s.cfg().AppAliases() {
 		if s.appAllowed(provider, alias) {
 			if _, ok := s.backendForApp(alias); ok {
 				allowed = append(allowed, alias)

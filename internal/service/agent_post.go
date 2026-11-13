@@ -126,7 +126,7 @@ func (s *Service) PostAgentMessage(ctx context.Context, in PostAgentMessageInput
 		len(markdown) > maxAgentCardBytes || len(summary) > maxAgentTitleBytes || len(mentionUserID) > 160 {
 		return AgentPostReceipt{}, notify.BadRequest("field_too_large", "one or more fields are too large")
 	}
-	if !s.cfg.ProviderAllowsProactiveMessages(provider) {
+	if !s.cfg().ProviderAllowsProactiveMessages(provider) {
 		return AgentPostReceipt{}, notify.NewAPIError(403, "provider_scope_denied", "requested provider capability is not allowed", false)
 	}
 	inThread := in.ReplyInThread && replyRef != ""
@@ -140,7 +140,7 @@ func (s *Service) PostAgentMessage(ctx context.Context, in PostAgentMessageInput
 	}{chatAlias, replyRef, inThread, markdown, summary, mentionUserID})
 
 	now := time.Now()
-	replay, apiErr := s.agentPosts.begin(provider, operationID, fingerprint, now, s.cfg.SendTimeout)
+	replay, apiErr := s.agentPosts.begin(provider, operationID, fingerprint, now, s.cfg().SendTimeout)
 	if apiErr != nil {
 		return AgentPostReceipt{}, apiErr
 	}
@@ -164,7 +164,7 @@ func (s *Service) PostAgentMessage(ctx context.Context, in PostAgentMessageInput
 		return AgentPostReceipt{}, notify.NotImplemented("agent_post_unavailable", "proactive messages are unavailable for this sender")
 	}
 
-	sendCtx, cancel := context.WithTimeout(ctx, s.cfg.SendTimeout)
+	sendCtx, cancel := context.WithTimeout(ctx, s.cfg().SendTimeout)
 	defer cancel()
 	posted, err := backend.poster.PostMessage(sendCtx, feishu.PostMessageRequest{
 		ChatID:           target.chatID,
@@ -220,7 +220,7 @@ func postReceipt(target postTarget, posted feishu.PostedMessage, duplicate bool)
 // target returns unknown_message. Neither error says which check failed.
 func (s *Service) resolvePostTarget(provider, chatAlias, replyRef string, now time.Time) (postTarget, *notify.APIError) {
 	if chatAlias != "" {
-		if !s.cfg.ProviderAllowsProactiveChat(provider, chatAlias) {
+		if !s.cfg().ProviderAllowsProactiveChat(provider, chatAlias) {
 			return postTarget{}, unknownChannelError()
 		}
 		if config.IsUnconfiguredGroupAlias(chatAlias) {
@@ -228,12 +228,12 @@ func (s *Service) resolvePostTarget(provider, chatAlias, replyRef string, now ti
 			// because ingress saw a message there and retained the route.
 			route, ok := s.lookupMessageRoute(chatAlias, now)
 			if !ok || !route.UnconfiguredGroup || route.ChatID == "" ||
-				!s.appAllowed(provider, route.AppAlias) || !s.cfg.AllowsUnconfiguredGroupChats(route.AppAlias) {
+				!s.appAllowed(provider, route.AppAlias) || !s.cfg().AllowsUnconfiguredGroupChats(route.AppAlias) {
 				return postTarget{}, unknownChannelError()
 			}
 			return postTarget{appAlias: route.AppAlias, chatAlias: chatAlias, unconfiguredGroup: true, chatID: route.ChatID}, nil
 		}
-		appAlias, chatID, ok := s.cfg.ResolveChannel(chatAlias)
+		appAlias, chatID, ok := s.cfg().ResolveChannel(chatAlias)
 		if !ok || !s.appAllowed(provider, appAlias) {
 			return postTarget{}, unknownChannelError()
 		}
@@ -242,18 +242,18 @@ func (s *Service) resolvePostTarget(provider, chatAlias, replyRef string, now ti
 
 	route, ok := s.lookupMessageRoute(replyRef, now)
 	if !ok || route.MessageID == "" || !route.Allows(provider) ||
-		!s.appAllowed(provider, route.AppAlias) || !s.cfg.ProviderAllowsProactiveChat(provider, route.ChatAlias) {
+		!s.appAllowed(provider, route.AppAlias) || !s.cfg().ProviderAllowsProactiveChat(provider, route.ChatAlias) {
 		return postTarget{}, unknownMessageError()
 	}
 	// The reply lands where the target lives, and that chat must still be the
 	// one the route was learned in: a configured alias remapped to another
 	// chat since then leaves the old message unaddressable.
 	if route.UnconfiguredGroup {
-		if !s.cfg.AllowsUnconfiguredGroupChats(route.AppAlias) {
+		if !s.cfg().AllowsUnconfiguredGroupChats(route.AppAlias) {
 			return postTarget{}, unknownMessageError()
 		}
 	} else {
-		appAlias, chatID, ok := s.cfg.ResolveChannel(route.ChatAlias)
+		appAlias, chatID, ok := s.cfg().ResolveChannel(route.ChatAlias)
 		if !ok || appAlias != route.AppAlias || route.ChatID != "" && chatID != route.ChatID {
 			return postTarget{}, unknownMessageError()
 		}
@@ -334,7 +334,7 @@ type authoredMessage struct {
 // cannot be a later reply target.
 func (s *Service) rememberAuthoredMessageSoftly(message authoredMessage, kind, correlation string) {
 	if s.agentRoutes == nil || message.chatAlias == "" || message.chatAlias == "direct" ||
-		!s.cfg.ProviderAllowsProactiveChat(message.provider, message.chatAlias) {
+		!s.cfg().ProviderAllowsProactiveChat(message.provider, message.chatAlias) {
 		return
 	}
 	messageRef := feishu.MessageRefForApp(message.appAlias, message.messageID)
@@ -370,7 +370,7 @@ func (s *Service) retainInboundMessageRoute(in CommandInput, ambientOnly bool) [
 	if s.agentRoutes == nil || !isGroupChatType(in.Metadata["chat_type"]) {
 		return nil
 	}
-	proactive := s.cfg.ProactiveProvidersForChat(in.AppAlias, in.ChatAlias)
+	proactive := s.cfg().ProactiveProvidersForChat(in.AppAlias, in.ChatAlias)
 	if len(proactive) == 0 {
 		return nil
 	}
@@ -391,7 +391,7 @@ func (s *Service) retainInboundMessageRoute(in CommandInput, ambientOnly bool) [
 	if ambientOnly {
 		grantees = make([]string, 0, len(proactive))
 		for _, provider := range proactive {
-			if s.cfg.ProviderAllowsAmbientChat(provider, in.ChatAlias) {
+			if s.cfg().ProviderAllowsAmbientChat(provider, in.ChatAlias) {
 				grantees = append(grantees, provider)
 			}
 		}

@@ -22,10 +22,10 @@ func (s *Service) resolveSenderEmail(ctx context.Context, in *CommandInput, repl
 		return
 	}
 	if replyProvider != "" {
-		if !s.cfg.ProviderAllowsSenderEmail(replyProvider) {
+		if !s.cfg().ProviderAllowsSenderEmail(replyProvider) {
 			return
 		}
-	} else if !s.cfg.AnyProviderAllowsSenderEmail(in.AppAlias) {
+	} else if !s.cfg().AnyProviderAllowsSenderEmail(in.AppAlias) {
 		return
 	}
 	backend, ok := s.backendForApp(in.AppAlias)

@@ -42,7 +42,7 @@ func newAttachedContextTestService(backend *attachedContextTestBackend) *Service
 func TestGetAgentAttachedContextRequiresExplicitProviderGrant(t *testing.T) {
 	backend := &attachedContextTestBackend{fakeSender: &fakeSender{messageID: "om_answer"}}
 	svc := newAttachedContextTestService(backend)
-	svc.cfg.AgentProviders["nous"] = config.AgentProviderConfig{}
+	svc.cfg().AgentProviders["nous"] = config.AgentProviderConfig{}
 	seedAttachedContextDelivery(t, svc, "nous", "delivery_topic")
 
 	if _, apiErr := svc.GetAgentAttachedContext(context.Background(), AgentAttachedContextInput{
