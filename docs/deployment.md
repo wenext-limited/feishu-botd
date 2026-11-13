@@ -204,18 +204,32 @@ agent container.
 
 ## macOS launchd
 
-`deploy/launchd/feishu-botd.plist` is a template for local macOS
-development. Install a built binary at `/usr/local/bin/feishu-botd`, replace the
-placeholder Feishu app values and channel ids, then load it:
+On a Mac whose agent providers also run natively, run the daemon natively too:
+its Unix sockets are then files every local client can open, with no
+container boundary and no relay in between.
+
+Everything it owns lives under `~/.feishu-botd`. Write
+`~/.feishu-botd/config.json` with host paths: `listeners.http_socket` and
+`listeners.grpc_socket` under `~/.feishu-botd/run/`, `state_dir` as
+`~/.feishu-botd/state`, credential files by their absolute host paths, and a
+script `dir` the account can read. Then:
 
 ```sh
-mkdir -p /tmp/feishu-botd
-cp deploy/launchd/feishu-botd.plist ~/Library/LaunchAgents/
-launchctl load ~/Library/LaunchAgents/feishu-botd.plist
+deploy/install.sh                 # builds with this Mac's Go
+deploy/install.sh path/to/binary  # or installs a darwin binary built elsewhere
+tail -f ~/.feishu-botd/logs/feishu-botd.log
 ```
 
-Use a secrets manager or a local deployment-specific plist outside version
-control for real app secrets.
+`deploy/install.sh` installs `~/.feishu-botd/bin/feishu-botd`, renders
+`deploy/launchd/feishu-botd.plist` to
+`~/Library/LaunchAgents/technology.wenext.feishu-botd.plist` and (re)starts the
+`technology.wenext.feishu-botd` job. A local script runs as the same account
+with macOS's `/bin/bash` 3.2, so scripts must not rely on bash 4 features such
+as associative arrays.
+
+Moving an existing container deployment: stop the container, copy
+`/var/lib/feishu-botd` out of the state volume into `~/.feishu-botd/state`, then
+install. Repoint every client at the new socket paths in the same window.
 
 ## Rollback
 
@@ -228,5 +242,5 @@ docker compose stop feishu-botd
 For launchd:
 
 ```sh
-launchctl unload ~/Library/LaunchAgents/feishu-botd.plist
+launchctl bootout gui/$(id -u)/technology.wenext.feishu-botd
 ```

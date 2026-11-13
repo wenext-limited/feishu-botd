@@ -1,40 +1,42 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  feishu-botd as a LaunchAgent of the account it runs as. deploy/install.sh
+  replaces __HOME__ with that account's home and copies this to
+  ~/Library/LaunchAgents/technology.wenext.feishu-botd.plist.
+
+  Everything the daemon owns lives under ~/.feishu-botd: config.json (private,
+  operator-written), state/, run/ (the HTTP and gRPC Unix sockets) and logs/.
+  Credentials stay files named by path in config.json.
+-->
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>feishu-botd</string>
-
+  <string>technology.wenext.feishu-botd</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/usr/local/bin/feishu-botd</string>
+    <string>__HOME__/.feishu-botd/bin/feishu-botd</string>
   </array>
-
+  <key>WorkingDirectory</key>
+  <string>__HOME__/.feishu-botd/state</string>
   <key>EnvironmentVariables</key>
   <dict>
-    <key>FEISHU_APP_ID</key>
-    <string>REPLACE_WITH_FEISHU_APP_ID</string>
-    <key>FEISHU_APP_SECRET</key>
-    <string>REPLACE_WITH_FEISHU_APP_SECRET</string>
-    <key>FEISHU_BOTD_SOCKET</key>
-    <string>/tmp/feishu-botd/feishu-botd.sock</string>
-    <key>FEISHU_BOTD_CHANNELS_OPS</key>
-    <string>REPLACE_WITH_FEISHU_CHAT_ID_OPS</string>
-    <key>FEISHU_BOTD_DEDUPE_TTL_SECONDS</key>
-    <string>21600</string>
-    <key>FEISHU_BOTD_SEND_TIMEOUT_SECONDS</key>
-    <string>15</string>
+    <key>FEISHU_BOTD_CONFIG</key>
+    <string>__HOME__/.feishu-botd/config.json</string>
+    <key>PATH</key>
+    <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
   </dict>
-
   <key>RunAtLoad</key>
   <true/>
   <key>KeepAlive</key>
   <true/>
-
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>ExitTimeOut</key>
+  <integer>30</integer>
   <key>StandardOutPath</key>
-  <string>/tmp/feishu-botd/stdout.log</string>
+  <string>__HOME__/.feishu-botd/logs/feishu-botd.log</string>
   <key>StandardErrorPath</key>
-  <string>/tmp/feishu-botd/stderr.log</string>
+  <string>__HOME__/.feishu-botd/logs/feishu-botd.log</string>
 </dict>
 </plist>
