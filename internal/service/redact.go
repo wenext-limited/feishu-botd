@@ -37,6 +37,10 @@ func newRedactor(cfg config.Config) *redactor {
 			unique[value] = struct{}{}
 		}
 	}
+	return sortedRedactor(unique)
+}
+
+func sortedRedactor(unique map[string]struct{}) *redactor {
 	values := make([]string, 0, len(unique))
 	for value := range unique {
 		values = append(values, value)
@@ -48,6 +52,18 @@ func newRedactor(cfg config.Config) *redactor {
 		return values[i] < values[j]
 	})
 	return &redactor{values: values}
+}
+
+// with returns a redactor that scrubs both r's values and next's.
+func (r *redactor) with(next *redactor) *redactor {
+	unique := make(map[string]struct{}, len(r.values)+len(next.values))
+	for _, value := range r.values {
+		unique[value] = struct{}{}
+	}
+	for _, value := range next.values {
+		unique[value] = struct{}{}
+	}
+	return sortedRedactor(unique)
 }
 
 func (r *redactor) redactString(msg string) string {
@@ -71,5 +87,5 @@ func (r *redactor) redact(err error) string {
 // used by the gRPC panic-recovery interceptor so the panic path honors the same
 // redaction guarantee as the normal error paths.
 func (s *Service) Redact(v any) string {
-	return s.redactor.redactString(fmt.Sprint(v))
+	return s.redactor().redactString(fmt.Sprint(v))
 }

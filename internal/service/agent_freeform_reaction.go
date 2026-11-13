@@ -78,7 +78,7 @@ func (s *Service) AddAgentReaction(ctx context.Context, in AddAgentReactionInput
 		return false, notify.NewAPIError(404, "unknown_message", "no triggering message to react to", false)
 	}
 
-	callCtx, cancel := context.WithTimeout(ctx, s.cfg.SendTimeout)
+	callCtx, cancel := context.WithTimeout(ctx, s.cfg().SendTimeout)
 	defer cancel()
 	reactionID, err := backend.reactions.AddReaction(callCtx, feishu.AddReactionRequest{
 		MessageID: originMessageID, EmojiType: emojiType,

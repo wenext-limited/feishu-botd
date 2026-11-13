@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"sync"
+	"sync/atomic"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health"
@@ -26,7 +27,7 @@ import (
 // local-trust mode only when no scoped providers are configured; otherwise its
 // non-health RPCs are split between general and provider bearers.
 type Server struct {
-	cfg    config.Config
+	auth   atomic.Pointer[authState]
 	svc    *service.Service
 	logger *slog.Logger
 
@@ -38,7 +39,16 @@ func NewServer(cfg config.Config, svc *service.Service, logger *slog.Logger) *Se
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Server{cfg: cfg, svc: svc, logger: logger}
+	s := &Server{svc: svc, logger: logger}
+	s.auth.Store(newAuthState(cfg))
+	return s
+}
+
+// ApplyConfig swaps the credentials every listener checks. Calls already
+// past the interceptors keep the principal they authenticated with; the
+// service closes the streams of providers whose grants changed.
+func (s *Server) ApplyConfig(cfg config.Config) {
+	s.auth.Store(newAuthState(cfg))
 }
 
 // newGRPCServer builds a grpc.Server with the standard interceptor chain. The
@@ -46,21 +56,18 @@ func NewServer(cfg config.Config, svc *service.Service, logger *slog.Logger) *Se
 // The latter prevents a provider-only peer from inheriting outbound bot-send
 // authority through filesystem access to the socket.
 func (s *Server) newGRPCServer(requireAuth bool) *grpc.Server {
-	providerAuth := newProviderAuthenticator(s.cfg.AgentProviders)
-	scopeLegacyProviders := len(s.cfg.AgentProviders) > 0
+	state := s.auth.Load
 	unary := []grpc.UnaryServerInterceptor{
 		requestIDUnaryInterceptor(),
 		recoveryUnaryInterceptor(s.logger),
-		providerAuthUnaryInterceptor(providerAuth, scopeLegacyProviders),
+		providerAuthUnaryInterceptor(state),
+		authUnaryInterceptor(state, requireAuth),
 	}
 	stream := []grpc.StreamServerInterceptor{
 		requestIDStreamInterceptor(),
 		recoveryStreamInterceptor(s.logger),
-		providerAuthStreamInterceptor(providerAuth, scopeLegacyProviders),
-	}
-	if requireAuth || scopeLegacyProviders {
-		unary = append(unary, authUnaryInterceptor(s.cfg.AuthToken, scopeLegacyProviders))
-		stream = append(stream, authStreamInterceptor(s.cfg.AuthToken, scopeLegacyProviders))
+		providerAuthStreamInterceptor(state),
+		authStreamInterceptor(state, requireAuth),
 	}
 
 	gs := grpc.NewServer(

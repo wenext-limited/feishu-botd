@@ -88,12 +88,12 @@ func validMessageCardBody() []byte {
 func TestHealthAndReady(t *testing.T) {
 	server := testServer(&fakeSender{messageID: "om_1"})
 	rec := httptest.NewRecorder()
-	server.handler(false).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	server.handler(func() bool { return false }).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("health status = %d", rec.Code)
 	}
 	rec = httptest.NewRecorder()
-	server.handler(false).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	server.handler(func() bool { return false }).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("ready status = %d", rec.Code)
 	}
@@ -128,8 +128,8 @@ func TestScopedUnixHTTPRequiresGeneralBearerForOutboundRoutes(t *testing.T) {
 			t.Run(request.name+"/"+credential.name, func(t *testing.T) {
 				sender := &fakeSender{messageID: "om_scoped"}
 				server := testServer(sender)
-				server.cfg.AuthToken = generalToken
-				server.cfg.AgentProviders = map[string]config.AgentProviderConfig{
+				server.cfg().AuthToken = generalToken
+				server.cfg().AgentProviders = map[string]config.AgentProviderConfig{
 					"fixture-agent": {AuthToken: providerToken},
 				}
 
@@ -153,8 +153,8 @@ func TestScopedUnixHTTPRequiresGeneralBearerForOutboundRoutes(t *testing.T) {
 
 func TestScopedUnixHTTPWithoutGeneralTokenFailsClosed(t *testing.T) {
 	server := testServer(&fakeSender{messageID: "om_scoped"})
-	server.cfg.AuthToken = ""
-	server.cfg.AgentProviders = map[string]config.AgentProviderConfig{
+	server.cfg().AuthToken = ""
+	server.cfg().AgentProviders = map[string]config.AgentProviderConfig{
 		"fixture-agent": {AuthToken: "fixture-agent-token-0123456789abcdef0123456789"},
 	}
 
@@ -169,8 +169,8 @@ func TestScopedUnixHTTPWithoutGeneralTokenFailsClosed(t *testing.T) {
 
 func TestScopedUnixHTTPHealthAndReadinessRemainPublic(t *testing.T) {
 	server := testServer(&fakeSender{messageID: "om_scoped"})
-	server.cfg.AuthToken = ""
-	server.cfg.AgentProviders = map[string]config.AgentProviderConfig{
+	server.cfg().AuthToken = ""
+	server.cfg().AgentProviders = map[string]config.AgentProviderConfig{
 		"fixture-agent": {AuthToken: "fixture-agent-token-0123456789abcdef0123456789"},
 	}
 
@@ -199,8 +199,8 @@ func TestLegacyUnixHTTPWithoutProvidersRetainsLocalTrust(t *testing.T) {
 		t.Run(request.name, func(t *testing.T) {
 			sender := &fakeSender{messageID: "om_legacy"}
 			server := testServer(sender)
-			server.cfg.AuthToken = ""
-			server.cfg.AgentProviders = nil
+			server.cfg().AuthToken = ""
+			server.cfg().AgentProviders = nil
 
 			rec := httptest.NewRecorder()
 			server.unixHandler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, request.path, bytes.NewReader(request.body())))
@@ -217,7 +217,7 @@ func TestLegacyUnixHTTPWithoutProvidersRetainsLocalTrust(t *testing.T) {
 func TestNotifySuccessAndDuplicate(t *testing.T) {
 	sender := &fakeSender{messageID: "om_1"}
 	server := testServer(sender)
-	h := server.handler(true)
+	h := server.handler(always)
 	for i := 0; i < 2; i++ {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodPost, "/v1/notify", bytes.NewReader(validBody()))
@@ -248,7 +248,7 @@ func TestNotifySuccessAndDuplicate(t *testing.T) {
 func TestMessageCardSuccess(t *testing.T) {
 	sender := &fakeSender{messageID: "om_card"}
 	server := testServer(sender)
-	h := server.handler(true)
+	h := server.handler(always)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/message", bytes.NewReader(validMessageCardBody()))
@@ -277,7 +277,7 @@ func TestMessageUsesServiceDefaultChannel(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/message", bytes.NewReader(body))
 	req.Header.Set("Authorization", "Bearer token")
-	server.handler(true).ServeHTTP(rec, req)
+	server.handler(always).ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("message status = %d body=%s", rec.Code, rec.Body.String())
 	}
@@ -292,7 +292,7 @@ func TestMessageRejectsInvalidCard(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/message", bytes.NewReader(body))
 	req.Header.Set("Authorization", "Bearer token")
-	server.handler(true).ServeHTTP(rec, req)
+	server.handler(always).ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
 	}
@@ -301,7 +301,7 @@ func TestMessageRejectsInvalidCard(t *testing.T) {
 func TestNotifyDedupeConflict(t *testing.T) {
 	sender := &fakeSender{messageID: "om_1"}
 	server := testServer(sender)
-	h := server.handler(true)
+	h := server.handler(always)
 	req := httptest.NewRequest(http.MethodPost, "/v1/notify", bytes.NewReader(validBody()))
 	req.Header.Set("Authorization", "Bearer token")
 	h.ServeHTTP(httptest.NewRecorder(), req)
@@ -322,7 +322,7 @@ func TestNotifyDedupeConflict(t *testing.T) {
 func TestNotifyAuthRequired(t *testing.T) {
 	server := testServer(&fakeSender{messageID: "om_1"})
 	rec := httptest.NewRecorder()
-	server.handler(true).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/notify", bytes.NewReader(validBody())))
+	server.handler(always).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/notify", bytes.NewReader(validBody())))
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d", rec.Code)
 	}
@@ -333,7 +333,7 @@ func TestNotifyProviderFailure(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/notify", bytes.NewReader(validBody()))
 	req.Header.Set("Authorization", "Bearer token")
-	server.handler(true).ServeHTTP(rec, req)
+	server.handler(always).ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadGateway {
 		t.Fatalf("status = %d", rec.Code)
 	}
@@ -342,7 +342,7 @@ func TestNotifyProviderFailure(t *testing.T) {
 func TestReadyReportsAuthFailure(t *testing.T) {
 	server := testServer(&fakeSender{readyErr: errors.New("token failed")})
 	rec := httptest.NewRecorder()
-	server.handler(false).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	server.handler(func() bool { return false }).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("ready status = %d", rec.Code)
 	}
@@ -360,7 +360,7 @@ func TestRequestIDPropagatedToErrorBodyAndHeader(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/notify", bytes.NewReader(data))
 	req.Header.Set("Authorization", "Bearer token")
 	req.Header.Set("X-Request-Id", "req_http_1")
-	server.handler(true).ServeHTTP(rec, req)
+	server.handler(always).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d", rec.Code)
@@ -380,7 +380,7 @@ func TestRequestIDPropagatedToErrorBodyAndHeader(t *testing.T) {
 func TestRequestIDMintedWhenAbsent(t *testing.T) {
 	server := testServer(&fakeSender{messageID: "om_1"})
 	rec := httptest.NewRecorder()
-	server.handler(false).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/nope", nil))
+	server.handler(func() bool { return false }).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/nope", nil))
 	if got := rec.Header().Get("X-Request-Id"); got == "" {
 		t.Fatal("expected a minted X-Request-Id header")
 	}

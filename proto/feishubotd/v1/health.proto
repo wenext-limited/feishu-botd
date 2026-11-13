@@ -29,4 +29,19 @@ message ReadyResponse {
   // new checks are non-breaking. Redacted; never contains secrets or raw chat
   // ids.
   map<string, string> checks = 2;
+  // The config the daemon is running on. Informational: a rejected reload
+  // leaves botd serving its previous config, so it never makes botd unready.
+  ConfigStatus config = 3;
+}
+
+message ConfigStatus {
+  // 1 for the config botd started with, one more for every applied reload.
+  uint64 generation = 1;
+  // Outcome of the most recent reload attempt: "" (none yet), "ok", or
+  // "rejected".
+  string last_reload = 2;
+  // When that attempt happened, in Unix seconds; 0 when there was none.
+  int64 last_reload_unix = 3;
+  // Settings changed on disk that only take effect when botd restarts.
+  repeated string restart_required = 4;
 }

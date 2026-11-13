@@ -102,7 +102,7 @@ func (s *Service) SendAgentFollowUp(ctx context.Context, in SendAgentFollowUpInp
 		return s.sendLeasedFollowUp(ctx, in)
 	}
 	now := time.Now()
-	route, _, _, _, _, _, ok := s.agentBroker.lookupAndPinConversation(conversationID, provider, operationID, func(app string) bool { return s.appAllowed(provider, app) }, now, s.cfg.SendTimeout)
+	route, _, _, _, _, _, ok := s.agentBroker.lookupAndPinConversation(conversationID, provider, operationID, func(app string) bool { return s.appAllowed(provider, app) }, now, s.cfg().SendTimeout)
 	if !ok {
 		return AgentFollowUpReceipt{}, unknownConversationError()
 	}
@@ -128,7 +128,7 @@ func (s *Service) sendAgentFollowUpOnRoute(ctx context.Context, in SendAgentFoll
 	}
 
 	fingerprint := followUpFingerprint(conversationID, markdown, summary, mentionUserID)
-	followUpID, replay, apiErr := route.beginFollowUp(provider, operationID, fingerprint, now, s.cfg.SendTimeout)
+	followUpID, replay, apiErr := route.beginFollowUp(provider, operationID, fingerprint, now, s.cfg().SendTimeout)
 	if apiErr != nil {
 		return AgentFollowUpReceipt{}, apiErr
 	}
@@ -159,7 +159,7 @@ func (s *Service) sendAgentFollowUpOnRoute(ctx context.Context, in SendAgentFoll
 		}
 	}
 
-	sendCtx, cancel := context.WithTimeout(ctx, s.cfg.SendTimeout)
+	sendCtx, cancel := context.WithTimeout(ctx, s.cfg().SendTimeout)
 	defer cancel()
 	messageID, err := backend.sender.Send(sendCtx, chatID, notify.Request{
 		Source:           agentFollowUpSource,
@@ -230,7 +230,7 @@ func (s *Service) followUpChatID(appAlias, chatAlias, privateChatID string, unco
 	if chatAlias == "direct" || unconfiguredGroup {
 		return privateChatID
 	}
-	resolvedApp, chatID, ok := s.cfg.ResolveChannel(chatAlias)
+	resolvedApp, chatID, ok := s.cfg().ResolveChannel(chatAlias)
 	if !ok || resolvedApp != effectiveAppAlias(appAlias) {
 		return ""
 	}

@@ -216,7 +216,7 @@ func TestAgentFollowUpUsesThePrivateDirectMessageRoute(t *testing.T) {
 func TestAgentFollowUpUsesThePrivateUnconfiguredGroupRoute(t *testing.T) {
 	backend := newFakeFollowUpBackend()
 	svc := newFollowUpTestService(backend)
-	svc.cfg.Commands.AllowUnconfiguredGroupChats = true
+	svc.cfg().Commands.AllowUnconfiguredGroupChats = true
 	prompt := groupFollowUpPrompt()
 	prompt.DeliveryID = "evt_unconfigured_follow_up"
 	prompt.ConversationID = "conv_unconfigured_follow_up"

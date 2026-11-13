@@ -159,7 +159,10 @@ type ReadyResponse struct {
 	// Check name -> state string ("ok" | "missing_credentials" | ...). A map so
 	// new checks are non-breaking. Redacted; never contains secrets or raw chat
 	// ids.
-	Checks        map[string]string `protobuf:"bytes,2,rep,name=checks,proto3" json:"checks,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	Checks map[string]string `protobuf:"bytes,2,rep,name=checks,proto3" json:"checks,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// The config the daemon is running on. Informational: a rejected reload
+	// leaves botd serving its previous config, so it never makes botd unready.
+	Config        *ConfigStatus `protobuf:"bytes,3,opt,name=config,proto3" json:"config,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -208,6 +211,86 @@ func (x *ReadyResponse) GetChecks() map[string]string {
 	return nil
 }
 
+func (x *ReadyResponse) GetConfig() *ConfigStatus {
+	if x != nil {
+		return x.Config
+	}
+	return nil
+}
+
+type ConfigStatus struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 1 for the config botd started with, one more for every applied reload.
+	Generation uint64 `protobuf:"varint,1,opt,name=generation,proto3" json:"generation,omitempty"`
+	// Outcome of the most recent reload attempt: "" (none yet), "ok", or
+	// "rejected".
+	LastReload string `protobuf:"bytes,2,opt,name=last_reload,json=lastReload,proto3" json:"last_reload,omitempty"`
+	// When that attempt happened, in Unix seconds; 0 when there was none.
+	LastReloadUnix int64 `protobuf:"varint,3,opt,name=last_reload_unix,json=lastReloadUnix,proto3" json:"last_reload_unix,omitempty"`
+	// Settings changed on disk that only take effect when botd restarts.
+	RestartRequired []string `protobuf:"bytes,4,rep,name=restart_required,json=restartRequired,proto3" json:"restart_required,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *ConfigStatus) Reset() {
+	*x = ConfigStatus{}
+	mi := &file_feishubotd_v1_health_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConfigStatus) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConfigStatus) ProtoMessage() {}
+
+func (x *ConfigStatus) ProtoReflect() protoreflect.Message {
+	mi := &file_feishubotd_v1_health_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConfigStatus.ProtoReflect.Descriptor instead.
+func (*ConfigStatus) Descriptor() ([]byte, []int) {
+	return file_feishubotd_v1_health_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *ConfigStatus) GetGeneration() uint64 {
+	if x != nil {
+		return x.Generation
+	}
+	return 0
+}
+
+func (x *ConfigStatus) GetLastReload() string {
+	if x != nil {
+		return x.LastReload
+	}
+	return ""
+}
+
+func (x *ConfigStatus) GetLastReloadUnix() int64 {
+	if x != nil {
+		return x.LastReloadUnix
+	}
+	return 0
+}
+
+func (x *ConfigStatus) GetRestartRequired() []string {
+	if x != nil {
+		return x.RestartRequired
+	}
+	return nil
+}
+
 var File_feishubotd_v1_health_proto protoreflect.FileDescriptor
 
 const file_feishubotd_v1_health_proto_rawDesc = "" +
@@ -218,13 +301,22 @@ const file_feishubotd_v1_health_proto_rawDesc = "" +
 	"\x06status\x18\x01 \x01(\tR\x06status\x12\x18\n" +
 	"\aservice\x18\x02 \x01(\tR\aservice\x12\x18\n" +
 	"\aversion\x18\x03 \x01(\tR\aversion\"\x0e\n" +
-	"\fReadyRequest\"\xa2\x01\n" +
+	"\fReadyRequest\"\xd7\x01\n" +
 	"\rReadyResponse\x12\x14\n" +
 	"\x05ready\x18\x01 \x01(\bR\x05ready\x12@\n" +
-	"\x06checks\x18\x02 \x03(\v2(.feishubotd.v1.ReadyResponse.ChecksEntryR\x06checks\x1a9\n" +
+	"\x06checks\x18\x02 \x03(\v2(.feishubotd.v1.ReadyResponse.ChecksEntryR\x06checks\x123\n" +
+	"\x06config\x18\x03 \x01(\v2\x1b.feishubotd.v1.ConfigStatusR\x06config\x1a9\n" +
 	"\vChecksEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x012\x9e\x01\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xa4\x01\n" +
+	"\fConfigStatus\x12\x1e\n" +
+	"\n" +
+	"generation\x18\x01 \x01(\x04R\n" +
+	"generation\x12\x1f\n" +
+	"\vlast_reload\x18\x02 \x01(\tR\n" +
+	"lastReload\x12(\n" +
+	"\x10last_reload_unix\x18\x03 \x01(\x03R\x0elastReloadUnix\x12)\n" +
+	"\x10restart_required\x18\x04 \x03(\tR\x0frestartRequired2\x9e\x01\n" +
 	"\x11BotdHealthService\x12E\n" +
 	"\x06Health\x12\x1c.feishubotd.v1.HealthRequest\x1a\x1d.feishubotd.v1.HealthResponse\x12B\n" +
 	"\x05Ready\x12\x1b.feishubotd.v1.ReadyRequest\x1a\x1c.feishubotd.v1.ReadyResponseB,Z*feishu-botd/gen/feishubotd/v1;feishubotdv1b\x06proto3"
@@ -241,25 +333,27 @@ func file_feishubotd_v1_health_proto_rawDescGZIP() []byte {
 	return file_feishubotd_v1_health_proto_rawDescData
 }
 
-var file_feishubotd_v1_health_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
+var file_feishubotd_v1_health_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_feishubotd_v1_health_proto_goTypes = []any{
 	(*HealthRequest)(nil),  // 0: feishubotd.v1.HealthRequest
 	(*HealthResponse)(nil), // 1: feishubotd.v1.HealthResponse
 	(*ReadyRequest)(nil),   // 2: feishubotd.v1.ReadyRequest
 	(*ReadyResponse)(nil),  // 3: feishubotd.v1.ReadyResponse
-	nil,                    // 4: feishubotd.v1.ReadyResponse.ChecksEntry
+	(*ConfigStatus)(nil),   // 4: feishubotd.v1.ConfigStatus
+	nil,                    // 5: feishubotd.v1.ReadyResponse.ChecksEntry
 }
 var file_feishubotd_v1_health_proto_depIdxs = []int32{
-	4, // 0: feishubotd.v1.ReadyResponse.checks:type_name -> feishubotd.v1.ReadyResponse.ChecksEntry
-	0, // 1: feishubotd.v1.BotdHealthService.Health:input_type -> feishubotd.v1.HealthRequest
-	2, // 2: feishubotd.v1.BotdHealthService.Ready:input_type -> feishubotd.v1.ReadyRequest
-	1, // 3: feishubotd.v1.BotdHealthService.Health:output_type -> feishubotd.v1.HealthResponse
-	3, // 4: feishubotd.v1.BotdHealthService.Ready:output_type -> feishubotd.v1.ReadyResponse
-	3, // [3:5] is the sub-list for method output_type
-	1, // [1:3] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	1, // [1:1] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	5, // 0: feishubotd.v1.ReadyResponse.checks:type_name -> feishubotd.v1.ReadyResponse.ChecksEntry
+	4, // 1: feishubotd.v1.ReadyResponse.config:type_name -> feishubotd.v1.ConfigStatus
+	0, // 2: feishubotd.v1.BotdHealthService.Health:input_type -> feishubotd.v1.HealthRequest
+	2, // 3: feishubotd.v1.BotdHealthService.Ready:input_type -> feishubotd.v1.ReadyRequest
+	1, // 4: feishubotd.v1.BotdHealthService.Health:output_type -> feishubotd.v1.HealthResponse
+	3, // 5: feishubotd.v1.BotdHealthService.Ready:output_type -> feishubotd.v1.ReadyResponse
+	4, // [4:6] is the sub-list for method output_type
+	2, // [2:4] is the sub-list for method input_type
+	2, // [2:2] is the sub-list for extension type_name
+	2, // [2:2] is the sub-list for extension extendee
+	0, // [0:2] is the sub-list for field type_name
 }
 
 func init() { file_feishubotd_v1_health_proto_init() }
@@ -273,7 +367,7 @@ func file_feishubotd_v1_health_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_feishubotd_v1_health_proto_rawDesc), len(file_feishubotd_v1_health_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   5,
+			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

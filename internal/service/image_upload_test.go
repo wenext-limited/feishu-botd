@@ -112,7 +112,7 @@ func TestUploadAgentImageReturnsKeyForAnAuthorizedDelivery(t *testing.T) {
 func TestUploadAgentImageRequiresExplicitProviderGrant(t *testing.T) {
 	backend := &imageUploadTestBackend{fakeSender: &fakeSender{messageID: "om_answer"}}
 	svc := newSeededImageUploadService(t, backend)
-	svc.cfg.AgentProviders["ibot"] = config.AgentProviderConfig{}
+	svc.cfg().AgentProviders["ibot"] = config.AgentProviderConfig{}
 
 	_, apiErr := svc.UploadAgentImage(context.Background(), uploadInput("op_1", pngBytes))
 	if apiErr == nil || apiErr.Code != "provider_scope_denied" {
@@ -344,7 +344,7 @@ func TestUploadAgentImageReportsAnAppThatCannotUpload(t *testing.T) {
 	// A plain fakeSender implements Sender but not ImageUploader, which is
 	// exactly the shape of an app whose credentials predate this capability.
 	svc := newImageUploadTestService(&imageUploadTestBackend{})
-	svc = NewService(svc.cfg, &fakeSender{messageID: "om_answer"},
+	svc = NewService(*svc.cfg(), &fakeSender{messageID: "om_answer"},
 		dedupe.NewMemoryStore(time.Hour), slog.Default())
 	seedImageUploadDelivery(t, svc, "ibot", "delivery_qr")
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"feishu-botd/internal/feishu"
@@ -75,6 +76,7 @@ type CommandResponse struct {
 type CommandSubscription struct {
 	C     <-chan CommandInput
 	close func()
+	reset *atomic.Bool
 }
 
 type inboundRouteRegistry struct {
@@ -93,6 +95,12 @@ func newInboundRouteRegistry(ttl time.Duration) *inboundRouteRegistry {
 		deliveries: make(map[string]time.Time),
 		messages:   make(map[string]time.Time),
 	}
+}
+
+// ClosedByReload reports whether C closed because a config reload changed
+// or removed this provider.
+func (s *CommandSubscription) ClosedByReload() bool {
+	return s != nil && s.reset != nil && s.reset.Load()
 }
 
 func (s *CommandSubscription) Close() {
@@ -116,6 +124,7 @@ type commandSubscriber struct {
 	allowedApps           map[string]struct{}
 	allowedAppsConfigured bool
 	ch                    chan CommandInput
+	reset                 *atomic.Bool
 }
 
 // commandPrincipal separates process-internal consumers from authenticated
@@ -200,6 +209,7 @@ func (s *Service) subscribeCommandsForApps(
 		close: func() {
 			s.commandBroker.unsubscribe(sub.id)
 		},
+		reset: sub.reset,
 	}, nil
 }
 
@@ -256,7 +266,7 @@ func (s *Service) DispatchCommand(ctx context.Context, in CommandInput) (int, *n
 			return 0, notify.NewAPIError(404, "unknown_channel", "unknown channel", false)
 		}
 	default:
-		appAlias, _, ok := s.cfg.ResolveChannel(in.ChatAlias)
+		appAlias, _, ok := s.cfg().ResolveChannel(in.ChatAlias)
 		if !ok || appAlias != in.AppAlias {
 			return 0, notify.NewAPIError(404, "unknown_channel", "unknown channel", false)
 		}
@@ -325,7 +335,7 @@ func (s *Service) DispatchCommand(ctx context.Context, in CommandInput) (int, *n
 // the ambient grant for this group chat, and the message came from a person.
 func (s *Service) ambientCandidate(in CommandInput) bool {
 	return in.HumanSender && isGroupChatType(in.Metadata["chat_type"]) &&
-		s.cfg.AmbientChatEnabled(in.AppAlias, in.ChatAlias)
+		s.cfg().AmbientChatEnabled(in.AppAlias, in.ChatAlias)
 }
 
 func isGroupChatType(chatType string) bool {
@@ -401,7 +411,7 @@ func (s *Service) resolveAgentReplyOwner(in CommandInput) (string, bool, *notify
 }
 
 func (s *Service) acceptsUnconfiguredGroup(in CommandInput) bool {
-	if !in.UnconfiguredGroup || !s.cfg.AllowsUnconfiguredGroupChats(in.AppAlias) || in.ChatID == "" {
+	if !in.UnconfiguredGroup || !s.cfg().AllowsUnconfiguredGroupChats(in.AppAlias) || in.ChatID == "" {
 		return false
 	}
 	switch in.Metadata["chat_type"] {
@@ -496,7 +506,7 @@ func (s *Service) RespondInternalCommand(ctx context.Context, in CommandResponse
 func (s *Service) respondCommand(ctx context.Context, in CommandResponse, internal bool) *notify.APIError {
 	in.Provider = strings.TrimSpace(in.Provider)
 	in.DeliveryID = strings.TrimSpace(in.DeliveryID)
-	if len(s.cfg.AgentProviders) > 0 && in.Provider == "" {
+	if len(s.cfg().AgentProviders) > 0 && in.Provider == "" {
 		return notify.BadRequest("missing_provider", "provider is required")
 	}
 	if in.DeliveryID == "" {
@@ -512,7 +522,7 @@ func (s *Service) respondCommand(ctx context.Context, in CommandResponse, intern
 	if apiErr != nil {
 		return apiErr
 	}
-	resolvedApp, _, ok := s.cfg.ResolveChannel(chatAlias)
+	resolvedApp, _, ok := s.cfg().ResolveChannel(chatAlias)
 	if !ok || resolvedApp != appAlias {
 		s.commandBroker.finishResponse(in.DeliveryID, false)
 		return notify.NewAPIError(404, "unknown_delivery", "unknown delivery", false)
@@ -569,9 +579,32 @@ func (b *commandBroker) subscribe(in CommandSubscribeOptions, internal bool) (*c
 		allowedApps:           normalizedAppAllowlist(in.AllowedApps),
 		allowedAppsConfigured: in.AllowedAppsConfigured,
 		ch:                    make(chan CommandInput, commandSubscriptionBuffer),
+		reset:                 &atomic.Bool{},
 	}
 	b.subscribers[sub.id] = sub
 	return sub, nil
+}
+
+// closeProviders ends every wire subscription of the named providers,
+// marking it as closed by a reload. In-process consumers are not providers
+// and are left alone. It returns how many it closed.
+func (b *commandBroker) closeProviders(providers map[string]struct{}) int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	closed := 0
+	for id, sub := range b.subscribers {
+		if sub.principal.internal {
+			continue
+		}
+		if _, reset := providers[sub.principal.provider]; !reset {
+			continue
+		}
+		sub.reset.Store(true)
+		delete(b.subscribers, id)
+		close(sub.ch)
+		closed++
+	}
+	return closed
 }
 
 func (b *commandBroker) unsubscribe(id uint64) {

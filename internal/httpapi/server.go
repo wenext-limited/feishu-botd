@@ -12,6 +12,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"feishu-botd/internal/config"
@@ -23,7 +24,7 @@ import (
 // request delegates to the shared *service.Service so the HTTP and gRPC
 // transports stay in lockstep.
 type Server struct {
-	cfg     config.Config
+	cfgRef  atomic.Pointer[config.Config]
 	svc     *service.Service
 	logger  *slog.Logger
 	servers []*http.Server
@@ -34,7 +35,19 @@ func NewServer(cfg config.Config, svc *service.Service, logger *slog.Logger) *Se
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Server{cfg: cfg, svc: svc, logger: logger}
+	s := &Server{svc: svc, logger: logger}
+	s.cfgRef.Store(&cfg)
+	return s
+}
+
+// ApplyConfig swaps the bearer token and provider set requests are checked
+// against. Listener addresses are fixed for the life of the process.
+func (s *Server) ApplyConfig(cfg config.Config) {
+	s.cfgRef.Store(&cfg)
+}
+
+func (s *Server) cfg() *config.Config {
+	return s.cfgRef.Load()
 }
 
 func (s *Server) ListenAndServeUnix(ctx context.Context, socketPath string) error {
@@ -65,7 +78,7 @@ func (s *Server) unixHandler() http.Handler {
 	// untrusted agent process, so outbound HTTP sends need the distinct general
 	// bearer just like outbound gRPC calls. With no provider map, preserve the
 	// compatibility shim's legacy local-trust behavior.
-	return s.handler(len(s.cfg.AgentProviders) > 0)
+	return s.handler(func() bool { return len(s.cfg().AgentProviders) > 0 })
 }
 
 func (s *Server) ListenAndServeTCP(ctx context.Context, bindAddr string) error {
@@ -73,7 +86,7 @@ func (s *Server) ListenAndServeTCP(ctx context.Context, bindAddr string) error {
 	if err != nil {
 		return err
 	}
-	server := &http.Server{Handler: s.handler(true)}
+	server := &http.Server{Handler: s.handler(always)}
 	s.track(server)
 	go func() {
 		<-ctx.Done()
@@ -104,19 +117,24 @@ func (s *Server) track(server *http.Server) {
 	s.servers = append(s.servers, server)
 }
 
-func (s *Server) handler(requireAuth bool) http.Handler {
+func always() bool { return true }
+
+// handler serves the HTTP API. requireAuth is asked on every request, so a
+// reload that adds the first provider puts the Unix socket behind the
+// general bearer at once.
+func (s *Server) handler(requireAuth func() bool) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.handleHealth)
 	mux.HandleFunc("GET /readyz", s.handleReady)
 	mux.HandleFunc("POST /v1/notify", func(w http.ResponseWriter, r *http.Request) {
-		if requireAuth && !s.authorized(r) {
+		if requireAuth() && !s.authorized(r) {
 			s.writeError(w, r, notify.NewAPIError(401, "unauthorized", "missing or invalid bearer token", false))
 			return
 		}
 		s.handleNotify(w, r)
 	})
 	mux.HandleFunc("POST /v1/message", func(w http.ResponseWriter, r *http.Request) {
-		if requireAuth && !s.authorized(r) {
+		if requireAuth() && !s.authorized(r) {
 			s.writeError(w, r, notify.NewAPIError(401, "unauthorized", "missing or invalid bearer token", false))
 			return
 		}
@@ -129,7 +147,7 @@ func (s *Server) handler(requireAuth bool) http.Handler {
 }
 
 func (s *Server) authorized(r *http.Request) bool {
-	expected := s.cfg.AuthToken
+	expected := s.cfg().AuthToken
 	if expected == "" {
 		return false
 	}
@@ -154,7 +172,20 @@ func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
 		status = http.StatusServiceUnavailable
 		state = "unready"
 	}
-	writeJSON(w, status, map[string]any{"status": state, "checks": checks})
+	configStatus := s.svc.ConfigStatus()
+	restartRequired := configStatus.RestartRequired
+	if restartRequired == nil {
+		restartRequired = []string{}
+	}
+	configBody := map[string]any{
+		"generation":       configStatus.Generation,
+		"last_reload":      configStatus.LastReload,
+		"restart_required": restartRequired,
+	}
+	if !configStatus.LastReloadAt.IsZero() {
+		configBody["last_reload_at"] = configStatus.LastReloadAt.UTC().Format(time.RFC3339)
+	}
+	writeJSON(w, status, map[string]any{"status": state, "checks": checks, "config": configBody})
 }
 
 func (s *Server) handleNotify(w http.ResponseWriter, r *http.Request) {

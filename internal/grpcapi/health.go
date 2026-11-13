@@ -20,5 +20,14 @@ func (h *healthServer) Health(_ context.Context, _ *pb.HealthRequest) (*pb.Healt
 
 func (h *healthServer) Ready(ctx context.Context, _ *pb.ReadyRequest) (*pb.ReadyResponse, error) {
 	ready, checks := h.svc.Ready(ctx)
-	return &pb.ReadyResponse{Ready: ready, Checks: checks}, nil
+	status := h.svc.ConfigStatus()
+	configStatus := &pb.ConfigStatus{
+		Generation:      status.Generation,
+		LastReload:      status.LastReload,
+		RestartRequired: status.RestartRequired,
+	}
+	if !status.LastReloadAt.IsZero() {
+		configStatus.LastReloadUnix = status.LastReloadAt.Unix()
+	}
+	return &pb.ReadyResponse{Ready: ready, Checks: checks, Config: configStatus}, nil
 }

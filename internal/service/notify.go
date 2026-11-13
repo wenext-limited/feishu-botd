@@ -18,10 +18,10 @@ import (
 // caller-supplied source + dedupe_key make the call idempotent.
 func (s *Service) SendNotification(ctx context.Context, req notify.Request) (notify.Response, *notify.APIError) {
 	req.Target.Channel = s.resolveChannel(req.Target.Channel, req.Source)
-	if apiErr := req.Validate(s.cfg.Channels); apiErr != nil {
+	if apiErr := req.Validate(s.cfg().Channels); apiErr != nil {
 		return notify.Response{}, apiErr
 	}
-	if _, _, ok := s.cfg.ResolveChannel(req.Target.Channel); !ok {
+	if _, _, ok := s.cfg().ResolveChannel(req.Target.Channel); !ok {
 		return notify.Response{}, notify.NewAPIError(404, "unknown_channel", "unknown channel", false)
 	}
 	// SendNotification remains the stable markdown notification contract. The
@@ -62,7 +62,7 @@ func (s *Service) SendMessage(ctx context.Context, in MessageInput) (SendResult,
 	if channel == "" {
 		return SendResult{}, notify.BadRequest("missing_channel", "target.channel is required")
 	}
-	if _, _, ok := s.cfg.ResolveChannel(channel); !ok {
+	if _, _, ok := s.cfg().ResolveChannel(channel); !ok {
 		return SendResult{}, notify.NewAPIError(404, "unknown_channel", "unknown channel", false)
 	}
 	markdown := strings.TrimSpace(in.Markdown)
@@ -102,10 +102,10 @@ func (s *Service) resolveChannel(channel, source string) string {
 	if channel != "" {
 		return channel
 	}
-	if svc, ok := s.cfg.Services[strings.TrimSpace(source)]; ok {
+	if svc, ok := s.cfg().Services[strings.TrimSpace(source)]; ok {
 		return svc.DefaultChannel
 	}
-	return s.cfg.DefaultChannel
+	return s.cfg().DefaultChannel
 }
 
 func validateCardJSON(cardJSON string) *notify.APIError {
@@ -121,7 +121,7 @@ func validateCardJSON(cardJSON string) *notify.APIError {
 // touched. The channel alias in req.Target is assumed to already be validated
 // against config by the caller.
 func (s *Service) deliver(ctx context.Context, req notify.Request, dedupeEnabled bool) (SendResult, *notify.APIError) {
-	appAlias, chatID, ok := s.cfg.ResolveChannel(req.Target.Channel)
+	appAlias, chatID, ok := s.cfg().ResolveChannel(req.Target.Channel)
 	if !ok {
 		return SendResult{}, notify.NewAPIError(404, "unknown_channel", "unknown channel", false)
 	}
@@ -143,7 +143,7 @@ func (s *Service) deliver(ctx context.Context, req notify.Request, dedupeEnabled
 		}
 	}
 
-	sendCtx, cancel := context.WithTimeout(ctx, s.cfg.SendTimeout)
+	sendCtx, cancel := context.WithTimeout(ctx, s.cfg().SendTimeout)
 	defer cancel()
 
 	messageID, err := backend.sender.Send(sendCtx, chatID, req)

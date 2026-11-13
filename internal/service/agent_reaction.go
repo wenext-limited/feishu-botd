@@ -29,8 +29,8 @@ func (s *Service) resolveAgentWorkingReactionEmoji(
 	response *agentResponse,
 	provider, senderID string,
 ) (string, string) {
-	defaultEmoji := s.cfg.AgentWorkingReaction(provider)
-	overrides := s.cfg.AgentWorkingReactionOverrides(provider)
+	defaultEmoji := s.cfg().AgentWorkingReaction(provider)
+	overrides := s.cfg().AgentWorkingReactionOverrides(provider)
 	if len(overrides) == 0 || contactUsers == nil || senderID == "" {
 		return defaultEmoji, ""
 	}

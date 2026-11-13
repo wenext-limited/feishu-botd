@@ -796,7 +796,7 @@ func TestMultiAppAllowedAppsIsRecheckedAtEveryHandleMutation(t *testing.T) {
 	svc.inboundRoutes.messages[messageKey] = nearExpiry
 	svc.inboundRoutes.mu.Unlock()
 
-	svc.cfg.AgentProviders["agent"] = config.AgentProviderConfig{
+	svc.cfg().AgentProviders["agent"] = config.AgentProviderConfig{
 		AllowedApps: []string{config.DefaultAppAlias}, AllowedAppsConfigured: true,
 	}
 	beforeAlphaOrdinary, beforeAlphaCards, beforeAlphaContent, beforeAlphaSettings := alpha.counts()
@@ -903,7 +903,7 @@ func TestMultiAppReadinessTracksEachConnectionAndBoundsAuthChecks(t *testing.T) 
 	beta.mu.Lock()
 	beta.readySeen, beta.readyWait = started, release
 	beta.mu.Unlock()
-	svc.cfg.SendTimeout = 30 * time.Millisecond
+	svc.cfg().SendTimeout = 30 * time.Millisecond
 	began := time.Now()
 	ready, checks = svc.Ready(context.Background())
 	if elapsed := time.Since(began); elapsed > 500*time.Millisecond {

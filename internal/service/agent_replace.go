@@ -91,7 +91,7 @@ func (s *Service) applyAgentReplacement(
 		op.settingsUUID = operationUUID("replace-settings", response.responseID, operationID, 64)
 		op.phase = response.phase
 	}
-	callCtx, cancel := context.WithTimeout(ctx, s.cfg.SendTimeout)
+	callCtx, cancel := context.WithTimeout(ctx, s.cfg().SendTimeout)
 	defer cancel()
 	if !op.panelDone {
 		if err := response.waitForMutation(callCtx); err != nil {
