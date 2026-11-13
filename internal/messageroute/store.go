@@ -160,17 +160,9 @@ func Open(stateDir string, ttl time.Duration, keys map[string][]byte, now time.T
 	if ttl <= 0 {
 		return nil, errors.New("message route TTL must be positive")
 	}
-	sealers := make(map[string]cipher.AEAD, len(keys))
-	for appAlias, key := range keys {
-		block, err := aes.NewCipher(key)
-		if err != nil {
-			return nil, fmt.Errorf("message route key for app %q: %w", appAlias, err)
-		}
-		aead, err := cipher.NewGCM(block)
-		if err != nil {
-			return nil, fmt.Errorf("message route key for app %q: %w", appAlias, err)
-		}
-		sealers[strings.TrimSpace(appAlias)] = aead
+	sealers, err := newSealers(keys)
+	if err != nil {
+		return nil, err
 	}
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
 		return nil, fmt.Errorf("prepare message route state directory: %w", err)
@@ -188,6 +180,61 @@ func Open(stateDir string, ttl time.Duration, keys map[string][]byte, now time.T
 		return nil, err
 	}
 	return store, nil
+}
+
+func newSealers(keys map[string][]byte) (map[string]cipher.AEAD, error) {
+	sealers := make(map[string]cipher.AEAD, len(keys))
+	for appAlias, key := range keys {
+		block, err := aes.NewCipher(key)
+		if err != nil {
+			return nil, fmt.Errorf("message route key for app %q: %w", appAlias, err)
+		}
+		aead, err := cipher.NewGCM(block)
+		if err != nil {
+			return nil, fmt.Errorf("message route key for app %q: %w", appAlias, err)
+		}
+		sealers[strings.TrimSpace(appAlias)] = aead
+	}
+	return sealers, nil
+}
+
+// SetKeys replaces the per-app journal keys after a config reload. Routes
+// of an app no longer in keys are dropped; every other route is resealed
+// under its app's current key and the journal is rewritten, so a re-credited
+// app's routes stay readable after the next restart. A memory store holds
+// no keys and only drops routes of removed apps.
+func (s *Store) SetKeys(keys map[string][]byte, now time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.dir == "" {
+		for key, current := range s.routes {
+			if _, kept := keys[current.route.AppAlias]; !kept {
+				delete(s.routes, key)
+			}
+		}
+		return nil
+	}
+	if err := s.writableLocked(); err != nil {
+		return err
+	}
+	sealers, err := newSealers(keys)
+	if err != nil {
+		return err
+	}
+	s.sealers = sealers
+	s.pruneLocked(now)
+	for key, current := range s.routes {
+		if _, kept := sealers[current.route.AppAlias]; !kept {
+			delete(s.routes, key)
+			continue
+		}
+		line, err := s.encodeLocked(key, current.route)
+		if err != nil {
+			return err
+		}
+		s.routes[key] = entry{route: current.route, line: line}
+	}
+	return s.compactLocked()
 }
 
 // Put records or refreshes key's route for one TTL from now. Providers
