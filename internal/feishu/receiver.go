@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"unicode"
 
 	larkevent "github.com/larksuite/oapi-sdk-go/v3/event"
@@ -170,13 +171,17 @@ const (
 // CommandReceiver owns the Feishu long connection used for inbound bot command
 // events. The public command contract deals only in configured channel aliases.
 type CommandReceiver struct {
-	cfg         CommandReceiverConfig
-	logger      *slog.Logger
-	handler     CommandHandler
-	client      *larkws.Client
-	chatAliases map[string]string
-	botNames    map[string]struct{}
-	titleCache  *chatTitleCache
+	cfg        CommandReceiverConfig
+	logger     *slog.Logger
+	client     *larkws.Client
+	titleCache *chatTitleCache
+	// settingsRef holds the routing settings a config reload may change
+	// without reconnecting: channels, bot identity, and the unconfigured
+	// group policy. cfg's copies of them are not read after construction.
+	settingsRef atomic.Pointer[receiverSettings]
+
+	handlerMu sync.RWMutex
+	handler   CommandHandler
 
 	actionMu      sync.RWMutex
 	actionHandler CardActionHandler
@@ -199,12 +204,11 @@ func NewCommandReceiver(cfg CommandReceiverConfig, handler CommandHandler, logge
 		cfg:          cfg,
 		logger:       logger,
 		handler:      handler,
-		chatAliases:  uniqueChatAliases(cfg.Channels),
-		botNames:     normalizedNameSet(cfg.BotNames),
 		titleCache:   newChatTitleCache(cfg.ChatTitleLookup),
 		state:        ConnectionStateDisconnected,
 		initialReady: make(chan struct{}),
 	}
+	r.UpdateSettings(cfg)
 	if r.titleCache.lookup == nil {
 		r.titleCache.lookup = newSDKChatTitleLookup(cfg.AppID, cfg.AppSecret, logger)
 	}
@@ -239,6 +243,42 @@ func NewCommandReceiver(cfg CommandReceiverConfig, handler CommandHandler, logge
 		}),
 	)
 	return r
+}
+
+// receiverSettings is the part of CommandReceiverConfig a reload replaces.
+type receiverSettings struct {
+	chatAliases                 map[string]string
+	botNames                    map[string]struct{}
+	AllowUnconfiguredGroupChats bool
+	BotOpenID                   string
+	BotUserID                   string
+	BotUnionID                  string
+}
+
+// UpdateSettings applies cfg's channels, bot identity, and unconfigured
+// group policy to the next event, keeping the long connection. The app's
+// alias and credentials are fixed for the receiver's life.
+func (r *CommandReceiver) UpdateSettings(cfg CommandReceiverConfig) {
+	r.settingsRef.Store(&receiverSettings{
+		chatAliases:                 uniqueChatAliases(cfg.Channels),
+		botNames:                    normalizedNameSet(cfg.BotNames),
+		AllowUnconfiguredGroupChats: cfg.AllowUnconfiguredGroupChats,
+		BotOpenID:                   cfg.BotOpenID,
+		BotUserID:                   cfg.BotUserID,
+		BotUnionID:                  cfg.BotUnionID,
+	})
+}
+
+func (r *CommandReceiver) settings() *receiverSettings {
+	return r.settingsRef.Load()
+}
+
+// SetCommandHandler replaces the sink for inbound messages. Nil drops them
+// at ingress, before any chat title lookup.
+func (r *CommandReceiver) SetCommandHandler(handler CommandHandler) {
+	r.handlerMu.Lock()
+	defer r.handlerMu.Unlock()
+	r.handler = handler
 }
 
 // SetCardActionHandler installs the daemon-local sink for interactive card
@@ -313,7 +353,10 @@ func (r *CommandReceiver) handleMessage(ctx context.Context, event *larkim.P2Mes
 	if !ok {
 		return nil
 	}
-	if r.handler == nil {
+	r.handlerMu.RLock()
+	handler := r.handler
+	r.handlerMu.RUnlock()
+	if handler == nil {
 		return nil
 	}
 	chatType := cmd.Metadata["chat_type"]
@@ -328,7 +371,7 @@ func (r *CommandReceiver) handleMessage(ctx context.Context, event *larkim.P2Mes
 			cmd.ConversationTitle = title
 		}
 	}
-	if err := r.handler(ctx, cmd); err != nil {
+	if err := handler(ctx, cmd); err != nil {
 		r.logger.Warn("command handler failed",
 			"operation", "command",
 			"error_class", receiverHandlerErrorClass(err),
@@ -514,12 +557,12 @@ func (r *CommandReceiver) CommandFromEvent(event *larkim.P2MessageReceiveV1) (In
 		chatAlias = "direct"
 	case "group", "topic_group":
 		var ok bool
-		chatAlias, ok = r.chatAliases[chatID]
+		chatAlias, ok = r.settings().chatAliases[chatID]
 		if !ok && r.cfg.RuntimeChatAlias != nil {
 			chatAlias, ok = r.cfg.RuntimeChatAlias(chatID)
 		}
 		if !ok {
-			if !r.cfg.AllowUnconfiguredGroupChats {
+			if !r.settings().AllowUnconfiguredGroupChats {
 				return InboundCommand{}, false
 			}
 			chatAlias = unconfiguredGroupAlias(r.cfg.AppAlias, chatID)
@@ -638,9 +681,9 @@ func (r *CommandReceiver) isHumanSender(sender *larkim.EventSender) bool {
 	}
 	if sender.SenderId != nil {
 		for _, pair := range [][2]string{
-			{r.cfg.BotOpenID, deref(sender.SenderId.OpenId)},
-			{r.cfg.BotUserID, deref(sender.SenderId.UserId)},
-			{r.cfg.BotUnionID, deref(sender.SenderId.UnionId)},
+			{r.settings().BotOpenID, deref(sender.SenderId.OpenId)},
+			{r.settings().BotUserID, deref(sender.SenderId.UserId)},
+			{r.settings().BotUnionID, deref(sender.SenderId.UnionId)},
 		} {
 			if pair[0] != "" && pair[0] == pair[1] {
 				return false
@@ -1006,9 +1049,9 @@ func (r *CommandReceiver) botMentionTokens(mentions []*larkim.MentionEvent) map[
 			add(deref(mention.Id.UnionId))
 		}
 	}
-	add(r.cfg.BotOpenID)
-	add(r.cfg.BotUserID)
-	add(r.cfg.BotUnionID)
+	add(r.settings().BotOpenID)
+	add(r.settings().BotUserID)
+	add(r.settings().BotUnionID)
 	return tokens
 }
 
@@ -1022,7 +1065,7 @@ func (r *CommandReceiver) isBotPostMention(element postElement, botTokens map[st
 			return true
 		}
 	}
-	_, ok := r.botNames[strings.ToLower(strings.TrimSpace(element.UserName))]
+	_, ok := r.settings().botNames[strings.ToLower(strings.TrimSpace(element.UserName))]
 	return ok
 }
 
@@ -1030,38 +1073,38 @@ func (r *CommandReceiver) matchesBotMention(mention *larkim.MentionEvent) bool {
 	if mention == nil {
 		return false
 	}
-	strongIdentityConfigured := r.cfg.BotOpenID != "" || r.cfg.BotUserID != "" || r.cfg.BotUnionID != ""
+	strongIdentityConfigured := r.settings().BotOpenID != "" || r.settings().BotUserID != "" || r.settings().BotUnionID != ""
 	if strongIdentityConfigured {
 		if mention.Id == nil {
 			return false
 		}
-		if r.cfg.BotOpenID != "" && deref(mention.Id.OpenId) == r.cfg.BotOpenID {
+		if r.settings().BotOpenID != "" && deref(mention.Id.OpenId) == r.settings().BotOpenID {
 			return true
 		}
-		if r.cfg.BotUserID != "" && deref(mention.Id.UserId) == r.cfg.BotUserID {
+		if r.settings().BotUserID != "" && deref(mention.Id.UserId) == r.settings().BotUserID {
 			return true
 		}
-		if r.cfg.BotUnionID != "" && deref(mention.Id.UnionId) == r.cfg.BotUnionID {
+		if r.settings().BotUnionID != "" && deref(mention.Id.UnionId) == r.settings().BotUnionID {
 			return true
 		}
 		// A configured strong identity is authoritative. Never let a display-name
 		// collision override a concrete, mismatching Feishu identity.
 		return false
 	}
-	if len(r.botNames) == 0 {
+	if len(r.settings().botNames) == 0 {
 		return false
 	}
 	mentionedType := strings.ToLower(strings.TrimSpace(deref(mention.MentionedType)))
 	if mentionedType != "bot" {
 		return false
 	}
-	_, ok := r.botNames[strings.ToLower(strings.TrimSpace(deref(mention.Name)))]
+	_, ok := r.settings().botNames[strings.ToLower(strings.TrimSpace(deref(mention.Name)))]
 	return ok
 }
 
 func (r *CommandReceiver) stripConfiguredBotName(text string) string {
 	trimmed := strings.TrimSpace(text)
-	for name := range r.botNames {
+	for name := range r.settings().botNames {
 		for _, prefix := range []string{"@" + name, name} {
 			if rest, ok := trimCaseInsensitivePrefix(trimmed, prefix); ok {
 				return rest
@@ -1075,7 +1118,7 @@ func (r *CommandReceiver) stripConfiguredBotName(text string) string {
 // name followed by whitespace or the end of the text.
 func (r *CommandReceiver) stripConfiguredBotNameWord(text string) string {
 	trimmed := strings.TrimSpace(text)
-	for name := range r.botNames {
+	for name := range r.settings().botNames {
 		for _, prefix := range []string{"@" + name, name} {
 			rest, ok := trimCaseInsensitivePrefix(trimmed, prefix)
 			if !ok {
