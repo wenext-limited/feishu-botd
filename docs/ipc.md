@@ -148,6 +148,8 @@ is supplied.
 | `CreateAgentChat` | Creates a group chat with the bot as owner and grants it to the provider at runtime (`allow_create_chats`). |
 | `InviteAgentChatMembers` | Adds members to a chat the provider created. |
 | `RenameAgentChat` | Renames a chat the provider created. |
+| `AdoptAgentChat` | Grants an existing group named by a delivered message, preserving its alias (`allow_adopt_chats`). |
+| `ReleaseAgentChat` | Removes this provider's created or adopted runtime grant (`allow_adopt_chats`). |
 
 Inbound Feishu events are dispatched only for an app whose `commands.enabled`
 is true (the existing `FEISHU_BOTD_COMMANDS_ENABLED` override affects the
@@ -621,7 +623,7 @@ only allowed app, or the default app when it may access several. The grant
 lives in `state_dir/agent-chat-grants.json`:
 
 ```json
-{"version": 1, "grants": [{"provider": "commons", "app_alias": "default",
+{"version": 1, "grants": [{"kind": "created", "provider": "commons", "app_alias": "default",
   "chat_id": "oc_…", "chat_alias": "agent-chat-…", "name": "[Agents] refund-v2",
   "created_at": "…", "operation_id": "…", "request_digest": "…"}]}
 ```
@@ -636,6 +638,35 @@ with `agent-chat-`. `InviteAgentChatMembers` (`chat_alias`,
 Feishu permission (codes 99991672, 99991679, 232025, 232043) is
 `chat_permission_denied`. See
 [Group chats a provider creates](agent.md#group-chats-a-provider-creates).
+
+`AdoptAgentChat` accepts `provider` and `message_ref` (at most 160 bytes) and
+returns `chat_alias` and `already_granted`. The ref must name a group message
+botd delivered to this provider; it may be the latest command, reply, or ambient
+message. botd resolves its private app/chat route from
+`agent-message-routes.jsonl` and verifies current bot membership. It preserves
+the exact delivered alias, including an opaque `unconfigured-group-…` alias.
+Unknown, expired, non-group, bot-authored, or other-provider refs return
+`unknown_chat` (`NOT_FOUND`). Static chats and this provider's existing runtime
+grants return `already_granted = true`; static adoption changes no permissions.
+A membership permission refusal is `chat_permission_denied`.
+
+`ReleaseAgentChat` accepts `provider` and `chat_alias` (at most 160 bytes) and
+returns `released`. It removes only this provider's runtime grant of either
+kind; no grant means `released = false`. It never modifies static config or
+removes the bot from Feishu. Releasing a created grant removes its operation
+record and makes later rename/invite calls `unknown_chat`. Re-adoption grants
+access only, without restoring those management rights.
+
+Both RPCs require the bearer-authenticated provider identity and the separate
+`allow_adopt_chats` grant (default false; off returns `PERMISSION_DENIED`).
+Configuration requires ambient and proactive grants plus `state_dir`, but allows
+empty static alias lists. The runtime file stays version 1 and records
+`kind: "created"` or `kind: "adopted"`; absent kind means legacy created.
+Entries are keyed by provider and alias, with one consistent app/chat route for
+any shared alias. Adoption and release persist before becoming visible, and
+concurrent retries are serialized. A persistence failure is
+`grant_store_unavailable` (`INTERNAL`). See
+[Adopt an existing group and release a grant](agent.md#adopt-an-existing-group-and-release-a-grant).
 
 #### Agent card actions
 Each `AgentResponseAction` carries a provider-defined `action_id`, label,

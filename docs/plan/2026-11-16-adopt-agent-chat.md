@@ -11,21 +11,26 @@ frozen; changes go through the orchestrator. Builds on ADR 0001 (runtime chat gr
 
 ## Requirements — botd (this repo)
 
-**Status:** In Progress
+**Status:** Done — 2026-11-16 by Codex (botd scope only)
 
-**Progress:** Step 1 adds provider-scoped grant kinds, durable removal, legacy
-created-grant loading, and opt-in adoption config. Verified with scoped registry,
-config, and gRPC tests; kind-check ablation fails the permission regression test.
-Go bindings regenerated with `make proto`; the frozen proto is unchanged.
+**Progress:**
 
-Step 2 implements the authenticated RPCs, membership checks, latest-message
-resolution from delivered group routes, and created-only management rights.
-`0e593ac` contains step 1. Scoped service, gRPC, receiver, and SDK tests cover
-reply/ambient refs, restart/reload, static/created no-ops, concurrent adoption,
-release, and authorization/persistence failures. Ablations of recipient ownership,
-route-publication locking, and created-only management each fail their regression
-test. Route retention now publishes actual recipients under the ingress lock,
-which route lookups share; it never authorizes prospective recipients.
+- `0e593ac`: provider-scoped grant kinds, durable removal, legacy created-grant
+  loading, opt-in adoption config, and Go bindings from `make proto`.
+- `4694833`: authenticated adoption/release RPCs, membership checks, exact
+  delivered-message alias preservation, actual-recipient route publication,
+  runtime routing, and created-only management rights. Tests cover latest replies
+  and ambient refs, restart/reload, static/created no-ops, concurrent adoption,
+  release isolation, and authorization/persistence failures.
+- Final documentation adds the operator/IPC guidance and ADR 0001 addendum.
+
+**Verification:** `make check` (gofmt, all tests, all race tests, go vet),
+`make proto-check`, and `git diff --check` passed. The frozen proto is unchanged.
+Four ablations independently removed kind-specific capabilities, recipient
+ownership, route-publication locking, and created-only management; each made its
+regression test fail, and the restored implementation passed. Route retention
+publishes only actual recipients under the ingress lock shared by lookups.
+Live Feishu/Commons acceptance and deployment are not performed in this worktree.
 
 1. New provider flag `allow_adopt_chats` (default false), validated like
    `allow_create_chats`; documented in docs/agent.md and docs/ipc.md.

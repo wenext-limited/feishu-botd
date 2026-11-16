@@ -55,3 +55,55 @@ that chat to exactly that provider at runtime.
 - Created chats are not in the startup redaction list for log scrubbing, which
   is built from the static config; botd never logs raw chat ids on these
   paths, only aliases.
+
+## Addendum: adoption and release (2026-11-16)
+
+A provider may now explicitly adopt a group a person has bound, without editing
+static config. `allow_adopt_chats` is a separate, default-off capability for
+`AdoptAgentChat` and `ReleaseAgentChat`. Like creation it requires ambient and
+proactive capabilities and `state_dir`, and permits empty static alias lists.
+The initial mention from an unconfigured group still requires the app-level
+`allow_unconfigured_group_chats` flag.
+
+Adoption names the group by any unexpired message delivered to that provider
+from it: a command, an owned-message reply, or ambient observation, including the
+latest message rather than the original bind. The sealed route journal supplies
+the private app/chat ids and the exact delivered alias. Only group ingress
+retains unauthored message routes; outbound routes are marked `Authored`, so
+these facts distinguish eligible group messages without changing the journal
+format. The ownership snapshot alone cannot resolve an inbound message or prove
+its receipt. Routes are now retained for adoption-enabled recipients even before
+a chat has a proactive grant. Dispatch persists actual recipients while holding
+the ingress lock; route lookups share that lock so an immediate client call
+waits for publication. A failed write cannot leave a prospective recipient with
+adoption access. The existing route TTL and app-secret rotation behavior apply.
+
+botd checks provider/app scope and current bot membership through Feishu's
+`is_in_chat` API before granting. Unknown, expired, foreign, bot-authored and
+non-group refs fail as `unknown_chat`. An alias remapped since delivery also
+fails closed. Static chats and this provider's existing grants are idempotent
+`already_granted` no-ops; static provider ACLs are never widened by adoption.
+The alias remains exactly the one the message carried, including an opaque
+unconfigured-group alias. The resulting grant resolves without a message route
+or app-wide unconfigured ingress, and survives restart and reload.
+
+The grant file remains version 1. Each grant has `kind: "created"` or
+`kind: "adopted"`; absent kind loads as created for backward compatibility.
+Created aliases retain the reserved `agent-chat-` prefix. Adopted aliases are
+not required to have that prefix. Registry entries are scoped by provider and
+alias, so independent providers can adopt the same chat; shared aliases must
+resolve to the same app/chat pair. Ambient and proactive access checks the
+capability corresponding to each grant kind. Rename and invite require a
+created grant and `allow_create_chats`, regardless of an adopted alias's prefix.
+
+`ReleaseAgentChat` atomically removes this provider's runtime grant of either
+kind. It is idempotent, never edits static config, and does not delete the chat
+or remove its members. Other providers' grants and independent static permissions
+survive. Without any remaining runtime or static route, mentions again depend
+on the unconfigured-group flag; the released provider loses runtime ambient and
+proactive access. Removing a created grant also removes its operation record
+and management rights: later rename/invite calls return `unknown_chat`, and
+re-adopting creates only an adopted grant. A later create operation is again
+subject to Feishu's UUID window. This supersedes the manual-only revocation
+limitation above. Creation, adoption, and release are serialized within the
+service; registry writes and removals persist before changing memory.
