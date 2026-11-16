@@ -594,10 +594,16 @@ A statically configured chat or one already granted to this provider returns
 `already_granted = true`. Static adoption is a no-op and leaves the existing
 provider ACLs intact. An existing created grant keeps its creation and management
 rights. New adopted grants are persisted in `agent-chat-grants.json` with
-`kind: "adopted"`; created grants use `kind: "created"`. Older records without
+`kind: "adopted"`; created grants use `kind: "created"`. The registry always
+writes version 2 and still loads version 1. Older binaries fail explicitly with
+`agent-chat-grants.json has version 2, want 1`. To roll back, stop botd, back up
+`state_dir/agent-chat-grants.json`, remove every `"kind":"adopted"` entry from
+the `grants` array, and set the top-level `version` to `1`. Preserve mode 0600,
+then start the older binary. Adopted access is revoked; created grants and their
+operation records remain. Older records without
 `kind` load as created. Grants are scoped by provider and alias; two providers
 may independently adopt the same chat without sharing or overwriting permissions.
-The file remains version 1, with raw chat ids and mode 0600 as before.
+The file contains raw chat ids and keeps mode 0600 as before.
 
 An adopted grant resolves like a configured channel across restarts and config
 reloads. Its ambient and proactive access needs no static aliases or app-wide

@@ -1,11 +1,50 @@
 package chatgrant
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 )
+
+func TestRegistryWritesVersion2(t *testing.T) {
+	dir := t.TempDir()
+	r, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	grants := []Grant{
+		{Kind: Created, Provider: "commons", AppAlias: "default", ChatID: "oc_created", ChatAlias: "agent-chat-created"},
+		{Kind: Adopted, Provider: "commons", AppAlias: "default", ChatID: "oc_adopted", ChatAlias: "unconfigured-group-kept"},
+		{Kind: Adopted, Provider: "observer", AppAlias: "default", ChatID: "oc_adopted", ChatAlias: "unconfigured-group-kept"},
+	}
+	for _, grant := range grants {
+		if err := r.Add(grant); err != nil {
+			t.Fatal(err)
+		}
+		data, err := os.ReadFile(filepath.Join(dir, FileName))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var file fileFormat
+		if err := json.Unmarshal(data, &file); err != nil {
+			t.Fatal(err)
+		}
+		// Pre-adoption binaries accept only version 1, so this must fail their
+		// version check before they interpret aliases or duplicate routes.
+		if file.Version != 2 {
+			t.Fatalf("registry version = %d, want 2 to reject older binaries explicitly", file.Version)
+		}
+		r, err = Open(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := len(r.Grants()); got != len(grants) {
+		t.Fatalf("reloaded grants = %d, want %d", got, len(grants))
+	}
+}
 
 func TestRegistryPersistsAndReloads(t *testing.T) {
 	dir := t.TempDir()

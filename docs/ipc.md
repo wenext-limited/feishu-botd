@@ -660,7 +660,10 @@ access only, without restoring those management rights.
 Both RPCs require the bearer-authenticated provider identity and the separate
 `allow_adopt_chats` grant (default false; off returns `PERMISSION_DENIED`).
 Configuration requires ambient and proactive grants plus `state_dir`, but allows
-empty static alias lists. The runtime file stays version 1 and records
+empty static alias lists. The runtime file writes version 2 and still loads
+version 1; older binaries reject version 2 explicitly. Before rollback, stop
+botd, back up `agent-chat-grants.json`, remove all `"kind":"adopted"` entries,
+and set its top-level `version` to `1`, preserving mode 0600. The file records
 `kind: "created"` or `kind: "adopted"`; absent kind means legacy created.
 Entries are keyed by provider and alias, with one consistent app/chat route for
 any shared alias. Adoption and release persist before becoming visible, and

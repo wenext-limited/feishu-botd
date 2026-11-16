@@ -30,7 +30,9 @@ const FileName = "agent-chat-grants.json"
 // configured aliases that do.
 const AliasPrefix = "agent-chat-"
 
-const fileVersion = 1
+// Version 2 allows adopted aliases and multiple providers per alias. Older
+// binaries reject it explicitly instead of treating these grants as version 1.
+const fileVersion = 2
 
 // Kind distinguishes management rights from ambient/proactive access.
 type Kind string
@@ -89,8 +91,8 @@ func Open(stateDir string) (*Registry, error) {
 	if err := json.Unmarshal(data, &file); err != nil {
 		return nil, fmt.Errorf("decode %s: %w", FileName, err)
 	}
-	if file.Version != fileVersion {
-		return nil, fmt.Errorf("%s has version %d, want %d", FileName, file.Version, fileVersion)
+	if file.Version != 1 && file.Version != fileVersion {
+		return nil, fmt.Errorf("%s has version %d, want 1 or %d", FileName, file.Version, fileVersion)
 	}
 	for _, grant := range file.Grants {
 		grant = normalizeGrant(grant)

@@ -87,8 +87,16 @@ The alias remains exactly the one the message carried, including an opaque
 unconfigured-group alias. The resulting grant resolves without a message route
 or app-wide unconfigured ingress, and survives restart and reload.
 
-The grant file remains version 1. Each grant has `kind: "created"` or
-`kind: "adopted"`; absent kind loads as created for backward compatibility.
+The grant file is written as version 2, including when it contains only created
+grants. Version 1 still loads. Older binaries reject version 2 explicitly with
+`agent-chat-grants.json has version 2, want 1`. Before rolling back, stop botd,
+back up `state_dir/agent-chat-grants.json`, remove every `"kind":"adopted"`
+entry from its `grants` array, and set its top-level `version` to `1`. Keep the
+file private (0600), then start the older binary. This revokes all adopted
+grants while preserving created grants and their operation records.
+
+Each grant has `kind: "created"` or `kind: "adopted"`; absent kind loads as
+created for backward compatibility.
 Created aliases retain the reserved `agent-chat-` prefix. Adopted aliases are
 not required to have that prefix. Registry entries are scoped by provider and
 alias, so independent providers can adopt the same chat; shared aliases must
