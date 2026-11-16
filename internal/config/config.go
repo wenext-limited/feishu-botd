@@ -405,8 +405,8 @@ func (c Config) providerAllowsRuntimeChat(provider, alias string) bool {
 }
 
 // ProactiveProvidersForChat returns, in deterministic order, every provider
-// that may speak proactively in chatAlias of appAlias. botd retains a private
-// reply route for a message only when this list is non-empty.
+// that may speak proactively in chatAlias of appAlias. Inbound group route
+// retention also considers adoption-enabled recipients, even if this list is empty.
 func (c Config) ProactiveProvidersForChat(appAlias, chatAlias string) []string {
 	providers := make([]string, 0)
 	for provider := range c.AgentProviders {
