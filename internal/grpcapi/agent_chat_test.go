@@ -34,6 +34,8 @@ type fakeChatSender struct {
 	invalid   []string
 }
 
+func (f *fakeChatSender) IsInChat(context.Context, string) (bool, error) { return true, nil }
+
 func (f *fakeChatSender) CreateChat(_ context.Context, req feishu.ChatCreateRequest) (string, error) {
 	f.chatMu.Lock()
 	defer f.chatMu.Unlock()
@@ -69,12 +71,15 @@ func (f *fakeChatSender) RenameChat(_ context.Context, chatID, name string) erro
 
 type chatServerOptions struct {
 	createChats bool
+	adoptChats  bool
+	onService   func(*service.Service)
 	registry    *chatgrant.Registry
 }
 
 func startChatUnixServer(t *testing.T, opts chatServerOptions) (*grpc.ClientConn, *fakeChatSender, *chatgrant.Registry) {
 	t.Helper()
 	cfg := testConfig()
+	cfg.Commands.AllowUnconfiguredGroupChats = opts.adoptChats
 	registry := opts.registry
 	if registry == nil {
 		registry = chatgrant.NewMemory()
@@ -87,6 +92,7 @@ func startChatUnixServer(t *testing.T, opts chatServerOptions) (*grpc.ClientConn
 		AllowProactiveMessages: true,
 		ProactiveChatAliases:   []string{"ops"},
 		AllowCreateChats:       opts.createChats,
+		AllowAdoptChats:        opts.adoptChats,
 	}
 	cfg.AgentProviders = map[string]config.AgentProviderConfig{
 		"fixture-agent": provider,
@@ -94,6 +100,9 @@ func startChatUnixServer(t *testing.T, opts chatServerOptions) (*grpc.ClientConn
 	}
 	sender := &fakeChatSender{fakeCardSender: &fakeCardSender{fakePostingSender: &fakePostingSender{fakeAgentSender: &fakeAgentSender{fakeSender: fakeSender{messageID: "om_fixture"}}}}}
 	svc := service.NewService(cfg, sender, dedupe.NewMemoryStore(time.Hour), slog.Default())
+	if opts.onService != nil {
+		opts.onService(svc)
+	}
 	srv := NewServer(cfg, svc, slog.Default())
 	ctx, cancel := context.WithCancel(context.Background())
 	socketPath := tempSocket(t)

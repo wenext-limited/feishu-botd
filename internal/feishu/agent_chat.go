@@ -26,6 +26,12 @@ type AgentChats interface {
 	RenameChat(ctx context.Context, chatID, name string) error
 }
 
+// ChatMembership verifies the bot is still a member before granting a chat.
+// Kept separate from AgentChats so creation-only backends remain compatible.
+type ChatMembership interface {
+	IsInChat(ctx context.Context, chatID string) (bool, error)
+}
+
 // ChatCreateRequest is one group chat to create.
 type ChatCreateRequest struct {
 	Name        string
@@ -39,6 +45,7 @@ type chatAPI interface {
 }
 
 type chatMembersAPI interface {
+	IsInChat(context.Context, *larkim.IsInChatChatMembersReq, ...larkcore.RequestOptionFunc) (*larkim.IsInChatChatMembersResp, error)
 	Create(context.Context, *larkim.CreateChatMembersReq, ...larkcore.RequestOptionFunc) (*larkim.CreateChatMembersResp, error)
 }
 
@@ -155,3 +162,31 @@ func (s *ChannelSender) RenameChat(ctx context.Context, chatID, name string) err
 }
 
 var _ AgentChats = (*ChannelSender)(nil)
+
+// IsInChat uses the tenant token to check the bot's own membership, never a
+// caller-supplied user identity. Missing response data fails closed.
+func (s *ChannelSender) IsInChat(ctx context.Context, chatID string) (bool, error) {
+	if s.chatMembersAPI == nil {
+		return false, &MessageSendError{Operation: "chat_membership", Class: "not_configured"}
+	}
+	chatID = strings.TrimSpace(chatID)
+	if chatID == "" {
+		return false, &MessageSendError{Operation: "chat_membership", Class: "invalid_destination"}
+	}
+	resp, err := s.chatMembersAPI.IsInChat(ctx, larkim.NewIsInChatChatMembersReqBuilder().ChatId(chatID).Build())
+	if err != nil {
+		return false, messageTransportError("chat_membership", err)
+	}
+	if resp == nil {
+		return false, &MessageSendError{Operation: "chat_membership", Class: "invalid_response"}
+	}
+	if !resp.Success() {
+		return false, messageResponseError("chat_membership", resp.ApiResp, resp.Code)
+	}
+	if resp.Data == nil || resp.Data.IsInChat == nil {
+		return false, &MessageSendError{Operation: "chat_membership", Class: "invalid_response"}
+	}
+	return *resp.Data.IsInChat, nil
+}
+
+var _ ChatMembership = (*ChannelSender)(nil)

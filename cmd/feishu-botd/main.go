@@ -105,7 +105,7 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger, opts runOp
 		return err
 	}
 
-	// Chats providers created with CreateAgentChat: loaded before anything
+	// Chats providers created or adopted at runtime: loaded before anything
 	// copies cfg, so the service and every receiver share one registry.
 	if cfg.StateDir != "" {
 		grants, err := chatgrant.Open(cfg.StateDir)

@@ -223,6 +223,12 @@ func (s *Service) resolvePostTarget(provider, chatAlias, replyRef string, now ti
 		if !s.cfg().ProviderAllowsProactiveChat(provider, chatAlias) {
 			return postTarget{}, unknownChannelError()
 		}
+		if appAlias, chatID, ok := s.cfg().ResolveChannel(chatAlias); ok {
+			if !s.appAllowed(provider, appAlias) {
+				return postTarget{}, unknownChannelError()
+			}
+			return postTarget{appAlias: appAlias, chatAlias: chatAlias, chatID: chatID}, nil
+		}
 		if config.IsUnconfiguredGroupAlias(chatAlias) {
 			// An opaque alias is a one-way digest: its chat is known only
 			// because ingress saw a message there and retained the route.
@@ -233,11 +239,7 @@ func (s *Service) resolvePostTarget(provider, chatAlias, replyRef string, now ti
 			}
 			return postTarget{appAlias: route.AppAlias, chatAlias: chatAlias, unconfiguredGroup: true, chatID: route.ChatID}, nil
 		}
-		appAlias, chatID, ok := s.cfg().ResolveChannel(chatAlias)
-		if !ok || !s.appAllowed(provider, appAlias) {
-			return postTarget{}, unknownChannelError()
-		}
-		return postTarget{appAlias: appAlias, chatAlias: chatAlias, chatID: chatID}, nil
+		return postTarget{}, unknownChannelError()
 	}
 
 	route, ok := s.lookupMessageRoute(replyRef, now)
@@ -248,15 +250,12 @@ func (s *Service) resolvePostTarget(provider, chatAlias, replyRef string, now ti
 	// The reply lands where the target lives, and that chat must still be the
 	// one the route was learned in: a configured alias remapped to another
 	// chat since then leaves the old message unaddressable.
-	if route.UnconfiguredGroup {
-		if !s.cfg().AllowsUnconfiguredGroupChats(route.AppAlias) {
+	if appAlias, chatID, resolved := s.cfg().ResolveChannel(route.ChatAlias); resolved {
+		if appAlias != route.AppAlias || route.ChatID != "" && chatID != route.ChatID {
 			return postTarget{}, unknownMessageError()
 		}
-	} else {
-		appAlias, chatID, ok := s.cfg().ResolveChannel(route.ChatAlias)
-		if !ok || appAlias != route.AppAlias || route.ChatID != "" && chatID != route.ChatID {
-			return postTarget{}, unknownMessageError()
-		}
+	} else if !route.UnconfiguredGroup || !s.cfg().AllowsUnconfiguredGroupChats(route.AppAlias) {
+		return postTarget{}, unknownMessageError()
 	}
 	return postTarget{
 		appAlias:          route.AppAlias,
@@ -268,6 +267,10 @@ func (s *Service) resolvePostTarget(provider, chatAlias, replyRef string, now ti
 }
 
 func (s *Service) lookupMessageRoute(key string, now time.Time) (messageroute.Route, bool) {
+	// A stream consumer may call back before dispatch finishes retaining its
+	// route. Wait for ingress to publish the actual recipient set first.
+	s.inboundRoutes.mu.Lock()
+	defer s.inboundRoutes.mu.Unlock()
 	if s.agentRoutes == nil {
 		return messageroute.Route{}, false
 	}
@@ -357,86 +360,41 @@ func (s *Service) rememberAuthoredMessageSoftly(message authoredMessage, kind, c
 	}
 }
 
-// retainInboundMessageRoute retains, before dispatch, the reply route of a
-// group message for every proactive provider that could receive it: any of
-// them when the message may be addressed, only the ambient-granted ones when
-// it can only be observed. It returns those grantees so the route can be
-// narrowed once dispatch shows who actually received it. A deployment without
-// proactive grants writes nothing. An unconfigured group's chat is retained
-// too, because its opaque alias is the only way a root post can name it.
-// Failures are logged and never block ingress; they only leave that ref
-// unaddressable.
-func (s *Service) retainInboundMessageRoute(in CommandInput, ambientOnly bool) []string {
+// retainInboundMessageRoute persists group routes only for actual recipients
+// that may post or adopt. The ingress lock stays held until publication, so an
+// immediate RPC from a stream consumer waits for its route. Failed writes can
+// never leave a prospective recipient authorized to adopt. Authored routes are
+// marked separately; only group ingress uses inboundRoute.
+func (s *Service) retainInboundMessageRoute(in CommandInput) {
 	if s.agentRoutes == nil || !isGroupChatType(in.Metadata["chat_type"]) {
-		return nil
+		return
+	}
+	if in.ChatID == "" {
+		_, in.ChatID, _ = s.cfg().ResolveChannel(in.ChatAlias)
 	}
 	proactive := s.cfg().ProactiveProvidersForChat(in.AppAlias, in.ChatAlias)
-	if len(proactive) == 0 {
-		return nil
-	}
 	now := time.Now()
 	failed := false
-	if in.UnconfiguredGroup && in.ChatID != "" {
+	if len(proactive) > 0 && in.UnconfiguredGroup && in.ChatID != "" {
 		if err := s.agentRoutes.Put(in.ChatAlias, messageroute.Route{
-			AppAlias:          in.AppAlias,
-			ChatAlias:         in.ChatAlias,
-			UnconfiguredGroup: true,
-			Providers:         proactive,
-			ChatID:            in.ChatID,
+			AppAlias: in.AppAlias, ChatAlias: in.ChatAlias, UnconfiguredGroup: true,
+			Providers: proactive, ChatID: in.ChatID,
 		}, now); err != nil {
 			failed = true
 		}
 	}
-	grantees := proactive
-	if ambientOnly {
-		grantees = make([]string, 0, len(proactive))
-		for _, provider := range proactive {
-			if s.cfg().ProviderAllowsAmbientChat(provider, in.ChatAlias) {
-				grantees = append(grantees, provider)
-			}
+	grantees := make([]string, 0)
+	for provider := range s.agentBroker.messageRecipients(in) {
+		if s.appAllowed(provider, in.AppAlias) && (s.cfg().ProviderAllowsAdoptChats(provider) || s.cfg().ProviderAllowsProactiveChat(provider, in.ChatAlias)) {
+			grantees = append(grantees, provider)
 		}
 	}
-	if len(grantees) > 0 && feishu.MessageRefForApp(in.AppAlias, in.Metadata["message_id"]) != "" {
-		if err := s.agentRoutes.Put(feishu.MessageRefForApp(in.AppAlias, in.Metadata["message_id"]), inboundRoute(in, grantees), now); err != nil {
+	if ref := feishu.MessageRefForApp(in.AppAlias, in.Metadata["message_id"]); len(grantees) > 0 && ref != "" {
+		if err := s.agentRoutes.Put(ref, inboundRoute(in, grantees), now); err != nil {
 			failed = true
-			grantees = nil
 		}
-	} else {
-		grantees = nil
 	}
 	if failed {
-		s.logRouteRetentionFailure("ingress", in.DeliveryID)
-	}
-	return grantees
-}
-
-// narrowInboundMessageRoute reduces a retained route to the grantees that
-// actually received the message, by any selector, so a reply target is a
-// message the provider received rather than one it merely could have. The
-// recipient set is cumulative per message, so a redelivery cannot strip a
-// grant an earlier delivery earned.
-func (s *Service) narrowInboundMessageRoute(in CommandInput, grantees []string) {
-	if len(grantees) == 0 {
-		return
-	}
-	recipients := s.agentBroker.messageRecipients(in)
-	received := make([]string, 0, len(grantees))
-	for _, provider := range grantees {
-		if _, ok := recipients[provider]; ok {
-			received = append(received, provider)
-		}
-	}
-	if len(received) == len(grantees) {
-		return
-	}
-	messageRef := feishu.MessageRefForApp(in.AppAlias, in.Metadata["message_id"])
-	var err error
-	if len(received) == 0 {
-		err = s.agentRoutes.Delete(messageRef, time.Now())
-	} else {
-		err = s.agentRoutes.Put(messageRef, inboundRoute(in, received), time.Now())
-	}
-	if err != nil {
 		s.logRouteRetentionFailure("ingress", in.DeliveryID)
 	}
 }

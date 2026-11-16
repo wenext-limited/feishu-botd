@@ -18,6 +18,15 @@ created-grant loading, and opt-in adoption config. Verified with scoped registry
 config, and gRPC tests; kind-check ablation fails the permission regression test.
 Go bindings regenerated with `make proto`; the frozen proto is unchanged.
 
+Step 2 implements the authenticated RPCs, membership checks, latest-message
+resolution from delivered group routes, and created-only management rights.
+`0e593ac` contains step 1. Scoped service, gRPC, receiver, and SDK tests cover
+reply/ambient refs, restart/reload, static/created no-ops, concurrent adoption,
+release, and authorization/persistence failures. Ablations of recipient ownership,
+route-publication locking, and created-only management each fail their regression
+test. Route retention now publishes actual recipients under the ingress lock,
+which route lookups share; it never authorizes prospective recipients.
+
 1. New provider flag `allow_adopt_chats` (default false), validated like
    `allow_create_chats`; documented in docs/agent.md and docs/ipc.md.
 2. Mentions from unconfigured groups reach a provider only via the existing

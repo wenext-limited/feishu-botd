@@ -314,12 +314,7 @@ func (s *Service) DispatchCommand(ctx context.Context, in CommandInput) (int, *n
 	// A reply to an owned message is also agent-only and stays pinned to the
 	// provider that authored the parent, regardless of first-word command matches.
 	s.resolveSenderEmail(ctx, &in, replyProvider)
-	// A reply route is retained for every proactive provider that could
-	// receive the message before any of them can see it, then narrowed to the
-	// ones that did. Both writes happen outside the ingress lock.
-	routeGrantees := s.retainInboundMessageRoute(in, ambientOnly)
 	legacyDelivered, agentDelivered, ambientDelivered := s.dispatchInboundRoute(in, isDirect || isUnconfiguredGroup || ownedReply, replyProvider, ambientOnly)
-	s.narrowInboundMessageRoute(in, routeGrantees)
 	s.logger.Info("command dispatched",
 		"correlation", opaqueLogCorrelationID("command", in.DeliveryID),
 		"legacy_subscribers", legacyDelivered,
@@ -475,6 +470,7 @@ func (s *Service) dispatchInboundRoute(in CommandInput, agentOnly bool, replyPro
 		}
 		ambientDelivered = s.agentBroker.dispatchAmbient(in, skip, replyProvider)
 	}
+	s.retainInboundMessageRoute(in)
 	return legacyDelivered, agentDelivered, ambientDelivered
 }
 

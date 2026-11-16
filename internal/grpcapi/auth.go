@@ -35,6 +35,7 @@ type providerPrincipal struct {
 	allowProactiveMessages  bool
 	allowPins               bool
 	allowCreateChats        bool
+	allowAdoptChats         bool
 }
 
 type providerCredential struct {
@@ -85,6 +86,7 @@ func newProviderAuthenticator(providers map[string]config.AgentProviderConfig) p
 				allowProactiveMessages:  providerCfg.AllowProactiveMessages,
 				allowPins:               providerCfg.AllowPins,
 				allowCreateChats:        providerCfg.AllowCreateChats,
+				allowAdoptChats:         providerCfg.AllowAdoptChats,
 			},
 			digest: sha256.Sum256([]byte(providerCfg.AuthToken)),
 		})
@@ -121,7 +123,9 @@ func isAgentMethod(fullMethod string) bool {
 		pb.CommandService_PinAgentMessage_FullMethodName,
 		pb.CommandService_CreateAgentChat_FullMethodName,
 		pb.CommandService_InviteAgentChatMembers_FullMethodName,
-		pb.CommandService_RenameAgentChat_FullMethodName:
+		pb.CommandService_RenameAgentChat_FullMethodName,
+		pb.CommandService_AdoptAgentChat_FullMethodName,
+		pb.CommandService_ReleaseAgentChat_FullMethodName:
 		return true
 	default:
 		return false
@@ -477,6 +481,18 @@ func authorizeAgentConversationLease(ctx context.Context, requested string) erro
 	}
 	principal, _ := authenticatedProvider(ctx)
 	if !principal.allowConversationLeases {
+		return providerScopeDenied(ctx)
+	}
+	return nil
+}
+
+// authorizeAgentChatAdoption gates both adoption and release, independently of creation.
+func authorizeAgentChatAdoption(ctx context.Context, requested string) error {
+	if err := requireProviderIdentity(ctx, requested); err != nil {
+		return err
+	}
+	principal, _ := authenticatedProvider(ctx)
+	if !principal.allowAdoptChats {
 		return providerScopeDenied(ctx)
 	}
 	return nil

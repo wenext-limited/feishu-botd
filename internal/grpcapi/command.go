@@ -619,3 +619,25 @@ func (c *commandServer) ReleaseAgentConversation(ctx context.Context, in *pb.Rel
 	}
 	return &pb.ReleaseAgentConversationResponse{}, nil
 }
+
+func (c *commandServer) AdoptAgentChat(ctx context.Context, in *pb.AdoptAgentChatRequest) (*pb.AdoptAgentChatResponse, error) {
+	if err := authorizeAgentChatAdoption(ctx, in.GetProvider()); err != nil {
+		return nil, err
+	}
+	receipt, apiErr := c.svc.AdoptAgentChat(ctx, service.AdoptAgentChatInput{Provider: in.GetProvider(), MessageRef: in.GetMessageRef()})
+	if apiErr != nil {
+		return nil, grpcError(apiErr, requestIDFromContext(ctx))
+	}
+	return &pb.AdoptAgentChatResponse{ChatAlias: receipt.ChatAlias, AlreadyGranted: receipt.AlreadyGranted}, nil
+}
+
+func (c *commandServer) ReleaseAgentChat(ctx context.Context, in *pb.ReleaseAgentChatRequest) (*pb.ReleaseAgentChatResponse, error) {
+	if err := authorizeAgentChatAdoption(ctx, in.GetProvider()); err != nil {
+		return nil, err
+	}
+	released, apiErr := c.svc.ReleaseAgentChat(ctx, service.ReleaseAgentChatInput{Provider: in.GetProvider(), ChatAlias: in.GetChatAlias()})
+	if apiErr != nil {
+		return nil, grpcError(apiErr, requestIDFromContext(ctx))
+	}
+	return &pb.ReleaseAgentChatResponse{Released: released}, nil
+}
