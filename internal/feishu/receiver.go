@@ -35,9 +35,9 @@ type CommandReceiverConfig struct {
 	BotNames                    []string
 	ChatTitleLookup             ChatTitleLookup
 
-	// RuntimeChatAlias resolves a chat a provider created with
-	// CreateAgentChat, which is in no static channel map, to its alias. Such
-	// a chat is handled like a configured one. Nil resolves none.
+	// RuntimeChatAlias resolves a chat a provider created or adopted with
+	// CreateAgentChat or AdoptAgentChat to its alias when no static channel
+	// names it. The chat is handled like a configured one. Nil resolves none.
 	RuntimeChatAlias func(chatID string) (string, bool)
 
 	// AmbientChat reports whether an unmentioned, non-reply group message in

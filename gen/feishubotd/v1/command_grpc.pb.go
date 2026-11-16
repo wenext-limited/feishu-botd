@@ -39,6 +39,8 @@ const (
 	CommandService_CreateAgentChat_FullMethodName          = "/feishubotd.v1.CommandService/CreateAgentChat"
 	CommandService_InviteAgentChatMembers_FullMethodName   = "/feishubotd.v1.CommandService/InviteAgentChatMembers"
 	CommandService_RenameAgentChat_FullMethodName          = "/feishubotd.v1.CommandService/RenameAgentChat"
+	CommandService_AdoptAgentChat_FullMethodName           = "/feishubotd.v1.CommandService/AdoptAgentChat"
+	CommandService_ReleaseAgentChat_FullMethodName         = "/feishubotd.v1.CommandService/ReleaseAgentChat"
 )
 
 // CommandServiceClient is the client API for CommandService service.
@@ -126,6 +128,25 @@ type CommandServiceClient interface {
 	// RenameAgentChat renames a chat this provider created with
 	// CreateAgentChat. Gated by allow_create_chats.
 	RenameAgentChat(ctx context.Context, in *RenameAgentChatRequest, opts ...grpc.CallOption) (*RenameAgentChatResponse, error)
+	// AdoptAgentChat grants this provider, at runtime, an existing group chat
+	// the bot is already a member of, as CreateAgentChat grants a chat it
+	// creates: the chat is then in the provider's ambient and proactive
+	// allowlists and accepts commands, with no config edit, and the grant
+	// survives restarts (state_dir). The chat is named by a message botd
+	// delivered from it (typically the "@bot /bind ..." that asked for it), so
+	// the provider never handles raw chat ids. The chat KEEPS the chat_alias
+	// that message carried, so anything the provider stored under that alias
+	// stays valid. Adopting a statically configured chat or one already
+	// granted to this provider is not an error (already_granted=true). Gated
+	// by allow_adopt_chats.
+	AdoptAgentChat(ctx context.Context, in *AdoptAgentChatRequest, opts ...grpc.CallOption) (*AdoptAgentChatResponse, error)
+	// ReleaseAgentChat removes this provider's runtime grant for a chat it
+	// adopted or created. Afterwards the chat is treated as unconfigured
+	// again (mentions still arrive when allow_unconfigured_group_chats is on;
+	// ambient and proactive messages stop). Releasing a chat that holds no
+	// runtime grant for this provider is not an error (released=false); a
+	// statically configured chat is never changed. Gated by allow_adopt_chats.
+	ReleaseAgentChat(ctx context.Context, in *ReleaseAgentChatRequest, opts ...grpc.CallOption) (*ReleaseAgentChatResponse, error)
 }
 
 type commandServiceClient struct {
@@ -366,6 +387,26 @@ func (c *commandServiceClient) RenameAgentChat(ctx context.Context, in *RenameAg
 	return out, nil
 }
 
+func (c *commandServiceClient) AdoptAgentChat(ctx context.Context, in *AdoptAgentChatRequest, opts ...grpc.CallOption) (*AdoptAgentChatResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AdoptAgentChatResponse)
+	err := c.cc.Invoke(ctx, CommandService_AdoptAgentChat_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *commandServiceClient) ReleaseAgentChat(ctx context.Context, in *ReleaseAgentChatRequest, opts ...grpc.CallOption) (*ReleaseAgentChatResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReleaseAgentChatResponse)
+	err := c.cc.Invoke(ctx, CommandService_ReleaseAgentChat_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // CommandServiceServer is the server API for CommandService service.
 // All implementations must embed UnimplementedCommandServiceServer
 // for forward compatibility.
@@ -451,6 +492,25 @@ type CommandServiceServer interface {
 	// RenameAgentChat renames a chat this provider created with
 	// CreateAgentChat. Gated by allow_create_chats.
 	RenameAgentChat(context.Context, *RenameAgentChatRequest) (*RenameAgentChatResponse, error)
+	// AdoptAgentChat grants this provider, at runtime, an existing group chat
+	// the bot is already a member of, as CreateAgentChat grants a chat it
+	// creates: the chat is then in the provider's ambient and proactive
+	// allowlists and accepts commands, with no config edit, and the grant
+	// survives restarts (state_dir). The chat is named by a message botd
+	// delivered from it (typically the "@bot /bind ..." that asked for it), so
+	// the provider never handles raw chat ids. The chat KEEPS the chat_alias
+	// that message carried, so anything the provider stored under that alias
+	// stays valid. Adopting a statically configured chat or one already
+	// granted to this provider is not an error (already_granted=true). Gated
+	// by allow_adopt_chats.
+	AdoptAgentChat(context.Context, *AdoptAgentChatRequest) (*AdoptAgentChatResponse, error)
+	// ReleaseAgentChat removes this provider's runtime grant for a chat it
+	// adopted or created. Afterwards the chat is treated as unconfigured
+	// again (mentions still arrive when allow_unconfigured_group_chats is on;
+	// ambient and proactive messages stop). Releasing a chat that holds no
+	// runtime grant for this provider is not an error (released=false); a
+	// statically configured chat is never changed. Gated by allow_adopt_chats.
+	ReleaseAgentChat(context.Context, *ReleaseAgentChatRequest) (*ReleaseAgentChatResponse, error)
 	mustEmbedUnimplementedCommandServiceServer()
 }
 
@@ -520,6 +580,12 @@ func (UnimplementedCommandServiceServer) InviteAgentChatMembers(context.Context,
 }
 func (UnimplementedCommandServiceServer) RenameAgentChat(context.Context, *RenameAgentChatRequest) (*RenameAgentChatResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RenameAgentChat not implemented")
+}
+func (UnimplementedCommandServiceServer) AdoptAgentChat(context.Context, *AdoptAgentChatRequest) (*AdoptAgentChatResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method AdoptAgentChat not implemented")
+}
+func (UnimplementedCommandServiceServer) ReleaseAgentChat(context.Context, *ReleaseAgentChatRequest) (*ReleaseAgentChatResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ReleaseAgentChat not implemented")
 }
 func (UnimplementedCommandServiceServer) mustEmbedUnimplementedCommandServiceServer() {}
 func (UnimplementedCommandServiceServer) testEmbeddedByValue()                        {}
@@ -870,6 +936,42 @@ func _CommandService_RenameAgentChat_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _CommandService_AdoptAgentChat_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AdoptAgentChatRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CommandServiceServer).AdoptAgentChat(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CommandService_AdoptAgentChat_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CommandServiceServer).AdoptAgentChat(ctx, req.(*AdoptAgentChatRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _CommandService_ReleaseAgentChat_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReleaseAgentChatRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CommandServiceServer).ReleaseAgentChat(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CommandService_ReleaseAgentChat_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CommandServiceServer).ReleaseAgentChat(ctx, req.(*ReleaseAgentChatRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // CommandService_ServiceDesc is the grpc.ServiceDesc for CommandService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -940,6 +1042,14 @@ var CommandService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RenameAgentChat",
 			Handler:    _CommandService_RenameAgentChat_Handler,
+		},
+		{
+			MethodName: "AdoptAgentChat",
+			Handler:    _CommandService_AdoptAgentChat_Handler,
+		},
+		{
+			MethodName: "ReleaseAgentChat",
+			Handler:    _CommandService_ReleaseAgentChat_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

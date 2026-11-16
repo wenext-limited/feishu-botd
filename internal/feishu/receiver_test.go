@@ -896,3 +896,23 @@ func TestCommandFromEventHandlesARuntimeGrantedChatLikeAConfiguredOne(t *testing
 		t.Fatal("an unknown, ungranted group was accepted")
 	}
 }
+
+func TestCommandFromEventKeepsAdoptedAliasWithoutUnconfiguredIngress(t *testing.T) {
+	alias := unconfiguredGroupAlias("support", "oc_adopted")
+	receiver := NewCommandReceiver(CommandReceiverConfig{
+		AppAlias: "support", AppID: "cli_test", AppSecret: "secret", BotOpenID: "ou_bot",
+		RuntimeChatAlias: func(chatID string) (string, bool) { return alias, chatID == "oc_adopted" },
+		AmbientChat:      func(chatAlias string) bool { return chatAlias == alias },
+	}, nil, nil)
+	mention := &larkim.MentionEvent{Key: ptr("@_user_1"), MentionedType: ptr("app")}
+	command, ok := receiver.CommandFromEvent(messageEvent("evt_adopted", "om_adopted", "oc_adopted", "@_user_1 status", mention))
+	if !ok || command.ChatAlias != alias || command.UnconfiguredGroup {
+		t.Fatalf("adopted command = %+v %v", command, ok)
+	}
+	ambientEvent := messageEvent("evt_adopted_ambient", "om_adopted_ambient", "oc_adopted", "hello")
+	ambientEvent.Event.Sender.SenderType = ptr("user")
+	command, ok = receiver.CommandFromEvent(ambientEvent)
+	if !ok || command.ChatAlias != alias || !command.AmbientOnly || command.UnconfiguredGroup {
+		t.Fatalf("adopted ambient = %+v %v", command, ok)
+	}
+}

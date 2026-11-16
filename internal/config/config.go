@@ -70,7 +70,7 @@ type Config struct {
 	Services       map[string]ServiceConfig
 	DedupeTTL      time.Duration
 	SendTimeout    time.Duration
-	// RuntimeChats holds the chats providers created with CreateAgentChat.
+	// RuntimeChats holds the chats providers created or adopted at runtime.
 	// It is shared by every copy of the Config; nil holds none.
 	RuntimeChats *chatgrant.Registry
 	// SourceFiles lists every file this Config was read from: the config
@@ -141,6 +141,9 @@ type AgentProviderConfig struct {
 	// were named in AmbientChatAliases and ProactiveChatAliases, so it
 	// requires both of those grants and a state dir to keep the grants in.
 	AllowCreateChats bool
+	// AllowAdoptChats permits adopting and releasing runtime group chat grants.
+	// Like creation, adoption requires ambient/proactive access and state_dir.
+	AllowAdoptChats bool
 	// AllowSenderEmail permits the provider to receive the sender's company
 	// email address on every inbound message (InboundAgentMessage.sender_email),
 	// resolved by the daemon through the Contact API. It is personal data, so
@@ -356,7 +359,7 @@ func (c Config) ProviderAllowsAmbientChat(provider, chatAlias string) bool {
 	providerCfg, configured := c.AgentProviders[strings.TrimSpace(provider)]
 	return configured && providerCfg.AllowAmbientMessages &&
 		(containsChatAlias(providerCfg.AmbientChatAliases, chatAlias) ||
-			providerCfg.AllowCreateChats && c.RuntimeChats.Granted(provider, normalizeChannelName(chatAlias)))
+			c.providerAllowsRuntimeChat(provider, chatAlias))
 }
 
 // ProviderAllowsProactiveMessages reports whether the provider may call
@@ -378,7 +381,7 @@ func (c Config) ProviderAllowsProactiveChat(provider, chatAlias string) bool {
 	providerCfg, configured := c.AgentProviders[strings.TrimSpace(provider)]
 	return configured && providerCfg.AllowProactiveMessages &&
 		(containsChatAlias(providerCfg.ProactiveChatAliases, chatAlias) ||
-			providerCfg.AllowCreateChats && c.RuntimeChats.Granted(provider, normalizeChannelName(chatAlias)))
+			c.providerAllowsRuntimeChat(provider, chatAlias))
 }
 
 // ProviderAllowsCreateChats reports whether the provider may call
@@ -388,9 +391,22 @@ func (c Config) ProviderAllowsCreateChats(provider string) bool {
 	return configured && providerCfg.AllowCreateChats
 }
 
+// ProviderAllowsAdoptChats reports whether the provider may adopt or release chats.
+func (c Config) ProviderAllowsAdoptChats(provider string) bool {
+	providerCfg, configured := c.AgentProviders[strings.TrimSpace(provider)]
+	return configured && providerCfg.AllowAdoptChats
+}
+
+func (c Config) providerAllowsRuntimeChat(provider, alias string) bool {
+	providerCfg := c.AgentProviders[strings.TrimSpace(provider)]
+	grant, ok := c.RuntimeChats.ByProviderAlias(provider, normalizeChannelName(alias))
+	return ok && (grant.Kind == chatgrant.Created && providerCfg.AllowCreateChats ||
+		grant.Kind == chatgrant.Adopted && providerCfg.AllowAdoptChats)
+}
+
 // ProactiveProvidersForChat returns, in deterministic order, every provider
-// that may speak proactively in chatAlias of appAlias. botd retains a private
-// reply route for a message only when this list is non-empty.
+// that may speak proactively in chatAlias of appAlias. Inbound group route
+// retention also considers adoption-enabled recipients, even if this list is empty.
 func (c Config) ProactiveProvidersForChat(appAlias, chatAlias string) []string {
 	providers := make([]string, 0)
 	for provider := range c.AgentProviders {
@@ -574,6 +590,7 @@ func LoadFromEnv() (Config, error) {
 			ProactiveChatAliases:     cloneStrings(providerCfg.ProactiveChatAliases),
 			AllowPins:                providerCfg.AllowPins,
 			AllowCreateChats:         providerCfg.AllowCreateChats,
+			AllowAdoptChats:          providerCfg.AllowAdoptChats,
 			AllowSenderEmail:         providerCfg.AllowSenderEmail,
 			WorkingReactionEmoji:     providerCfg.WorkingReactionEmoji,
 			WorkingReactionOverrides: providerCfg.WorkingReactionSenderOverrides,
@@ -610,6 +627,10 @@ func LoadFromEnv() (Config, error) {
 		if providerCfg.AllowCreateChats &&
 			(!providerCfg.AllowProactiveMessages || !providerCfg.AllowAmbientMessages || cfg.StateDir == "") {
 			return Config{}, fmt.Errorf("provider %q allow_create_chats requires allow_ambient_messages, allow_proactive_messages, and state_dir", provider)
+		}
+		if providerCfg.AllowAdoptChats &&
+			(!providerCfg.AllowProactiveMessages || !providerCfg.AllowAmbientMessages || cfg.StateDir == "") {
+			return Config{}, fmt.Errorf("provider %q allow_adopt_chats requires allow_ambient_messages, allow_proactive_messages, and state_dir", provider)
 		}
 	}
 	if err := validateRuntimeChatAliasPrefix(cfg); err != nil {
@@ -719,6 +740,7 @@ type fileAgentProviderConfig struct {
 	ProactiveChatAliases    []string           `json:"proactive_chat_aliases"`
 	AllowPins               bool               `json:"allow_pins"`
 	AllowCreateChats        bool               `json:"allow_create_chats"`
+	AllowAdoptChats         bool               `json:"allow_adopt_chats"`
 	AllowSenderEmail        bool               `json:"allow_sender_email"`
 	WorkingReactionEmoji    string             `json:"working_reaction_emoji"`
 	// WorkingReactionSenderOverrides maps a sender's Feishu display name to a
@@ -1417,6 +1439,7 @@ func normalizeAgentProviderConfigs(in map[string]fileAgentProviderConfig) (map[s
 			ProactiveChatAliases:           proactiveChats,
 			AllowPins:                      providerCfg.AllowPins,
 			AllowCreateChats:               providerCfg.AllowCreateChats,
+			AllowAdoptChats:                providerCfg.AllowAdoptChats,
 			AllowSenderEmail:               providerCfg.AllowSenderEmail,
 			WorkingReactionEmoji:           providerCfg.WorkingReactionEmoji,
 			WorkingReactionSenderOverrides: reactionOverrides,
@@ -1500,8 +1523,8 @@ func validateAgentProviderChatGrants(cfg Config) error {
 			{"allow_proactive_messages", "proactive_chat_aliases", providerCfg.AllowProactiveMessages, providerCfg.ProactiveChatAliases},
 		} {
 			switch {
-			case grant.allowed && len(grant.aliases) == 0 && providerCfg.AllowCreateChats:
-				// The chats it creates are its grant.
+			case grant.allowed && len(grant.aliases) == 0 && (providerCfg.AllowCreateChats || providerCfg.AllowAdoptChats):
+				// The chats it creates or adopts are its grant.
 			case grant.allowed && len(grant.aliases) == 0:
 				return fmt.Errorf("provider %q %s requires at least one %s entry", provider, grant.flag, grant.field)
 			case !grant.allowed && len(grant.aliases) > 0:

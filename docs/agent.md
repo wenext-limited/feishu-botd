@@ -110,7 +110,8 @@ openssl rand -base64 32 > /run/secrets/feishu-botd-example-agent-token
       "allow_ambient_messages": false,
       "allow_proactive_messages": false,
       "allow_pins": false,
-      "allow_create_chats": false
+      "allow_create_chats": false,
+      "allow_adopt_chats": false
     }
   },
   "commands": {
@@ -279,9 +280,10 @@ not require a mention identity.
 `allow_unconfigured_group_chats` is per app and defaults to `false`. When it is
 enabled, messages must either mention that app's configured bot identity or be
 an ownership-proven reply to its agent output; merely adding the bot to a group
-is not enough. These dynamic routes are agent-only and cannot trigger legacy
-command subscribers or local scripts. They also do not populate the static
-channel directory used by outbound notification APIs. The daemon retains the
+is not enough. Until a runtime chat grant exists, these unconfigured routes are
+agent-only and cannot trigger legacy command subscribers or local scripts.
+They also do not populate the static channel directory used by outbound
+notification APIs. The daemon retains the
 raw chat id privately so the agent can start a response and send authorized
 conversation follow-ups; providers see only opaque delivery, conversation, and
 chat-alias values. This setting grants every member of every invited group that
@@ -547,9 +549,108 @@ Feishu needs `im:chat` or the narrower `im:chat:create` to create,
 `im:chat.members:write_only` (or `im:chat`) to add members, and
 `im:chat:update` (or `im:chat`) to rename. A refusal for a missing scope or
 bot ability is non-retryable `chat_permission_denied` (`FAILED_PRECONDITION`).
-To revoke a grant, remove the bot from the chat, or stop botd and delete the
-entry from `agent-chat-grants.json`. See
-[ADR 0001](adr/0001-runtime-chat-grants.md).
+To revoke a runtime grant, use `ReleaseAgentChat` with `allow_adopt_chats`.
+See [ADR 0001](adr/0001-runtime-chat-grants.md).
+
+## Adopt an existing group and release a grant
+
+A provider can grant itself a group the bot already belongs to, after someone
+binds it from a message in that group. Enable the separate, default-off
+`allow_adopt_chats` flag, which requires `allow_ambient_messages`,
+`allow_proactive_messages`, and `state_dir`, just like chat creation. The static
+ambient/proactive alias lists may be empty when adoption is enabled:
+
+```json
+"state_dir": "/var/lib/feishu-botd",
+"agent_providers": {
+  "commons": {
+    "allow_ambient_messages": true,
+    "allow_proactive_messages": true,
+    "allow_adopt_chats": true
+  }
+}
+```
+
+The initial mention in an unconfigured group still requires that app's existing
+`commands.allow_unconfigured_group_chats`. Adoption does not change that ingress
+policy. `AdoptAgentChat(provider, message_ref)` accepts a message delivered to
+that provider from the group: an inbound command, an unmentioned reply to its
+answer (including a later “对”), or an ambient observation. It need not be the
+original `/bind`. botd resolves the ref through the encrypted delivered-message
+route journal, verifies the provider and app scope and the bot's current
+membership for a new grant, then grants the chat. The response preserves the
+`chat_alias` carried by that message, including an `unconfigured-group-…` alias,
+unless the same app/chat is now statically configured under another alias. In
+that case botd returns the static alias with `already_granted = true`, logs a
+warning, and adds no runtime grant, even when an older adopted grant exists.
+An unknown, expired, other-provider, non-group, or bot-authored message ref is
+`unknown_chat` (`NOT_FOUND`). Routes last seven days; a failed journal write or
+an app-secret rotation can also make a ref unavailable. Use a fresh delivered
+message in that case.
+
+The membership check uses Feishu's
+[`is_in_chat` endpoint](https://open.feishu.cn/document/server-docs/group/chat-member/is_in_chat)
+with the app's tenant token. Grant the app `im:chat.members:read` (view chat
+members) for new adoptions. Missing permission is `chat_permission_denied`
+(`FAILED_PRECONDITION`); a bot that has left the group is `unknown_chat`.
+
+A statically configured chat or one already granted to this provider returns
+`already_granted = true` before any Feishu membership call, so repeated adoption
+needs no membership-read scope or Feishu round trip. Static adoption is a no-op
+and leaves the existing provider ACLs intact. `already_granted` for a static
+chat does not promise ambient or proactive access: the operator must include
+its static alias in this provider's `ambient_chat_aliases` and
+`proactive_chat_aliases`. botd logs a warning if either permission is missing.
+An existing created grant keeps its creation and management rights. New adopted
+grants are persisted in `agent-chat-grants.json` with
+`kind: "adopted"`; created grants use `kind: "created"`. The registry always
+writes version 2 and still loads version 1. Older binaries fail explicitly with
+`agent-chat-grants.json has version 2, want 1`. To roll back, stop botd, back up
+`state_dir/agent-chat-grants.json`, remove every `"kind":"adopted"` entry from
+the `grants` array, and set the top-level `version` to `1`. Preserve mode 0600,
+then start the older binary. Adopted access is revoked; created grants and their
+operation records remain. Older records without `kind` load as created.
+Grants are scoped by provider and alias; two providers may independently adopt
+the same chat without sharing or overwriting permissions.
+The file contains raw chat ids and keeps mode 0600 as before.
+
+An adopted grant resolves like a configured channel across restarts and config
+reloads. Its ambient and proactive access needs no static aliases or app-wide
+unconfigured-group flag, and root posts do not depend on the short-lived message
+route. The corresponding provider flag must remain enabled for runtime ambient
+and proactive access: `allow_adopt_chats` for adopted grants and
+`allow_create_chats` for created grants.
+
+An adopted chat is no longer agent-only. For addressed messages, matching
+first-word command subscribers take precedence over the agent's unmatched-message
+subscription; legacy command subscribers run before agent prompt subscribers.
+Owned-message replies remain pinned to the authoring provider, and ambient
+observation is independent of which subscriber answers.
+
+Removing a provider from config does not delete its saved grants. They persist
+until removed by hand: stop botd, back up `agent-chat-grants.json`, and delete
+that provider's entries from the `grants` array. Re-adding the same provider name
+can restore access to retained grants when its corresponding capability is
+enabled.
+
+`ReleaseAgentChat(provider, chat_alias)` removes only that provider's runtime
+grant, created or adopted, and returns `released = true` when it removed one.
+Repeated release, an unknown alias, another provider's alias, or a static chat
+with no runtime grant returns `released = false`. Static config and independent
+static permissions remain intact; the bot does not leave or delete the Feishu
+chat. Without another runtime grant or static channel, the group is unconfigured
+again, and mentions require the app-wide unconfigured-group flag. The released
+provider loses runtime ambient and proactive access.
+
+Releasing a created grant also removes its creation operation record, ending
+botd's `CreateAgentChat` idempotency for that `operation_id`. A retry with that
+id is a fresh create attempt rather than a cached duplicate, subject to Feishu's
+create UUID window. Later `RenameAgentChat` and `InviteAgentChatMembers` calls
+return `unknown_chat`;
+re-adopting the chat creates only an adopted grant and does not restore management
+rights. Both adoption and release return `PERMISSION_DENIED` when
+`allow_adopt_chats` is off. Failure to persist either mutation returns
+`grant_store_unavailable` (`INTERNAL`) and leaves the previous grants intact.
 
 ## Lazy attached topic context
 
@@ -925,8 +1026,13 @@ degrade to finishing inside the original card.
   rotating an app secret makes all of that app's routes unaddressable.
   The same journal keeps each `PostAgentCard` card's sealed CardKit id and
   sequence, so `UpdateAgentCard` survives a restart.
-  `agent-chat-grants.json` keeps the chats providers created with
-  `CreateAgentChat`, with their operation ids.
+  The journal also retains group messages delivered to adoption-enabled
+  providers before those chats have any grant. Only actual recipients are
+  recorded. Ingress route `Put` writes now run under the ingress lock after
+  dispatch determines the recipients; immediate lookups share that lock and wait
+  for publication. Disk writes therefore also hold up concurrent ingress.
+  `agent-chat-grants.json` keeps created and adopted chat grants, including
+  grant kinds and created chats' operation ids.
   `PostAgentMessage`, `PostAgentCard`, and `UpdateAgentCard` operation
   receipts and ambient deduplication stay in memory like every other operation
   record.

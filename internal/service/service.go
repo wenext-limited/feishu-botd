@@ -87,8 +87,8 @@ type Service struct {
 	agentCardPosts   *agentPostLedger
 	agentCardUpdates *agentCardUpdateLedger
 	agentCardLanes   *agentCardLanes
-	// agentChatMu serializes CreateAgentChat, so one operation id cannot
-	// create two chats.
+	// agentChatMu serializes creation, adoption, and release, so operations
+	// cannot create duplicate grants or race a release with an adoption.
 	agentChatMu        sync.Mutex
 	conversationLeases *conversationLeases
 }

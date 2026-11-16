@@ -94,6 +94,25 @@ service CommandService {
   // RenameAgentChat renames a chat this provider created with
   // CreateAgentChat. Gated by allow_create_chats.
   rpc RenameAgentChat(RenameAgentChatRequest) returns (RenameAgentChatResponse);
+  // AdoptAgentChat grants this provider, at runtime, an existing group chat
+  // the bot is already a member of, as CreateAgentChat grants a chat it
+  // creates: the chat is then in the provider's ambient and proactive
+  // allowlists and accepts commands, with no config edit, and the grant
+  // survives restarts (state_dir). The chat is named by a message botd
+  // delivered from it (typically the "@bot /bind ..." that asked for it), so
+  // the provider never handles raw chat ids. The chat KEEPS the chat_alias
+  // that message carried, so anything the provider stored under that alias
+  // stays valid. Adopting a statically configured chat or one already
+  // granted to this provider is not an error (already_granted=true). Gated
+  // by allow_adopt_chats.
+  rpc AdoptAgentChat(AdoptAgentChatRequest) returns (AdoptAgentChatResponse);
+  // ReleaseAgentChat removes this provider's runtime grant for a chat it
+  // adopted or created. Afterwards the chat is treated as unconfigured
+  // again (mentions still arrive when allow_unconfigured_group_chats is on;
+  // ambient and proactive messages stop). Releasing a chat that holds no
+  // runtime grant for this provider is not an error (released=false); a
+  // statically configured chat is never changed. Gated by allow_adopt_chats.
+  rpc ReleaseAgentChat(ReleaseAgentChatRequest) returns (ReleaseAgentChatResponse);
 }
 
 // ProviderService is the FUTURE pull path (botd asks a registered client to
@@ -871,6 +890,36 @@ message RenameAgentChatRequest {
 
 message RenameAgentChatResponse {
   reserved 1 to 15;
+}
+
+message AdoptAgentChatRequest {
+  string provider = 1; // must match the bearer-authenticated principal
+  // A message_ref botd delivered to this provider (an inbound command or an
+  // ambient message) from the group chat to adopt. botd resolves the chat
+  // from it; an unknown, expired or non-group ref is unknown_chat.
+  string message_ref = 2;
+  reserved 3 to 15;
+}
+
+message AdoptAgentChatResponse {
+  // The chat's alias: the same chat_alias the message carried.
+  string chat_alias = 1;
+  // The chat was already configured or granted to this provider.
+  bool already_granted = 2;
+  reserved 3 to 15;
+}
+
+message ReleaseAgentChatRequest {
+  string provider = 1; // must match the bearer-authenticated principal
+  // The chat_alias AdoptAgentChat or CreateAgentChat returned.
+  string chat_alias = 2;
+  reserved 3 to 15;
+}
+
+message ReleaseAgentChatResponse {
+  // A runtime grant was removed.
+  bool released = 1;
+  reserved 2 to 15;
 }
 
 message AddAgentReactionRequest {

@@ -88,3 +88,28 @@ func TestAgentChatsReportFeishuRejections(t *testing.T) {
 		t.Fatal("a nameless chat was created")
 	}
 }
+
+func TestChatMembershipSDKRequestAndFailClosedResponses(t *testing.T) {
+	for _, tc := range []struct {
+		name, response    string
+		member, wantError bool
+	}{
+		{"member", `{"code":0,"data":{"is_in_chat":true}}`, true, false},
+		{"removed", `{"code":0,"data":{"is_in_chat":false}}`, false, false},
+		{"missing result", `{"code":0,"data":{}}`, false, true},
+		{"missing data", `{"code":0}`, false, true},
+		{"permission", `{"code":99991672}`, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			httpClient := &agentCardHTTPClient{responses: map[string]string{"/open-apis/im/v1/chats/oc_group/members/is_in_chat": tc.response}}
+			member, err := agentChatSender(httpClient).IsInChat(context.Background(), "oc_group")
+			if member != tc.member || (err != nil) != tc.wantError {
+				t.Fatalf("membership = %v %v", member, err)
+			}
+			reqs := nonTokenRequests(httpClient.requests)
+			if len(reqs) != 1 || reqs[0].Method != http.MethodGet || reqs[0].Path != "/open-apis/im/v1/chats/oc_group/members/is_in_chat" {
+				t.Fatalf("requests = %+v", reqs)
+			}
+		})
+	}
+}

@@ -281,3 +281,51 @@ func TestConfiguredChannelsCannotUseTheRuntimeAliasPrefix(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestAdoptChatsFlagAndRuntimeGrantKinds(t *testing.T) {
+	cfg, err := loadChatGrantConfig(t, `,"allow_unmatched_messages":true`, ``)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ProviderAllowsAdoptChats("commons") {
+		t.Fatal("adoption defaults on")
+	}
+	cfg, err = loadChatGrantConfig(t, `,"allow_ambient_messages":true,"allow_proactive_messages":true,"allow_adopt_chats":true`, `,"state_dir":"/var/lib/feishu-botd"`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.ProviderAllowsAdoptChats("commons") || cfg.ProviderAllowsAdoptChats("other") {
+		t.Fatal("adoption flag lost or leaked")
+	}
+	cfg.RuntimeChats = chatgrant.NewMemory()
+	alias := chatGrantTestUnconfiguredAlias
+	if err := cfg.RuntimeChats.Add(chatgrant.Grant{Kind: chatgrant.Adopted, Provider: "commons", AppAlias: "support", ChatID: "oc_adopted", ChatAlias: alias}); err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.ProviderAllowsAmbientChat("commons", alias) || !cfg.ProviderAllowsProactiveChat("commons", alias) || !cfg.AmbientChatEnabled("support", alias) {
+		t.Fatal("adoption did not grant ambient and proactive access")
+	}
+	if app, chatID, ok := cfg.ResolveChannel(alias); !ok || app != "support" || chatID != "oc_adopted" {
+		t.Fatalf("resolve = %s %s %v", app, chatID, ok)
+	}
+	p := cfg.AgentProviders["commons"]
+	p.AllowAdoptChats, p.AllowCreateChats = false, true
+	cfg.AgentProviders["commons"] = p
+	if cfg.ProviderAllowsAmbientChat("commons", alias) || cfg.ProviderAllowsProactiveChat("commons", alias) {
+		t.Fatal("create flag enabled an adopted grant")
+	}
+}
+
+func TestAdoptChatsRequiresAmbientProactiveAndState(t *testing.T) {
+	for _, tc := range []struct{ name, entry, top string }{
+		{"no ambient", `,"allow_adopt_chats":true,"allow_proactive_messages":true`, `,"state_dir":"/tmp/botd"`},
+		{"no proactive", `,"allow_adopt_chats":true,"allow_ambient_messages":true`, `,"state_dir":"/tmp/botd"`},
+		{"no state", `,"allow_adopt_chats":true,"allow_ambient_messages":true,"allow_proactive_messages":true`, ``},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := loadChatGrantConfig(t, tc.entry, tc.top); err == nil {
+				t.Fatal("invalid adoption configuration loaded")
+			}
+		})
+	}
+}
