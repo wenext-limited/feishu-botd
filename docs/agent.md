@@ -577,8 +577,11 @@ that provider from the group: an inbound command, an unmentioned reply to its
 answer (including a later “对”), or an ambient observation. It need not be the
 original `/bind`. botd resolves the ref through the encrypted delivered-message
 route journal, verifies the provider and app scope and the bot's current
-membership, then grants the chat. The response preserves exactly the
-`chat_alias` carried by that message, including an `unconfigured-group-…` alias.
+membership for a new grant, then grants the chat. The response preserves the
+`chat_alias` carried by that message, including an `unconfigured-group-…` alias,
+unless the same app/chat is now statically configured under another alias. In
+that case botd returns the static alias with `already_granted = true`, logs a
+warning, and adds no runtime grant, even when an older adopted grant exists.
 An unknown, expired, other-provider, non-group, or bot-authored message ref is
 `unknown_chat` (`NOT_FOUND`). Routes last seven days; a failed journal write or
 an app-secret rotation can also make a ref unavailable. Use a fresh delivered

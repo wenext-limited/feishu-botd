@@ -208,6 +208,78 @@ func TestAdoptStaticAndCreatedAreAlreadyGrantedAndCreatedReleaseLosesManagement(
 	}
 }
 
+func TestAdoptPrefersStaticRouteAddedAfterDelivery(t *testing.T) {
+	for _, alreadyAdopted := range []bool{false, true} {
+		t.Run(fmt.Sprintf("already_adopted=%v", alreadyAdopted), func(t *testing.T) {
+			svc, backend, _ := adoptionService(t)
+			sub := mustSubscribeAgent(t, svc, AgentSubscribeOptions{Provider: "commons", IncludeUnmatchedMessages: true})
+			alias := config.UnconfiguredGroupAliasPrefix + strings.Repeat("e", 64)
+			in := humanGroupMessage(alias, "oc_bound", "d_bound", "om_bound")
+			in.UnconfiguredGroup = true
+			mustDispatchAgentPrompt(t, svc, in)
+			event := receiveAgentEvent(t, sub)
+			if alreadyAdopted {
+				adoptMessage(t, svc, "commons", event.Message.MessageRef)
+			}
+			grantsBefore := len(svc.cfg().RuntimeChats.Grants())
+			cfg := commonsConfig()
+			cfg.AgentProviders = svc.Config().AgentProviders
+			cfg.ChannelRoutes["bound"] = config.ChannelRoute{AppAlias: "support", ChatID: "oc_bound"}
+			app := cfg.Apps["support"]
+			app.Channels["bound"] = "oc_bound"
+			cfg.Apps["support"] = app
+			p := cfg.AgentProviders["commons"]
+			p.AmbientChatAliases, p.ProactiveChatAliases = []string{"bound"}, []string{"bound"}
+			cfg.AgentProviders["commons"] = p
+			svc.ApplyConfig(cfg, config.ReloadPlan{}, nil, nil, time.Now())
+			backend.membershipCalls = 0
+			backend.memberErr = &feishu.MessageSendError{Operation: "chat_membership", Class: "api_rejected", Code: 99991672}
+			var logs bytes.Buffer
+			svc.logger = slog.New(slog.NewJSONHandler(&logs, nil))
+			if got := adoptMessage(t, svc, "commons", event.Message.MessageRef); !got.AlreadyGranted || got.ChatAlias != "bound" {
+				t.Fatalf("static alias added after delivery = %+v", got)
+			}
+			if backend.membershipCalls != 0 || len(svc.cfg().RuntimeChats.Grants()) != grantsBefore {
+				t.Fatal("static adoption called Feishu or changed runtime grants")
+			}
+			var warning map[string]any
+			if err := json.Unmarshal(logs.Bytes(), &warning); err != nil {
+				t.Fatalf("missing alias warning: %q: %v", &logs, err)
+			}
+			if warning["level"] != "WARN" || warning["provider"] != "commons" || warning["chat_alias"] != "bound" || warning["delivered_chat_alias"] != alias {
+				t.Fatalf("alias warning = %v", warning)
+			}
+		})
+	}
+}
+
+func TestAdoptStaticRouteMatchRequiresAppAndChat(t *testing.T) {
+	for _, route := range []config.ChannelRoute{
+		{AppAlias: "another-app", ChatID: "oc_bound"},
+		{AppAlias: "support", ChatID: "oc_another_chat"},
+	} {
+		t.Run(route.AppAlias+"/"+route.ChatID, func(t *testing.T) {
+			svc, backend, _ := adoptionService(t)
+			sub := mustSubscribeAgent(t, svc, AgentSubscribeOptions{Provider: "commons", IncludeUnmatchedMessages: true})
+			alias := config.UnconfiguredGroupAliasPrefix + strings.Repeat("f", 64)
+			in := humanGroupMessage(alias, "oc_bound", "d_bound", "om_bound")
+			in.UnconfiguredGroup = true
+			mustDispatchAgentPrompt(t, svc, in)
+			event := receiveAgentEvent(t, sub)
+			cfg := commonsConfig()
+			cfg.AgentProviders = svc.Config().AgentProviders
+			cfg.ChannelRoutes["different-route"] = route
+			svc.ApplyConfig(cfg, config.ReloadPlan{}, nil, nil, time.Now())
+			if got := adoptMessage(t, svc, "commons", event.Message.MessageRef); got.AlreadyGranted || got.ChatAlias != alias {
+				t.Fatalf("unrelated static route = %+v", got)
+			}
+			if backend.membershipCalls != 1 || !svc.cfg().RuntimeChats.Granted("commons", alias) {
+				t.Fatal("new adoption skipped membership or failed to persist")
+			}
+		})
+	}
+}
+
 func TestAdoptStaticWarnsForMissingPermissions(t *testing.T) {
 	for _, ambient := range []bool{false, true} {
 		for _, proactive := range []bool{false, true} {

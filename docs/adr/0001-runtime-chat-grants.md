@@ -85,8 +85,12 @@ non-group refs fail as `unknown_chat`. An alias remapped since delivery also
 fails closed. Static chats and this provider's existing grants are idempotent
 `already_granted` no-ops before any Feishu call; static provider ACLs are never
 widened by adoption.
-The alias remains exactly the one the message carried, including an opaque
-unconfigured-group alias. The resulting grant resolves without a message route
+For a new runtime grant, the alias remains exactly the one the message carried,
+including an opaque unconfigured-group alias. If a static route for the same
+app/chat pair was added under another alias since delivery, botd returns that
+static alias with `already_granted`, warns, and adds no grant. Static permissions
+still require that alias in the provider's ambient and proactive lists. The
+resulting runtime grant resolves without a message route
 or app-wide unconfigured ingress, and survives restart and reload.
 
 The grant file is written as version 2, including when it contains only created

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"feishu-botd/internal/chatgrant"
+	"feishu-botd/internal/config"
 	"feishu-botd/internal/feishu"
 	"feishu-botd/internal/messageroute"
 	"feishu-botd/internal/notify"
@@ -17,7 +18,8 @@ type AdoptAgentChatInput struct {
 	MessageRef string
 }
 
-// AdoptAgentChatReceipt preserves the exact alias carried by that delivery.
+// AdoptAgentChatReceipt names the current static alias, or the delivered alias
+// when the chat has no static route.
 type AdoptAgentChatReceipt struct {
 	ChatAlias      string
 	AlreadyGranted bool
@@ -63,13 +65,18 @@ func (s *Service) AdoptAgentChat(ctx context.Context, in AdoptAgentChatInput) (A
 	// Static chats are an idempotent no-op; adoption never widens their ACLs.
 	static := cfg
 	static.RuntimeChats = nil
-	if _, _, configured := static.ResolveChannel(route.ChatAlias); configured {
-		ambient := static.ProviderAllowsAmbientChat(provider, route.ChatAlias)
-		proactive := static.ProviderAllowsProactiveChat(provider, route.ChatAlias)
+	if alias := staticAliasForChat(static, route); alias != "" {
+		if alias != route.ChatAlias {
+			s.logger.Warn("agent chat adoption uses a static alias added since delivery",
+				"provider", provider, "chat_alias", alias, "delivered_chat_alias", route.ChatAlias)
+		}
+		ambient := static.ProviderAllowsAmbientChat(provider, alias)
+		proactive := static.ProviderAllowsProactiveChat(provider, alias)
 		if !ambient || !proactive {
 			s.logger.Warn("agent chat adoption is a static no-op with missing provider permissions",
-				"provider", provider, "chat_alias", route.ChatAlias, "ambient_allowed", ambient, "proactive_allowed", proactive)
+				"provider", provider, "chat_alias", alias, "ambient_allowed", ambient, "proactive_allowed", proactive)
 		}
+		receipt.ChatAlias = alias
 		receipt.AlreadyGranted = true
 		return receipt, nil
 	}
@@ -104,6 +111,35 @@ func (s *Service) AdoptAgentChat(ctx context.Context, in AdoptAgentChatInput) (A
 	}
 	s.logger.Info("agent chat adopted", "provider", provider, "chat_alias", route.ChatAlias, "app", route.AppAlias)
 	return receipt, nil
+}
+
+// staticAliasForChat prefers the delivered alias when it is still static, then
+// the first static alias in lexical order for the same app/chat pair. ResolveChannel
+// keeps the legacy Channels fallback and canonical ChannelRoutes rules intact.
+func staticAliasForChat(static config.Config, route messageroute.Route) string {
+	matches := func(alias string) bool {
+		app, chatID, ok := static.ResolveChannel(alias)
+		return ok && app == route.AppAlias && chatID == route.ChatID
+	}
+	if matches(route.ChatAlias) {
+		return route.ChatAlias
+	}
+	aliases := make([]string, 0, len(static.ChannelRoutes)+len(static.Channels))
+	for alias := range static.ChannelRoutes {
+		aliases = append(aliases, alias)
+	}
+	if static.ChannelRoutes == nil {
+		for alias := range static.Channels {
+			aliases = append(aliases, alias)
+		}
+	}
+	var found string
+	for _, alias := range aliases {
+		if matches(alias) && (found == "" || alias < found) {
+			found = alias
+		}
+	}
+	return found
 }
 
 // deliveredGroupRoute waits for dispatch to finalize its recipient set before

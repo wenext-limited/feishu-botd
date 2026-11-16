@@ -148,7 +148,7 @@ is supplied.
 | `CreateAgentChat` | Creates a group chat with the bot as owner and grants it to the provider at runtime (`allow_create_chats`). |
 | `InviteAgentChatMembers` | Adds members to a chat the provider created. |
 | `RenameAgentChat` | Renames a chat the provider created. |
-| `AdoptAgentChat` | Grants an existing group named by a delivered message, preserving its alias (`allow_adopt_chats`). |
+| `AdoptAgentChat` | Grants an existing group named by a delivered message, or returns its current static alias (`allow_adopt_chats`). |
 | `ReleaseAgentChat` | Removes this provider's created or adopted runtime grant (`allow_adopt_chats`). |
 
 Inbound Feishu events are dispatched only for an app whose `commands.enabled`
@@ -644,8 +644,10 @@ returns `chat_alias` and `already_granted`. The ref must name a group message
 botd delivered to this provider; it may be the latest command, reply, or ambient
 message. botd resolves its private app/chat route from
 `agent-message-routes.jsonl` and verifies current bot membership for a new grant.
-It preserves
-the exact delivered alias, including an opaque `unconfigured-group-…` alias.
+It preserves the delivered alias, including an opaque `unconfigured-group-…`
+alias, unless that app/chat pair now has a static route under another alias.
+Then it returns the static alias with `already_granted = true`, warns, and adds
+no grant, even when an older runtime grant exists.
 Unknown, expired, non-group, bot-authored, or other-provider refs return
 `unknown_chat` (`NOT_FOUND`). Static chats and this provider's existing runtime
 grants return `already_granted = true` before any Feishu call; static adoption
