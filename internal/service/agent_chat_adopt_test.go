@@ -205,6 +205,42 @@ func TestAdoptStaticAndCreatedAreAlreadyGrantedAndCreatedReleaseLosesManagement(
 	}
 }
 
+func TestAdoptAlreadyGrantedSkipsMembership(t *testing.T) {
+	for _, kind := range []string{"static", "created", "adopted"} {
+		t.Run(kind, func(t *testing.T) {
+			svc, backend, _ := adoptionService(t)
+			alias, chatID := "ops", "oc_ops"
+			if kind != "static" {
+				alias, chatID = "unconfigured-group-kept", "oc_runtime"
+				if kind == "created" {
+					alias = chatgrant.AliasFor("support", chatID)
+				}
+				if err := svc.cfg().RuntimeChats.Add(chatgrant.Grant{Kind: chatgrant.Kind(kind), Provider: "commons", AppAlias: "support", ChatID: chatID, ChatAlias: alias}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			sub := mustSubscribeAgent(t, svc, AgentSubscribeOptions{Provider: "commons", IncludeUnmatchedMessages: true})
+			mustDispatchAgentPrompt(t, svc, humanGroupMessage(alias, chatID, "d_retry", "om_retry"))
+			event := receiveAgentEvent(t, sub)
+			backend.member = false
+			backend.memberErr = &feishu.MessageSendError{Operation: "chat_membership", Class: "api_rejected", Code: 99991672}
+			for i := 0; i < 2; i++ {
+				if got := adoptMessage(t, svc, "commons", event.Message.MessageRef); !got.AlreadyGranted || got.ChatAlias != alias {
+					t.Fatalf("retry = %+v", got)
+				}
+			}
+			// A sender without membership support must also answer the no-op.
+			svc.backends["support"] = newAppBackend(backend.fakePostBackend)
+			if got := adoptMessage(t, svc, "commons", event.Message.MessageRef); !got.AlreadyGranted {
+				t.Fatalf("unsupported sender retry = %+v", got)
+			}
+			if backend.membershipCalls != 0 {
+				t.Fatalf("already-granted membership calls = %d, want 0", backend.membershipCalls)
+			}
+		})
+	}
+}
+
 func TestAdoptRejectsUnknownForeignDirectAuthoredExpiredAndRemovedBot(t *testing.T) {
 	svc, backend, _ := adoptionService(t)
 	// Both are eligible, but only commons receives this exact command.
@@ -213,7 +249,9 @@ func TestAdoptRejectsUnknownForeignDirectAuthoredExpiredAndRemovedBot(t *testing
 	svc.cfg().AgentProviders["commons"] = p
 	sub := mustSubscribeAgent(t, svc, AgentSubscribeOptions{Provider: "commons", Commands: []string{"refund"}})
 	mustSubscribeAgent(t, svc, AgentSubscribeOptions{Provider: "other", IncludeUnmatchedMessages: true})
-	mustDispatchAgentPrompt(t, svc, humanGroupMessage("ops", "oc_ops", "d_private", "om_private"))
+	in := humanGroupMessage(config.UnconfiguredGroupAliasPrefix+strings.Repeat("d", 64), "oc_ungranted", "d_private", "om_private")
+	in.UnconfiguredGroup = true
+	mustDispatchAgentPrompt(t, svc, in)
 	event := receiveAgentEvent(t, sub)
 	for _, tc := range []struct{ provider, ref string }{{"commons", "unknown"}, {"other", event.Message.MessageRef}} {
 		if _, apiErr := svc.AdoptAgentChat(context.Background(), AdoptAgentChatInput{Provider: tc.provider, MessageRef: tc.ref}); apiErr == nil || apiErr.Code != "unknown_chat" {

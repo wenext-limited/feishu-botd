@@ -643,12 +643,14 @@ Feishu permission (codes 99991672, 99991679, 232025, 232043) is
 returns `chat_alias` and `already_granted`. The ref must name a group message
 botd delivered to this provider; it may be the latest command, reply, or ambient
 message. botd resolves its private app/chat route from
-`agent-message-routes.jsonl` and verifies current bot membership. It preserves
+`agent-message-routes.jsonl` and verifies current bot membership for a new grant.
+It preserves
 the exact delivered alias, including an opaque `unconfigured-group-…` alias.
 Unknown, expired, non-group, bot-authored, or other-provider refs return
 `unknown_chat` (`NOT_FOUND`). Static chats and this provider's existing runtime
-grants return `already_granted = true`; static adoption changes no permissions.
-A membership permission refusal is `chat_permission_denied`.
+grants return `already_granted = true` before any Feishu call; static adoption
+changes no permissions. New adoption needs the app's `im:chat.members:read`
+scope; a membership permission refusal is `chat_permission_denied`.
 
 `ReleaseAgentChat` accepts `provider` and `chat_alias` (at most 160 bytes) and
 returns `released`. It removes only this provider's runtime grant of either

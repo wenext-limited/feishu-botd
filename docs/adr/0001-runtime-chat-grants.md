@@ -78,11 +78,13 @@ the ingress lock; route lookups share that lock so an immediate client call
 waits for publication. A failed write cannot leave a prospective recipient with
 adoption access. The existing route TTL and app-secret rotation behavior apply.
 
-botd checks provider/app scope and current bot membership through Feishu's
-`is_in_chat` API before granting. Unknown, expired, foreign, bot-authored and
+botd checks provider/app scope and, for a new grant, current bot membership through
+Feishu's `is_in_chat` API (`im:chat.members:read`). Unknown, expired, foreign,
+bot-authored and
 non-group refs fail as `unknown_chat`. An alias remapped since delivery also
 fails closed. Static chats and this provider's existing grants are idempotent
-`already_granted` no-ops; static provider ACLs are never widened by adoption.
+`already_granted` no-ops before any Feishu call; static provider ACLs are never
+widened by adoption.
 The alias remains exactly the one the message carried, including an opaque
 unconfigured-group alias. The resulting grant resolves without a message route
 or app-wide unconfigured ingress, and survives restart and reload.

@@ -586,12 +586,14 @@ message in that case.
 
 The membership check uses Feishu's
 [`is_in_chat` endpoint](https://open.feishu.cn/document/server-docs/group/chat-member/is_in_chat)
-with the app's tenant token and requires the membership-reading permission
-listed by that endpoint. Missing permission is `chat_permission_denied`
+with the app's tenant token. Grant the app `im:chat.members:read` (view chat
+members) for new adoptions. Missing permission is `chat_permission_denied`
 (`FAILED_PRECONDITION`); a bot that has left the group is `unknown_chat`.
 
 A statically configured chat or one already granted to this provider returns
-`already_granted = true`. Static adoption is a no-op and leaves the existing
+`already_granted = true` before any Feishu membership call, so repeated adoption
+needs no membership-read scope or Feishu round trip. Static adoption is a no-op
+and leaves the existing
 provider ACLs intact. An existing created grant keeps its creation and management
 rights. New adopted grants are persisted in `agent-chat-grants.json` with
 `kind: "adopted"`; created grants use `kind: "created"`. The registry always

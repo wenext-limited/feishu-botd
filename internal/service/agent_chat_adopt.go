@@ -59,6 +59,18 @@ func (s *Service) AdoptAgentChat(ctx context.Context, in AdoptAgentChatInput) (A
 	if app, chatID, resolved := cfg.ResolveChannel(route.ChatAlias); resolved && (app != route.AppAlias || chatID != route.ChatID) {
 		return AdoptAgentChatReceipt{}, unknownChatError()
 	}
+	receipt := AdoptAgentChatReceipt{ChatAlias: route.ChatAlias}
+	if cfg.RuntimeChats.Granted(provider, route.ChatAlias) {
+		receipt.AlreadyGranted = true
+		return receipt, nil
+	}
+	// Static chats are an idempotent no-op; adoption never widens their ACLs.
+	static := cfg
+	static.RuntimeChats = nil
+	if _, _, configured := static.ResolveChannel(route.ChatAlias); configured {
+		receipt.AlreadyGranted = true
+		return receipt, nil
+	}
 	backend, ok := s.backendForApp(route.AppAlias)
 	if !ok {
 		return AdoptAgentChatReceipt{}, unknownChatError()
@@ -76,18 +88,6 @@ func (s *Service) AdoptAgentChat(ctx context.Context, in AdoptAgentChatInput) (A
 	}
 	if !member {
 		return AdoptAgentChatReceipt{}, unknownChatError()
-	}
-	receipt := AdoptAgentChatReceipt{ChatAlias: route.ChatAlias}
-	if cfg.RuntimeChats.Granted(provider, route.ChatAlias) {
-		receipt.AlreadyGranted = true
-		return receipt, nil
-	}
-	// Static chats are an idempotent no-op; adoption never widens their ACLs.
-	static := cfg
-	static.RuntimeChats = nil
-	if _, _, configured := static.ResolveChannel(route.ChatAlias); configured {
-		receipt.AlreadyGranted = true
-		return receipt, nil
 	}
 	if err := cfg.RuntimeChats.Add(chatgrant.Grant{
 		Kind: chatgrant.Adopted, Provider: provider, AppAlias: route.AppAlias,
