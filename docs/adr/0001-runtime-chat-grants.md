@@ -73,25 +73,29 @@ retains unauthored message routes; outbound routes are marked `Authored`, so
 these facts distinguish eligible group messages without changing the journal
 format. The ownership snapshot alone cannot resolve an inbound message or prove
 its receipt. Routes are now retained for adoption-enabled recipients even before
-a chat has a proactive grant. Dispatch persists actual recipients while holding
-the ingress lock; route lookups share that lock so an immediate client call
-waits for publication. A failed write cannot leave a prospective recipient with
+a chat has a proactive grant. Dispatch determines actual recipients, then calls
+route `Put` while holding the ingress lock. Route lookups share that lock so an
+immediate client call waits for publication; disk writes also delay concurrent
+ingress. A failed write cannot leave a prospective recipient with
 adoption access. The existing route TTL and app-secret rotation behavior apply.
 
 botd checks provider/app scope and, for a new grant, current bot membership through
 Feishu's `is_in_chat` API (`im:chat.members:read`). Unknown, expired, foreign,
-bot-authored and
-non-group refs fail as `unknown_chat`. An alias remapped since delivery also
-fails closed. Static chats and this provider's existing grants are idempotent
+bot-authored and non-group refs fail as `unknown_chat`. An alias remapped since
+delivery also fails closed. Static chats and this provider's existing grants are idempotent
 `already_granted` no-ops before any Feishu call; static provider ACLs are never
 widened by adoption.
+
 For a new runtime grant, the alias remains exactly the one the message carried,
 including an opaque unconfigured-group alias. If a static route for the same
 app/chat pair was added under another alias since delivery, botd returns that
 static alias with `already_granted`, warns, and adds no grant. Static permissions
 still require that alias in the provider's ambient and proactive lists. The
-resulting runtime grant resolves without a message route
-or app-wide unconfigured ingress, and survives restart and reload.
+resulting runtime grant resolves without a message route or app-wide unconfigured
+ingress, and survives restart and reload. Adopted chats are no longer agent-only:
+for addressed messages, first-word command subscribers take precedence over
+unmatched agent subscriptions, with legacy commands dispatched first. Owned
+replies retain provider pinning, and ambient observation stays independent.
 
 The grant file is written as version 2, including when it contains only created
 grants. Version 1 still loads. Older binaries reject version 2 explicitly with
@@ -102,13 +106,16 @@ file private (0600), then start the older binary. This revokes all adopted
 grants while preserving created grants and their operation records.
 
 Each grant has `kind: "created"` or `kind: "adopted"`; absent kind loads as
-created for backward compatibility.
-Created aliases retain the reserved `agent-chat-` prefix. Adopted aliases are
-not required to have that prefix. Registry entries are scoped by provider and
+created for backward compatibility. Created aliases retain the reserved
+`agent-chat-` prefix. Adopted aliases are not required to have that prefix.
+Registry entries are scoped by provider and
 alias, so independent providers can adopt the same chat; shared aliases must
 resolve to the same app/chat pair. Ambient and proactive access checks the
 capability corresponding to each grant kind. Rename and invite require a
 created grant and `allow_create_chats`, regardless of an adopted alias's prefix.
+Removing a provider from config does not remove its persisted grants; they
+remain until an operator stops botd and removes that provider's entries by hand.
+Re-adding the provider can restore those grants when its capability is enabled.
 
 `ReleaseAgentChat` atomically removes this provider's runtime grant of either
 kind. It is idempotent, never edits static config, and does not delete the chat
@@ -116,8 +123,9 @@ or remove its members. Other providers' grants and independent static permission
 survive. Without any remaining runtime or static route, mentions again depend
 on the unconfigured-group flag; the released provider loses runtime ambient and
 proactive access. Removing a created grant also removes its operation record
-and management rights: later rename/invite calls return `unknown_chat`, and
-re-adopting creates only an adopted grant. A later create operation is again
-subject to Feishu's UUID window. This supersedes the manual-only revocation
-limitation above. Creation, adoption, and release are serialized within the
+and management rights, ending botd's `CreateAgentChat` idempotency for that
+`operation_id`: replay is a fresh create attempt subject to Feishu's UUID window,
+and later rename/invite calls return `unknown_chat`. Re-adopting creates only an
+adopted grant. This supersedes the manual-only revocation limitation above.
+Creation, adoption, and release are serialized within the
 service; registry writes and removals persist before changing memory.

@@ -280,9 +280,10 @@ not require a mention identity.
 `allow_unconfigured_group_chats` is per app and defaults to `false`. When it is
 enabled, messages must either mention that app's configured bot identity or be
 an ownership-proven reply to its agent output; merely adding the bot to a group
-is not enough. These dynamic routes are agent-only and cannot trigger legacy
-command subscribers or local scripts. They also do not populate the static
-channel directory used by outbound notification APIs. The daemon retains the
+is not enough. Until a runtime chat grant exists, these unconfigured routes are
+agent-only and cannot trigger legacy command subscribers or local scripts.
+They also do not populate the static channel directory used by outbound
+notification APIs. The daemon retains the
 raw chat id privately so the agent can start a response and send authorized
 conversation follow-ups; providers see only opaque delivery, conversation, and
 chat-alias values. This setting grants every member of every invited group that
@@ -600,17 +601,17 @@ and leaves the existing provider ACLs intact. `already_granted` for a static
 chat does not promise ambient or proactive access: the operator must include
 its static alias in this provider's `ambient_chat_aliases` and
 `proactive_chat_aliases`. botd logs a warning if either permission is missing.
-An existing created grant keeps its creation and management
-rights. New adopted grants are persisted in `agent-chat-grants.json` with
+An existing created grant keeps its creation and management rights. New adopted
+grants are persisted in `agent-chat-grants.json` with
 `kind: "adopted"`; created grants use `kind: "created"`. The registry always
 writes version 2 and still loads version 1. Older binaries fail explicitly with
 `agent-chat-grants.json has version 2, want 1`. To roll back, stop botd, back up
 `state_dir/agent-chat-grants.json`, remove every `"kind":"adopted"` entry from
 the `grants` array, and set the top-level `version` to `1`. Preserve mode 0600,
 then start the older binary. Adopted access is revoked; created grants and their
-operation records remain. Older records without
-`kind` load as created. Grants are scoped by provider and alias; two providers
-may independently adopt the same chat without sharing or overwriting permissions.
+operation records remain. Older records without `kind` load as created.
+Grants are scoped by provider and alias; two providers may independently adopt
+the same chat without sharing or overwriting permissions.
 The file contains raw chat ids and keeps mode 0600 as before.
 
 An adopted grant resolves like a configured channel across restarts and config
@@ -619,6 +620,18 @@ unconfigured-group flag, and root posts do not depend on the short-lived message
 route. The corresponding provider flag must remain enabled for runtime ambient
 and proactive access: `allow_adopt_chats` for adopted grants and
 `allow_create_chats` for created grants.
+
+An adopted chat is no longer agent-only. For addressed messages, matching
+first-word command subscribers take precedence over the agent's unmatched-message
+subscription; legacy command subscribers run before agent prompt subscribers.
+Owned-message replies remain pinned to the authoring provider, and ambient
+observation is independent of which subscriber answers.
+
+Removing a provider from config does not delete its saved grants. They persist
+until removed by hand: stop botd, back up `agent-chat-grants.json`, and delete
+that provider's entries from the `grants` array. Re-adding the same provider name
+can restore access to retained grants when its corresponding capability is
+enabled.
 
 `ReleaseAgentChat(provider, chat_alias)` removes only that provider's runtime
 grant, created or adopted, and returns `released = true` when it removed one.
@@ -629,11 +642,13 @@ chat. Without another runtime grant or static channel, the group is unconfigured
 again, and mentions require the app-wide unconfigured-group flag. The released
 provider loses runtime ambient and proactive access.
 
-Releasing a created grant also removes its creation operation record. Later
-`RenameAgentChat` and `InviteAgentChatMembers` calls return `unknown_chat`;
+Releasing a created grant also removes its creation operation record, ending
+botd's `CreateAgentChat` idempotency for that `operation_id`. A retry with that
+id is a fresh create attempt rather than a cached duplicate, subject to Feishu's
+create UUID window. Later `RenameAgentChat` and `InviteAgentChatMembers` calls
+return `unknown_chat`;
 re-adopting the chat creates only an adopted grant and does not restore management
-rights. A later `CreateAgentChat` call is again subject to Feishu's create UUID
-window. Both adoption and release return `PERMISSION_DENIED` when
+rights. Both adoption and release return `PERMISSION_DENIED` when
 `allow_adopt_chats` is off. Failure to persist either mutation returns
 `grant_store_unavailable` (`INTERNAL`) and leaves the previous grants intact.
 
@@ -1013,7 +1028,9 @@ degrade to finishing inside the original card.
   sequence, so `UpdateAgentCard` survives a restart.
   The journal also retains group messages delivered to adoption-enabled
   providers before those chats have any grant. Only actual recipients are
-  recorded, and immediate route lookups wait for dispatch to publish them.
+  recorded. Ingress route `Put` writes now run under the ingress lock after
+  dispatch determines the recipients; immediate lookups share that lock and wait
+  for publication. Disk writes therefore also hold up concurrent ingress.
   `agent-chat-grants.json` keeps created and adopted chat grants, including
   grant kinds and created chats' operation ids.
   `PostAgentMessage`, `PostAgentCard`, and `UpdateAgentCard` operation

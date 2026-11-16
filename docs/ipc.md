@@ -661,8 +661,10 @@ scope; a membership permission refusal is `chat_permission_denied`.
 returns `released`. It removes only this provider's runtime grant of either
 kind; no grant means `released = false`. It never modifies static config or
 removes the bot from Feishu. Releasing a created grant removes its operation
-record and makes later rename/invite calls `unknown_chat`. Re-adoption grants
-access only, without restoring those management rights.
+record, ending botd's `CreateAgentChat` idempotency for that `operation_id`; a
+replay is a fresh create attempt subject to Feishu's UUID window. Later
+rename/invite calls are `unknown_chat`. Re-adoption grants access only, without
+restoring those management rights.
 
 Both RPCs require the bearer-authenticated provider identity and the separate
 `allow_adopt_chats` grant (default false; off returns `PERMISSION_DENIED`).
@@ -677,6 +679,14 @@ any shared alias. Adoption and release persist before becoming visible, and
 concurrent retries are serialized. A persistence failure is
 `grant_store_unavailable` (`INTERNAL`). See
 [Adopt an existing group and release a grant](agent.md#adopt-an-existing-group-and-release-a-grant).
+
+Adopted chats are no longer agent-only: for addressed messages, matching
+first-word command subscribers take precedence over unmatched agent subscriptions,
+with legacy commands dispatched first. Owned-message replies remain pinned to
+their provider, and ambient observation stays independent. Removing a provider
+from config leaves its saved grants until an operator removes them by hand.
+Ingress route `Put` writes now occur under the ingress lock after dispatch
+determines recipients; lookups share the lock and wait for publication.
 
 #### Agent card actions
 Each `AgentResponseAction` carries a provider-defined `action_id`, label,
