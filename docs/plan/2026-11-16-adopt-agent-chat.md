@@ -11,6 +11,13 @@ frozen; changes go through the orchestrator. Builds on ADR 0001 (runtime chat gr
 
 ## Requirements — botd (this repo)
 
+**Status:** In Progress
+
+**Progress:** Step 1 adds provider-scoped grant kinds, durable removal, legacy
+created-grant loading, and opt-in adoption config. Verified with scoped registry,
+config, and gRPC tests; kind-check ablation fails the permission regression test.
+Go bindings regenerated with `make proto`; the frozen proto is unchanged.
+
 1. New provider flag `allow_adopt_chats` (default false), validated like
    `allow_create_chats`; documented in docs/agent.md and docs/ipc.md.
 2. Mentions from unconfigured groups reach a provider only via the existing

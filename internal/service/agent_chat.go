@@ -114,6 +114,7 @@ func (s *Service) CreateAgentChat(ctx context.Context, in CreateAgentChatInput) 
 		return AgentChatReceipt{}, chatCallError(err, "Feishu chat creation failed")
 	}
 	grant := chatgrant.Grant{
+		Kind:          chatgrant.Created,
 		Provider:      provider,
 		AppAlias:      appAlias,
 		ChatID:        chatID,
@@ -183,7 +184,7 @@ func (s *Service) RenameAgentChat(ctx context.Context, in RenameAgentChatInput) 
 		s.logFeishuFailure("agent chat rename", "chat", grant.ChatAlias, err)
 		return chatCallError(err, "Feishu chat rename failed")
 	}
-	if err := s.cfg().RuntimeChats.Rename(grant.ChatAlias, name); err != nil {
+	if err := s.cfg().RuntimeChats.Rename(grant.Provider, grant.ChatAlias, name); err != nil {
 		s.logger.Warn("agent chat name was not saved", "chat_alias", grant.ChatAlias, "error", err)
 	}
 	return nil
@@ -203,8 +204,8 @@ func (s *Service) ownedAgentChat(rawProvider, rawAlias string) (chatgrant.Grant,
 	if !s.cfg().ProviderAllowsCreateChats(provider) {
 		return chatgrant.Grant{}, appBackend{}, providerScopeDenied()
 	}
-	grant, ok := s.cfg().RuntimeChats.ByAlias(alias)
-	if !ok || grant.Provider != provider || !s.appAllowed(provider, grant.AppAlias) {
+	grant, ok := s.cfg().RuntimeChats.ByProviderAlias(provider, alias)
+	if !ok || grant.Kind != chatgrant.Created || !s.appAllowed(provider, grant.AppAlias) {
 		return chatgrant.Grant{}, appBackend{}, notify.NewAPIError(404, "unknown_chat", "unknown chat", false)
 	}
 	backend, ok := s.backendForApp(grant.AppAlias)

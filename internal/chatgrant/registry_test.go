@@ -29,7 +29,7 @@ func TestRegistryPersistsAndReloads(t *testing.T) {
 	if err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("file = %v err=%v", info, err)
 	}
-	if err := r.Rename(alias, "[Archived] a"); err != nil {
+	if err := r.Rename("commons", alias, "[Archived] a"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -72,5 +72,84 @@ func TestNilAndCorruptRegistries(t *testing.T) {
 	}
 	if _, err := Open(dir); err == nil {
 		t.Fatal("a grant with a configured-looking alias loaded")
+	}
+}
+
+func TestAdoptedGrantsAreProviderScopedAndReleasePersists(t *testing.T) {
+	dir := t.TempDir()
+	r, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, provider := range []string{"commons", "observer"} {
+		if err := r.Add(Grant{Kind: Adopted, Provider: provider, AppAlias: "support", ChatID: "oc_group", ChatAlias: "unconfigured-group-kept"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r, err = Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !r.Granted("commons", "unconfigured-group-kept") || !r.Granted("observer", "unconfigured-group-kept") {
+		t.Fatal("shared chat lost a provider grant")
+	}
+	if _, ok := r.ByOperation("commons", ""); ok {
+		t.Fatal("adoption became a create operation")
+	}
+	removed, err := r.Remove("commons", "unconfigured-group-kept")
+	if err != nil || !removed {
+		t.Fatalf("remove = %v %v", removed, err)
+	}
+	// A delayed rename must never resurrect a released grant.
+	if err := r.Rename("commons", "unconfigured-group-kept", "late"); err != nil {
+		t.Fatal(err)
+	}
+	r, err = Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Granted("commons", "unconfigured-group-kept") || !r.Granted("observer", "unconfigured-group-kept") {
+		t.Fatal("release changed the wrong grants")
+	}
+	if removed, err := r.Remove("commons", "unconfigured-group-kept"); err != nil || removed {
+		t.Fatalf("repeat release = %v %v", removed, err)
+	}
+	if err := r.Add(Grant{Kind: Adopted, Provider: "third", AppAlias: "other", ChatID: "oc_other", ChatAlias: "unconfigured-group-kept"}); err == nil {
+		t.Fatal("same alias resolved to different chats")
+	}
+}
+
+func TestLegacyCreatedGrantKind(t *testing.T) {
+	dir := t.TempDir()
+	data := `{"version":1,"grants":[{"provider":"commons","app_alias":"default","chat_id":"oc_1","chat_alias":"agent-chat-legacy","operation_id":"op"}]}`
+	if err := os.WriteFile(filepath.Join(dir, FileName), []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	grant, ok := r.ByOperation("commons", "op")
+	if !ok || grant.Kind != Created {
+		t.Fatalf("legacy grant = %#v %v", grant, ok)
+	}
+}
+
+func TestGrantPersistenceFailuresKeepMemoryUnchanged(t *testing.T) {
+	r, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	grant := Grant{Kind: Adopted, Provider: "commons", AppAlias: "default", ChatID: "oc_1", ChatAlias: "kept"}
+	if err := r.Add(grant); err != nil {
+		t.Fatal(err)
+	}
+	r.path = filepath.Join(t.TempDir(), "missing", FileName)
+	if removed, err := r.Remove("commons", "kept"); err == nil || removed || !r.Granted("commons", "kept") {
+		t.Fatalf("failed release = %v %v", removed, err)
+	}
+	grant.Provider = "other"
+	if err := r.Add(grant); err == nil || r.Granted("other", "kept") {
+		t.Fatal("failed add changed memory")
 	}
 }
