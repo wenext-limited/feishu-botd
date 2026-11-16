@@ -60,14 +60,20 @@ func (s *Service) AdoptAgentChat(ctx context.Context, in AdoptAgentChatInput) (A
 		return AdoptAgentChatReceipt{}, unknownChatError()
 	}
 	receipt := AdoptAgentChatReceipt{ChatAlias: route.ChatAlias}
-	if cfg.RuntimeChats.Granted(provider, route.ChatAlias) {
-		receipt.AlreadyGranted = true
-		return receipt, nil
-	}
 	// Static chats are an idempotent no-op; adoption never widens their ACLs.
 	static := cfg
 	static.RuntimeChats = nil
 	if _, _, configured := static.ResolveChannel(route.ChatAlias); configured {
+		ambient := static.ProviderAllowsAmbientChat(provider, route.ChatAlias)
+		proactive := static.ProviderAllowsProactiveChat(provider, route.ChatAlias)
+		if !ambient || !proactive {
+			s.logger.Warn("agent chat adoption is a static no-op with missing provider permissions",
+				"provider", provider, "chat_alias", route.ChatAlias, "ambient_allowed", ambient, "proactive_allowed", proactive)
+		}
+		receipt.AlreadyGranted = true
+		return receipt, nil
+	}
+	if cfg.RuntimeChats.Granted(provider, route.ChatAlias) {
 		receipt.AlreadyGranted = true
 		return receipt, nil
 	}

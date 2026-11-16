@@ -1,8 +1,11 @@
 package service
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -202,6 +205,52 @@ func TestAdoptStaticAndCreatedAreAlreadyGrantedAndCreatedReleaseLosesManagement(
 	}
 	if _, apiErr := svc.InviteAgentChatMembers(context.Background(), InviteAgentChatMembersInput{Provider: "commons", ChatAlias: created.ChatAlias, MemberOpenIDs: []string{"ou_a"}}); apiErr == nil || apiErr.Code != "unknown_chat" {
 		t.Fatalf("invite released: %+v", apiErr)
+	}
+}
+
+func TestAdoptStaticWarnsForMissingPermissions(t *testing.T) {
+	for _, ambient := range []bool{false, true} {
+		for _, proactive := range []bool{false, true} {
+			t.Run(fmt.Sprintf("ambient=%v/proactive=%v", ambient, proactive), func(t *testing.T) {
+				svc, backend, _ := adoptionService(t)
+				p := svc.cfg().AgentProviders["commons"]
+				p.AmbientChatAliases, p.ProactiveChatAliases = nil, nil
+				if ambient {
+					p.AmbientChatAliases = []string{"ops"}
+				}
+				if proactive {
+					p.ProactiveChatAliases = []string{"ops"}
+				}
+				svc.cfg().AgentProviders["commons"] = p
+				sub := mustSubscribeAgent(t, svc, AgentSubscribeOptions{Provider: "commons", IncludeUnmatchedMessages: true})
+				mustDispatchAgentPrompt(t, svc, humanGroupMessage("ops", "oc_ops", "d_static", "om_static"))
+				event := receiveAgentEvent(t, sub)
+				var logs bytes.Buffer
+				svc.logger = slog.New(slog.NewJSONHandler(&logs, nil))
+				if got := adoptMessage(t, svc, "commons", event.Message.MessageRef); !got.AlreadyGranted || got.ChatAlias != "ops" {
+					t.Fatalf("static = %+v", got)
+				}
+				if backend.membershipCalls != 0 || len(svc.cfg().RuntimeChats.Grants()) != 0 ||
+					svc.Config().ProviderAllowsAmbientChat("commons", "ops") != ambient ||
+					svc.Config().ProviderAllowsProactiveChat("commons", "ops") != proactive {
+					t.Fatal("static adoption called Feishu or changed permissions")
+				}
+				if ambient && proactive {
+					if logs.Len() != 0 {
+						t.Fatalf("fully granted static chat warned: %s", &logs)
+					}
+					return
+				}
+				var warning map[string]any
+				if err := json.Unmarshal(logs.Bytes(), &warning); err != nil {
+					t.Fatalf("missing warning: %q: %v", &logs, err)
+				}
+				if warning["level"] != "WARN" || warning["provider"] != "commons" || warning["chat_alias"] != "ops" ||
+					warning["ambient_allowed"] != ambient || warning["proactive_allowed"] != proactive {
+					t.Fatalf("warning = %v", warning)
+				}
+			})
+		}
 	}
 }
 

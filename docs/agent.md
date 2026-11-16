@@ -593,8 +593,11 @@ members) for new adoptions. Missing permission is `chat_permission_denied`
 A statically configured chat or one already granted to this provider returns
 `already_granted = true` before any Feishu membership call, so repeated adoption
 needs no membership-read scope or Feishu round trip. Static adoption is a no-op
-and leaves the existing
-provider ACLs intact. An existing created grant keeps its creation and management
+and leaves the existing provider ACLs intact. `already_granted` for a static
+chat does not promise ambient or proactive access: the operator must include
+its static alias in this provider's `ambient_chat_aliases` and
+`proactive_chat_aliases`. botd logs a warning if either permission is missing.
+An existing created grant keeps its creation and management
 rights. New adopted grants are persisted in `agent-chat-grants.json` with
 `kind: "adopted"`; created grants use `kind: "created"`. The registry always
 writes version 2 and still loads version 1. Older binaries fail explicitly with

@@ -649,7 +649,10 @@ the exact delivered alias, including an opaque `unconfigured-group-…` alias.
 Unknown, expired, non-group, bot-authored, or other-provider refs return
 `unknown_chat` (`NOT_FOUND`). Static chats and this provider's existing runtime
 grants return `already_granted = true` before any Feishu call; static adoption
-changes no permissions. New adoption needs the app's `im:chat.members:read`
+changes no permissions and warns if the provider lacks ambient or proactive
+access there. Static aliases must also be in that provider's
+`ambient_chat_aliases` and `proactive_chat_aliases`.
+New adoption needs the app's `im:chat.members:read`
 scope; a membership permission refusal is `chat_permission_denied`.
 
 `ReleaseAgentChat` accepts `provider` and `chat_alias` (at most 160 bytes) and
