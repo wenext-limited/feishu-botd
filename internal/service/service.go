@@ -175,6 +175,7 @@ func newService(
 	agentBroker.ambientChat = func(provider, chatAlias string) bool {
 		return svc.cfg().ProviderAllowsAmbientChat(provider, chatAlias)
 	}
+	agentBroker.allowsSenderIdentity = func(provider string) bool { return svc.cfg().ProviderAllowsSenderIdentity(provider) }
 	agentBroker.allowsSenderEmail = func(provider string) bool {
 		return svc.cfg().ProviderAllowsSenderEmail(provider)
 	}

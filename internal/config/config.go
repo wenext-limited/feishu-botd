@@ -149,6 +149,8 @@ type AgentProviderConfig struct {
 	// resolved by the daemon through the Contact API. It is personal data, so
 	// omission always denies, and a provider without it never causes a lookup.
 	AllowSenderEmail bool
+	// AllowSenderIdentity shares authenticated app/tenant/IDs, without a Contact lookup.
+	AllowSenderIdentity bool
 	// WorkingReactionEmoji, when non-empty, is the Feishu emoji key (e.g.
 	// "OnIt") the daemon places on the triggering message for the duration of
 	// a response and removes once it closes. Entirely daemon-driven — the
@@ -301,6 +303,13 @@ func (c Config) ProviderAllowsApp(provider, appAlias string) bool {
 func (c Config) ProviderAllowsAttachedContext(provider string) bool {
 	providerCfg, configured := c.AgentProviders[strings.TrimSpace(provider)]
 	return configured && providerCfg.AllowAttachedContext
+}
+
+// ProviderAllowsSenderIdentity explicitly shares authenticated sender IDs.
+// Omission denies; the grant does not permit a Contact lookup or other reads.
+func (c Config) ProviderAllowsSenderIdentity(provider string) bool {
+	providerCfg, configured := c.AgentProviders[strings.TrimSpace(provider)]
+	return configured && providerCfg.AllowSenderIdentity
 }
 
 // ProviderAllowsSenderEmail is an explicit personal-data grant: the sender's
@@ -592,6 +601,7 @@ func LoadFromEnv() (Config, error) {
 			AllowCreateChats:         providerCfg.AllowCreateChats,
 			AllowAdoptChats:          providerCfg.AllowAdoptChats,
 			AllowSenderEmail:         providerCfg.AllowSenderEmail,
+			AllowSenderIdentity:      providerCfg.AllowSenderIdentity,
 			WorkingReactionEmoji:     providerCfg.WorkingReactionEmoji,
 			WorkingReactionOverrides: providerCfg.WorkingReactionSenderOverrides,
 			AllowedApps:              allowedApps,
@@ -742,6 +752,7 @@ type fileAgentProviderConfig struct {
 	AllowCreateChats        bool               `json:"allow_create_chats"`
 	AllowAdoptChats         bool               `json:"allow_adopt_chats"`
 	AllowSenderEmail        bool               `json:"allow_sender_email"`
+	AllowSenderIdentity     bool               `json:"allow_sender_identity"`
 	WorkingReactionEmoji    string             `json:"working_reaction_emoji"`
 	// WorkingReactionSenderOverrides maps a sender's Feishu display name to a
 	// working reaction emoji, resolved via a live Contact API call — see
@@ -1441,6 +1452,7 @@ func normalizeAgentProviderConfigs(in map[string]fileAgentProviderConfig) (map[s
 			AllowCreateChats:               providerCfg.AllowCreateChats,
 			AllowAdoptChats:                providerCfg.AllowAdoptChats,
 			AllowSenderEmail:               providerCfg.AllowSenderEmail,
+			AllowSenderIdentity:            providerCfg.AllowSenderIdentity,
 			WorkingReactionEmoji:           providerCfg.WorkingReactionEmoji,
 			WorkingReactionSenderOverrides: reactionOverrides,
 		}

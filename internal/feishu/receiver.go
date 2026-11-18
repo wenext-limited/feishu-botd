@@ -53,7 +53,8 @@ type CommandReceiverConfig struct {
 }
 
 type InboundCommand struct {
-	AppAlias          string `json:"-"`
+	SenderIdentity    *SenderIdentity `json:"-"`
+	AppAlias          string          `json:"-"`
 	DeliveryID        string
 	Command           string
 	Text              string
@@ -665,6 +666,7 @@ func (r *CommandReceiver) CommandFromEvent(event *larkim.P2MessageReceiveV1) (In
 		UnmentionedReply:  unmentionedReply,
 		AmbientOnly:       ambientOnly,
 		HumanSender:       humanSender,
+		SenderIdentity:    senderIdentity(r.cfg.AppID, event.Event.Sender),
 		NamedPrompt:       namedPrompt,
 		Mentions:          mentions,
 		SenderID:          senderID(event.Event.Sender),

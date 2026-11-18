@@ -23,6 +23,7 @@ const (
 // explicitly allowed unconfigured group. Raw Feishu chat ids never enter the
 // public command stream.
 type CommandInput struct {
+	SenderIdentity *feishu.SenderIdentity `json:"-"`
 	// AppAlias is daemon-private ingress routing state. An empty value is the
 	// legacy default app and preserves all existing direct service callers.
 	AppAlias          string `json:"-"`
@@ -219,6 +220,10 @@ func (s *Service) subscribeCommandsForApps(
 func (s *Service) DispatchCommand(ctx context.Context, in CommandInput) (int, *notify.APIError) {
 	// A caller cannot supply an address; only resolveSenderEmail sets one.
 	in.SenderEmail = ""
+	app := s.cfg().EffectiveApps()[effectiveAppAlias(in.AppAlias)]
+	if !in.HumanSender || !in.SenderIdentity.ValidFor(app.AppID, in.SenderID) {
+		in.SenderIdentity = nil
+	}
 	explicitAppAlias := strings.TrimSpace(in.AppAlias)
 	in.AppAlias = effectiveAppAlias(in.AppAlias)
 	if explicitAppAlias != "" {

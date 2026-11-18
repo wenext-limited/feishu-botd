@@ -273,6 +273,12 @@ message. Replies to unowned messages leave it empty. Group messages may add
 the current bounded `conversation_title`; lookup failure leaves it empty.
 Neither value contains a raw Feishu route, and the title must never be used as
 authorization.
+An `allow_sender_identity` provider also receives typed authenticated sender
+scope in `InboundAgentMessage.sender_identity` (field 12): configured receiving
+app ID, sender tenant, human sender type and available union/open/user IDs.
+This does not require the Contact API or widen the separate email grant. See
+[the agent contract](agent.md) for scope, privacy and Dial integration rules.
+
 A provider granted `allow_sender_email` also receives
 `InboundAgentMessage.sender_email`, the sender's company address
 (`enterprise_email`, else `email`); it is empty for every other provider and

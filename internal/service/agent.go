@@ -69,6 +69,8 @@ type AgentMessage struct {
 	// SenderEmail is set only on the copy sent to a provider granted
 	// allow_sender_email.
 	SenderEmail string
+	// Only an allow_sender_identity provider receives this event evidence.
+	SenderIdentity *feishu.SenderIdentity
 
 	// MessageRef is this inbound message's provider-safe identity, in the same
 	// space as AgentResponseReceipt.MessageRef.
@@ -388,7 +390,8 @@ type agentBroker struct {
 	ambientChat       func(provider, chatAlias string) bool
 	// allowsSenderEmail reports a provider's allow_sender_email grant. Nil
 	// denies every provider.
-	allowsSenderEmail func(provider string) bool
+	allowsSenderEmail    func(provider string) bool
+	allowsSenderIdentity func(provider string) bool
 }
 
 type messageObservation struct {
@@ -890,6 +893,10 @@ func (b *agentBroker) eventForProvider(event AgentEvent, in CommandInput, provid
 			out.Message.Text = in.NamedPrompt
 		}
 		out.Message.Mentions = cloneAgentMentions(in.Mentions)
+	}
+	if out.Message != nil && in.SenderIdentity != nil && b.allowsSenderIdentity != nil && b.allowsSenderIdentity(provider) {
+		identity := *in.SenderIdentity
+		out.Message.SenderIdentity = &identity
 	}
 	if out.Message != nil && in.SenderEmail != "" && b.allowsSenderEmail != nil && b.allowsSenderEmail(provider) {
 		out.Message.SenderEmail = in.SenderEmail
@@ -2146,6 +2153,10 @@ func cloneAgentEvent(in AgentEvent) AgentEvent {
 	out.Metadata = cloneStringMap(in.Metadata)
 	if in.Message != nil {
 		message := *in.Message
+		if message.SenderIdentity != nil {
+			identity := *message.SenderIdentity
+			message.SenderIdentity = &identity
+		}
 		message.Mentions = cloneAgentMentions(in.Message.Mentions)
 		out.Message = &message
 	}

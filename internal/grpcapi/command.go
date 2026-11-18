@@ -445,6 +445,9 @@ func agentEventToProto(event service.AgentEvent) *pb.SubscribeAgentEventsRespons
 			Addressing:           agentAddressingToProto(event.Message.Addressing),
 			SenderEmail:          event.Message.SenderEmail,
 		}
+		if identity := event.Message.SenderIdentity; identity != nil {
+			message.SenderIdentity = &pb.InboundAgentSenderIdentity{AppId: identity.AppID, TenantKey: identity.TenantKey, SenderType: identity.SenderType, UnionId: identity.UnionID, OpenId: identity.OpenID, UserId: identity.UserID}
+		}
 		for _, mention := range event.Message.Mentions {
 			message.Mentions = append(message.Mentions, &pb.InboundMention{UserId: mention.UserID, Name: mention.Name})
 		}

@@ -249,6 +249,18 @@ message InboundAgentMessage {
   // scope, the lookup fails, or the user has no address. It is personal data,
   // so a provider should use it to act for this person and never log it.
   string sender_email = 6;
+  // Authenticated event identity, only for allow_sender_identity providers.
+  // No Contact lookup, aliases, mentions or model text supply these fields.
+  InboundAgentSenderIdentity sender_identity = 12;
+}
+
+message InboundAgentSenderIdentity {
+  string app_id = 1; // receiving app from daemon configuration
+  string tenant_key = 2; // sender's tenant, never the event header's tenant
+  string sender_type = 3; // "user" for an authenticated human sender
+  string union_id = 4;
+  string open_id = 5;
+  string user_id = 6;
 }
 
 enum InboundAddressing {

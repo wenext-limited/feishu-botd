@@ -1191,9 +1191,12 @@ type InboundAgentMessage struct {
 	// when that is empty. Fail-soft: empty when the app lacks the contact
 	// scope, the lookup fails, or the user has no address. It is personal data,
 	// so a provider should use it to act for this person and never log it.
-	SenderEmail   string `protobuf:"bytes,6,opt,name=sender_email,json=senderEmail,proto3" json:"sender_email,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	SenderEmail string `protobuf:"bytes,6,opt,name=sender_email,json=senderEmail,proto3" json:"sender_email,omitempty"`
+	// Authenticated event identity, only for allow_sender_identity providers.
+	// No Contact lookup, aliases, mentions or model text supply these fields.
+	SenderIdentity *InboundAgentSenderIdentity `protobuf:"bytes,12,opt,name=sender_identity,json=senderIdentity,proto3" json:"sender_identity,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *InboundAgentMessage) Reset() {
@@ -1303,6 +1306,97 @@ func (x *InboundAgentMessage) GetSenderEmail() string {
 	return ""
 }
 
+func (x *InboundAgentMessage) GetSenderIdentity() *InboundAgentSenderIdentity {
+	if x != nil {
+		return x.SenderIdentity
+	}
+	return nil
+}
+
+type InboundAgentSenderIdentity struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	AppId         string                 `protobuf:"bytes,1,opt,name=app_id,json=appId,proto3" json:"app_id,omitempty"`                // receiving app from daemon configuration
+	TenantKey     string                 `protobuf:"bytes,2,opt,name=tenant_key,json=tenantKey,proto3" json:"tenant_key,omitempty"`    // sender's tenant, never the event header's tenant
+	SenderType    string                 `protobuf:"bytes,3,opt,name=sender_type,json=senderType,proto3" json:"sender_type,omitempty"` // "user" for an authenticated human sender
+	UnionId       string                 `protobuf:"bytes,4,opt,name=union_id,json=unionId,proto3" json:"union_id,omitempty"`
+	OpenId        string                 `protobuf:"bytes,5,opt,name=open_id,json=openId,proto3" json:"open_id,omitempty"`
+	UserId        string                 `protobuf:"bytes,6,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *InboundAgentSenderIdentity) Reset() {
+	*x = InboundAgentSenderIdentity{}
+	mi := &file_feishubotd_v1_command_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *InboundAgentSenderIdentity) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*InboundAgentSenderIdentity) ProtoMessage() {}
+
+func (x *InboundAgentSenderIdentity) ProtoReflect() protoreflect.Message {
+	mi := &file_feishubotd_v1_command_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use InboundAgentSenderIdentity.ProtoReflect.Descriptor instead.
+func (*InboundAgentSenderIdentity) Descriptor() ([]byte, []int) {
+	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *InboundAgentSenderIdentity) GetAppId() string {
+	if x != nil {
+		return x.AppId
+	}
+	return ""
+}
+
+func (x *InboundAgentSenderIdentity) GetTenantKey() string {
+	if x != nil {
+		return x.TenantKey
+	}
+	return ""
+}
+
+func (x *InboundAgentSenderIdentity) GetSenderType() string {
+	if x != nil {
+		return x.SenderType
+	}
+	return ""
+}
+
+func (x *InboundAgentSenderIdentity) GetUnionId() string {
+	if x != nil {
+		return x.UnionId
+	}
+	return ""
+}
+
+func (x *InboundAgentSenderIdentity) GetOpenId() string {
+	if x != nil {
+		return x.OpenId
+	}
+	return ""
+}
+
+func (x *InboundAgentSenderIdentity) GetUserId() string {
+	if x != nil {
+		return x.UserId
+	}
+	return ""
+}
+
 type InboundMention struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Opaque provider-safe user identity, the same space as
@@ -1316,7 +1410,7 @@ type InboundMention struct {
 
 func (x *InboundMention) Reset() {
 	*x = InboundMention{}
-	mi := &file_feishubotd_v1_command_proto_msgTypes[9]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1328,7 +1422,7 @@ func (x *InboundMention) String() string {
 func (*InboundMention) ProtoMessage() {}
 
 func (x *InboundMention) ProtoReflect() protoreflect.Message {
-	mi := &file_feishubotd_v1_command_proto_msgTypes[9]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1341,7 +1435,7 @@ func (x *InboundMention) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InboundMention.ProtoReflect.Descriptor instead.
 func (*InboundMention) Descriptor() ([]byte, []int) {
-	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{9}
+	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *InboundMention) GetUserId() string {
@@ -1370,7 +1464,7 @@ type GetAgentAttachedContextRequest struct {
 
 func (x *GetAgentAttachedContextRequest) Reset() {
 	*x = GetAgentAttachedContextRequest{}
-	mi := &file_feishubotd_v1_command_proto_msgTypes[10]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1382,7 +1476,7 @@ func (x *GetAgentAttachedContextRequest) String() string {
 func (*GetAgentAttachedContextRequest) ProtoMessage() {}
 
 func (x *GetAgentAttachedContextRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_feishubotd_v1_command_proto_msgTypes[10]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1395,7 +1489,7 @@ func (x *GetAgentAttachedContextRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetAgentAttachedContextRequest.ProtoReflect.Descriptor instead.
 func (*GetAgentAttachedContextRequest) Descriptor() ([]byte, []int) {
-	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{10}
+	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *GetAgentAttachedContextRequest) GetProvider() string {
@@ -1422,7 +1516,7 @@ type AgentAttachedContextIssue struct {
 
 func (x *AgentAttachedContextIssue) Reset() {
 	*x = AgentAttachedContextIssue{}
-	mi := &file_feishubotd_v1_command_proto_msgTypes[11]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1434,7 +1528,7 @@ func (x *AgentAttachedContextIssue) String() string {
 func (*AgentAttachedContextIssue) ProtoMessage() {}
 
 func (x *AgentAttachedContextIssue) ProtoReflect() protoreflect.Message {
-	mi := &file_feishubotd_v1_command_proto_msgTypes[11]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1447,7 +1541,7 @@ func (x *AgentAttachedContextIssue) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentAttachedContextIssue.ProtoReflect.Descriptor instead.
 func (*AgentAttachedContextIssue) Descriptor() ([]byte, []int) {
-	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{11}
+	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *AgentAttachedContextIssue) GetCode() AgentAttachedContextIssueCode {
@@ -1476,7 +1570,7 @@ type AgentAttachedContextImageDescriptor struct {
 
 func (x *AgentAttachedContextImageDescriptor) Reset() {
 	*x = AgentAttachedContextImageDescriptor{}
-	mi := &file_feishubotd_v1_command_proto_msgTypes[12]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1488,7 +1582,7 @@ func (x *AgentAttachedContextImageDescriptor) String() string {
 func (*AgentAttachedContextImageDescriptor) ProtoMessage() {}
 
 func (x *AgentAttachedContextImageDescriptor) ProtoReflect() protoreflect.Message {
-	mi := &file_feishubotd_v1_command_proto_msgTypes[12]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1501,7 +1595,7 @@ func (x *AgentAttachedContextImageDescriptor) ProtoReflect() protoreflect.Messag
 
 // Deprecated: Use AgentAttachedContextImageDescriptor.ProtoReflect.Descriptor instead.
 func (*AgentAttachedContextImageDescriptor) Descriptor() ([]byte, []int) {
-	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{12}
+	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *AgentAttachedContextImageDescriptor) GetImageIndex() uint32 {
@@ -1542,7 +1636,7 @@ type AgentAttachedContextVideoDescriptor struct {
 
 func (x *AgentAttachedContextVideoDescriptor) Reset() {
 	*x = AgentAttachedContextVideoDescriptor{}
-	mi := &file_feishubotd_v1_command_proto_msgTypes[13]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1554,7 +1648,7 @@ func (x *AgentAttachedContextVideoDescriptor) String() string {
 func (*AgentAttachedContextVideoDescriptor) ProtoMessage() {}
 
 func (x *AgentAttachedContextVideoDescriptor) ProtoReflect() protoreflect.Message {
-	mi := &file_feishubotd_v1_command_proto_msgTypes[13]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1567,7 +1661,7 @@ func (x *AgentAttachedContextVideoDescriptor) ProtoReflect() protoreflect.Messag
 
 // Deprecated: Use AgentAttachedContextVideoDescriptor.ProtoReflect.Descriptor instead.
 func (*AgentAttachedContextVideoDescriptor) Descriptor() ([]byte, []int) {
-	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{13}
+	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *AgentAttachedContextVideoDescriptor) GetVideoIndex() uint32 {
@@ -1620,7 +1714,7 @@ type AgentAttachedContextMessage struct {
 
 func (x *AgentAttachedContextMessage) Reset() {
 	*x = AgentAttachedContextMessage{}
-	mi := &file_feishubotd_v1_command_proto_msgTypes[14]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1632,7 +1726,7 @@ func (x *AgentAttachedContextMessage) String() string {
 func (*AgentAttachedContextMessage) ProtoMessage() {}
 
 func (x *AgentAttachedContextMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_feishubotd_v1_command_proto_msgTypes[14]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1645,7 +1739,7 @@ func (x *AgentAttachedContextMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentAttachedContextMessage.ProtoReflect.Descriptor instead.
 func (*AgentAttachedContextMessage) Descriptor() ([]byte, []int) {
-	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{14}
+	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *AgentAttachedContextMessage) GetAuthorLabel() string {
@@ -1698,7 +1792,7 @@ type AgentAttachedContextHeader struct {
 
 func (x *AgentAttachedContextHeader) Reset() {
 	*x = AgentAttachedContextHeader{}
-	mi := &file_feishubotd_v1_command_proto_msgTypes[15]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1710,7 +1804,7 @@ func (x *AgentAttachedContextHeader) String() string {
 func (*AgentAttachedContextHeader) ProtoMessage() {}
 
 func (x *AgentAttachedContextHeader) ProtoReflect() protoreflect.Message {
-	mi := &file_feishubotd_v1_command_proto_msgTypes[15]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1723,7 +1817,7 @@ func (x *AgentAttachedContextHeader) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentAttachedContextHeader.ProtoReflect.Descriptor instead.
 func (*AgentAttachedContextHeader) Descriptor() ([]byte, []int) {
-	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{15}
+	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *AgentAttachedContextHeader) GetRequesterLabel() string {
@@ -1773,7 +1867,7 @@ type AgentAttachedContextImageChunk struct {
 
 func (x *AgentAttachedContextImageChunk) Reset() {
 	*x = AgentAttachedContextImageChunk{}
-	mi := &file_feishubotd_v1_command_proto_msgTypes[16]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1785,7 +1879,7 @@ func (x *AgentAttachedContextImageChunk) String() string {
 func (*AgentAttachedContextImageChunk) ProtoMessage() {}
 
 func (x *AgentAttachedContextImageChunk) ProtoReflect() protoreflect.Message {
-	mi := &file_feishubotd_v1_command_proto_msgTypes[16]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1798,7 +1892,7 @@ func (x *AgentAttachedContextImageChunk) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentAttachedContextImageChunk.ProtoReflect.Descriptor instead.
 func (*AgentAttachedContextImageChunk) Descriptor() ([]byte, []int) {
-	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{16}
+	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *AgentAttachedContextImageChunk) GetImageIndex() uint32 {
@@ -1843,7 +1937,7 @@ type AgentAttachedContextVideoChunk struct {
 
 func (x *AgentAttachedContextVideoChunk) Reset() {
 	*x = AgentAttachedContextVideoChunk{}
-	mi := &file_feishubotd_v1_command_proto_msgTypes[17]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1855,7 +1949,7 @@ func (x *AgentAttachedContextVideoChunk) String() string {
 func (*AgentAttachedContextVideoChunk) ProtoMessage() {}
 
 func (x *AgentAttachedContextVideoChunk) ProtoReflect() protoreflect.Message {
-	mi := &file_feishubotd_v1_command_proto_msgTypes[17]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1868,7 +1962,7 @@ func (x *AgentAttachedContextVideoChunk) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentAttachedContextVideoChunk.ProtoReflect.Descriptor instead.
 func (*AgentAttachedContextVideoChunk) Descriptor() ([]byte, []int) {
-	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{17}
+	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *AgentAttachedContextVideoChunk) GetVideoIndex() uint32 {
@@ -1913,7 +2007,7 @@ type GetAgentAttachedContextResponse struct {
 
 func (x *GetAgentAttachedContextResponse) Reset() {
 	*x = GetAgentAttachedContextResponse{}
-	mi := &file_feishubotd_v1_command_proto_msgTypes[18]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1925,7 +2019,7 @@ func (x *GetAgentAttachedContextResponse) String() string {
 func (*GetAgentAttachedContextResponse) ProtoMessage() {}
 
 func (x *GetAgentAttachedContextResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_feishubotd_v1_command_proto_msgTypes[18]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1938,7 +2032,7 @@ func (x *GetAgentAttachedContextResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetAgentAttachedContextResponse.ProtoReflect.Descriptor instead.
 func (*GetAgentAttachedContextResponse) Descriptor() ([]byte, []int) {
-	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{18}
+	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *GetAgentAttachedContextResponse) GetFrame() isGetAgentAttachedContextResponse_Frame {
@@ -2025,7 +2119,7 @@ type UploadAgentImageHeader struct {
 
 func (x *UploadAgentImageHeader) Reset() {
 	*x = UploadAgentImageHeader{}
-	mi := &file_feishubotd_v1_command_proto_msgTypes[19]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2037,7 +2131,7 @@ func (x *UploadAgentImageHeader) String() string {
 func (*UploadAgentImageHeader) ProtoMessage() {}
 
 func (x *UploadAgentImageHeader) ProtoReflect() protoreflect.Message {
-	mi := &file_feishubotd_v1_command_proto_msgTypes[19]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2050,7 +2144,7 @@ func (x *UploadAgentImageHeader) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UploadAgentImageHeader.ProtoReflect.Descriptor instead.
 func (*UploadAgentImageHeader) Descriptor() ([]byte, []int) {
-	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{19}
+	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *UploadAgentImageHeader) GetProvider() string {
@@ -2090,7 +2184,7 @@ type UploadAgentImageChunk struct {
 
 func (x *UploadAgentImageChunk) Reset() {
 	*x = UploadAgentImageChunk{}
-	mi := &file_feishubotd_v1_command_proto_msgTypes[20]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2102,7 +2196,7 @@ func (x *UploadAgentImageChunk) String() string {
 func (*UploadAgentImageChunk) ProtoMessage() {}
 
 func (x *UploadAgentImageChunk) ProtoReflect() protoreflect.Message {
-	mi := &file_feishubotd_v1_command_proto_msgTypes[20]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2115,7 +2209,7 @@ func (x *UploadAgentImageChunk) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UploadAgentImageChunk.ProtoReflect.Descriptor instead.
 func (*UploadAgentImageChunk) Descriptor() ([]byte, []int) {
-	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{20}
+	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *UploadAgentImageChunk) GetData() []byte {
@@ -2140,7 +2234,7 @@ type UploadAgentImageRequest struct {
 
 func (x *UploadAgentImageRequest) Reset() {
 	*x = UploadAgentImageRequest{}
-	mi := &file_feishubotd_v1_command_proto_msgTypes[21]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2152,7 +2246,7 @@ func (x *UploadAgentImageRequest) String() string {
 func (*UploadAgentImageRequest) ProtoMessage() {}
 
 func (x *UploadAgentImageRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_feishubotd_v1_command_proto_msgTypes[21]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2165,7 +2259,7 @@ func (x *UploadAgentImageRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UploadAgentImageRequest.ProtoReflect.Descriptor instead.
 func (*UploadAgentImageRequest) Descriptor() ([]byte, []int) {
-	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{21}
+	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *UploadAgentImageRequest) GetFrame() isUploadAgentImageRequest_Frame {
@@ -2224,7 +2318,7 @@ type UploadAgentImageResponse struct {
 
 func (x *UploadAgentImageResponse) Reset() {
 	*x = UploadAgentImageResponse{}
-	mi := &file_feishubotd_v1_command_proto_msgTypes[22]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2236,7 +2330,7 @@ func (x *UploadAgentImageResponse) String() string {
 func (*UploadAgentImageResponse) ProtoMessage() {}
 
 func (x *UploadAgentImageResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_feishubotd_v1_command_proto_msgTypes[22]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2249,7 +2343,7 @@ func (x *UploadAgentImageResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UploadAgentImageResponse.ProtoReflect.Descriptor instead.
 func (*UploadAgentImageResponse) Descriptor() ([]byte, []int) {
-	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{22}
+	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *UploadAgentImageResponse) GetImageKey() string {
@@ -2286,7 +2380,7 @@ type InboundCardAction struct {
 
 func (x *InboundCardAction) Reset() {
 	*x = InboundCardAction{}
-	mi := &file_feishubotd_v1_command_proto_msgTypes[23]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2298,7 +2392,7 @@ func (x *InboundCardAction) String() string {
 func (*InboundCardAction) ProtoMessage() {}
 
 func (x *InboundCardAction) ProtoReflect() protoreflect.Message {
-	mi := &file_feishubotd_v1_command_proto_msgTypes[23]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2311,7 +2405,7 @@ func (x *InboundCardAction) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InboundCardAction.ProtoReflect.Descriptor instead.
 func (*InboundCardAction) Descriptor() ([]byte, []int) {
-	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{23}
+	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *InboundCardAction) GetResponseId() string {
@@ -2348,7 +2442,7 @@ type InboundMessageReaction struct {
 
 func (x *InboundMessageReaction) Reset() {
 	*x = InboundMessageReaction{}
-	mi := &file_feishubotd_v1_command_proto_msgTypes[24]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2360,7 +2454,7 @@ func (x *InboundMessageReaction) String() string {
 func (*InboundMessageReaction) ProtoMessage() {}
 
 func (x *InboundMessageReaction) ProtoReflect() protoreflect.Message {
-	mi := &file_feishubotd_v1_command_proto_msgTypes[24]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2373,7 +2467,7 @@ func (x *InboundMessageReaction) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InboundMessageReaction.ProtoReflect.Descriptor instead.
 func (*InboundMessageReaction) Descriptor() ([]byte, []int) {
-	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{24}
+	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *InboundMessageReaction) GetMessageRef() string {
@@ -2419,7 +2513,7 @@ type AgentResponseContent struct {
 
 func (x *AgentResponseContent) Reset() {
 	*x = AgentResponseContent{}
-	mi := &file_feishubotd_v1_command_proto_msgTypes[25]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2431,7 +2525,7 @@ func (x *AgentResponseContent) String() string {
 func (*AgentResponseContent) ProtoMessage() {}
 
 func (x *AgentResponseContent) ProtoReflect() protoreflect.Message {
-	mi := &file_feishubotd_v1_command_proto_msgTypes[25]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2444,7 +2538,7 @@ func (x *AgentResponseContent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentResponseContent.ProtoReflect.Descriptor instead.
 func (*AgentResponseContent) Descriptor() ([]byte, []int) {
-	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{25}
+	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *AgentResponseContent) GetTitle() string {
@@ -2495,7 +2589,7 @@ type AgentResponseAction struct {
 
 func (x *AgentResponseAction) Reset() {
 	*x = AgentResponseAction{}
-	mi := &file_feishubotd_v1_command_proto_msgTypes[26]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2507,7 +2601,7 @@ func (x *AgentResponseAction) String() string {
 func (*AgentResponseAction) ProtoMessage() {}
 
 func (x *AgentResponseAction) ProtoReflect() protoreflect.Message {
-	mi := &file_feishubotd_v1_command_proto_msgTypes[26]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2520,7 +2614,7 @@ func (x *AgentResponseAction) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentResponseAction.ProtoReflect.Descriptor instead.
 func (*AgentResponseAction) Descriptor() ([]byte, []int) {
-	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{26}
+	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *AgentResponseAction) GetActionId() string {
@@ -2573,7 +2667,7 @@ type AgentTimelineStep struct {
 
 func (x *AgentTimelineStep) Reset() {
 	*x = AgentTimelineStep{}
-	mi := &file_feishubotd_v1_command_proto_msgTypes[27]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2585,7 +2679,7 @@ func (x *AgentTimelineStep) String() string {
 func (*AgentTimelineStep) ProtoMessage() {}
 
 func (x *AgentTimelineStep) ProtoReflect() protoreflect.Message {
-	mi := &file_feishubotd_v1_command_proto_msgTypes[27]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2598,7 +2692,7 @@ func (x *AgentTimelineStep) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentTimelineStep.ProtoReflect.Descriptor instead.
 func (*AgentTimelineStep) Descriptor() ([]byte, []int) {
-	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{27}
+	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *AgentTimelineStep) GetStepId() string {
@@ -2654,7 +2748,7 @@ type StartAgentResponseRequest struct {
 
 func (x *StartAgentResponseRequest) Reset() {
 	*x = StartAgentResponseRequest{}
-	mi := &file_feishubotd_v1_command_proto_msgTypes[28]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2666,7 +2760,7 @@ func (x *StartAgentResponseRequest) String() string {
 func (*StartAgentResponseRequest) ProtoMessage() {}
 
 func (x *StartAgentResponseRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_feishubotd_v1_command_proto_msgTypes[28]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2679,7 +2773,7 @@ func (x *StartAgentResponseRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StartAgentResponseRequest.ProtoReflect.Descriptor instead.
 func (*StartAgentResponseRequest) Descriptor() ([]byte, []int) {
-	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{28}
+	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *StartAgentResponseRequest) GetProvider() string {
@@ -2751,7 +2845,7 @@ type UpdateAgentResponseRequest struct {
 
 func (x *UpdateAgentResponseRequest) Reset() {
 	*x = UpdateAgentResponseRequest{}
-	mi := &file_feishubotd_v1_command_proto_msgTypes[29]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2763,7 +2857,7 @@ func (x *UpdateAgentResponseRequest) String() string {
 func (*UpdateAgentResponseRequest) ProtoMessage() {}
 
 func (x *UpdateAgentResponseRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_feishubotd_v1_command_proto_msgTypes[29]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2776,7 +2870,7 @@ func (x *UpdateAgentResponseRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateAgentResponseRequest.ProtoReflect.Descriptor instead.
 func (*UpdateAgentResponseRequest) Descriptor() ([]byte, []int) {
-	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{29}
+	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *UpdateAgentResponseRequest) GetProvider() string {
@@ -2859,7 +2953,7 @@ type FinishAgentResponseRequest struct {
 
 func (x *FinishAgentResponseRequest) Reset() {
 	*x = FinishAgentResponseRequest{}
-	mi := &file_feishubotd_v1_command_proto_msgTypes[30]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2871,7 +2965,7 @@ func (x *FinishAgentResponseRequest) String() string {
 func (*FinishAgentResponseRequest) ProtoMessage() {}
 
 func (x *FinishAgentResponseRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_feishubotd_v1_command_proto_msgTypes[30]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2884,7 +2978,7 @@ func (x *FinishAgentResponseRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FinishAgentResponseRequest.ProtoReflect.Descriptor instead.
 func (*FinishAgentResponseRequest) Descriptor() ([]byte, []int) {
-	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{30}
+	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *FinishAgentResponseRequest) GetProvider() string {
@@ -2972,7 +3066,7 @@ type AgentResponseReceipt struct {
 
 func (x *AgentResponseReceipt) Reset() {
 	*x = AgentResponseReceipt{}
-	mi := &file_feishubotd_v1_command_proto_msgTypes[31]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2984,7 +3078,7 @@ func (x *AgentResponseReceipt) String() string {
 func (*AgentResponseReceipt) ProtoMessage() {}
 
 func (x *AgentResponseReceipt) ProtoReflect() protoreflect.Message {
-	mi := &file_feishubotd_v1_command_proto_msgTypes[31]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2997,7 +3091,7 @@ func (x *AgentResponseReceipt) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentResponseReceipt.ProtoReflect.Descriptor instead.
 func (*AgentResponseReceipt) Descriptor() ([]byte, []int) {
-	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{31}
+	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *AgentResponseReceipt) GetResponseId() string {
@@ -3065,7 +3159,7 @@ type StartAgentResponseResponse struct {
 
 func (x *StartAgentResponseResponse) Reset() {
 	*x = StartAgentResponseResponse{}
-	mi := &file_feishubotd_v1_command_proto_msgTypes[32]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3077,7 +3171,7 @@ func (x *StartAgentResponseResponse) String() string {
 func (*StartAgentResponseResponse) ProtoMessage() {}
 
 func (x *StartAgentResponseResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_feishubotd_v1_command_proto_msgTypes[32]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3090,7 +3184,7 @@ func (x *StartAgentResponseResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StartAgentResponseResponse.ProtoReflect.Descriptor instead.
 func (*StartAgentResponseResponse) Descriptor() ([]byte, []int) {
-	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{32}
+	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *StartAgentResponseResponse) GetResponse() *AgentResponseReceipt {
@@ -3123,7 +3217,7 @@ type UpdateAgentResponseResponse struct {
 
 func (x *UpdateAgentResponseResponse) Reset() {
 	*x = UpdateAgentResponseResponse{}
-	mi := &file_feishubotd_v1_command_proto_msgTypes[33]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3135,7 +3229,7 @@ func (x *UpdateAgentResponseResponse) String() string {
 func (*UpdateAgentResponseResponse) ProtoMessage() {}
 
 func (x *UpdateAgentResponseResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_feishubotd_v1_command_proto_msgTypes[33]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3148,7 +3242,7 @@ func (x *UpdateAgentResponseResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateAgentResponseResponse.ProtoReflect.Descriptor instead.
 func (*UpdateAgentResponseResponse) Descriptor() ([]byte, []int) {
-	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{33}
+	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *UpdateAgentResponseResponse) GetResponse() *AgentResponseReceipt {
@@ -3167,7 +3261,7 @@ type FinishAgentResponseResponse struct {
 
 func (x *FinishAgentResponseResponse) Reset() {
 	*x = FinishAgentResponseResponse{}
-	mi := &file_feishubotd_v1_command_proto_msgTypes[34]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3179,7 +3273,7 @@ func (x *FinishAgentResponseResponse) String() string {
 func (*FinishAgentResponseResponse) ProtoMessage() {}
 
 func (x *FinishAgentResponseResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_feishubotd_v1_command_proto_msgTypes[34]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3192,7 +3286,7 @@ func (x *FinishAgentResponseResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FinishAgentResponseResponse.ProtoReflect.Descriptor instead.
 func (*FinishAgentResponseResponse) Descriptor() ([]byte, []int) {
-	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{34}
+	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *FinishAgentResponseResponse) GetResponse() *AgentResponseReceipt {
@@ -3219,7 +3313,7 @@ type ReplaceAgentResponseRequest struct {
 
 func (x *ReplaceAgentResponseRequest) Reset() {
 	*x = ReplaceAgentResponseRequest{}
-	mi := &file_feishubotd_v1_command_proto_msgTypes[35]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3231,7 +3325,7 @@ func (x *ReplaceAgentResponseRequest) String() string {
 func (*ReplaceAgentResponseRequest) ProtoMessage() {}
 
 func (x *ReplaceAgentResponseRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_feishubotd_v1_command_proto_msgTypes[35]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3244,7 +3338,7 @@ func (x *ReplaceAgentResponseRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReplaceAgentResponseRequest.ProtoReflect.Descriptor instead.
 func (*ReplaceAgentResponseRequest) Descriptor() ([]byte, []int) {
-	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{35}
+	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *ReplaceAgentResponseRequest) GetProvider() string {
@@ -3312,7 +3406,7 @@ type ReplaceAgentResponseResponse struct {
 
 func (x *ReplaceAgentResponseResponse) Reset() {
 	*x = ReplaceAgentResponseResponse{}
-	mi := &file_feishubotd_v1_command_proto_msgTypes[36]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3324,7 +3418,7 @@ func (x *ReplaceAgentResponseResponse) String() string {
 func (*ReplaceAgentResponseResponse) ProtoMessage() {}
 
 func (x *ReplaceAgentResponseResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_feishubotd_v1_command_proto_msgTypes[36]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3337,7 +3431,7 @@ func (x *ReplaceAgentResponseResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReplaceAgentResponseResponse.ProtoReflect.Descriptor instead.
 func (*ReplaceAgentResponseResponse) Descriptor() ([]byte, []int) {
-	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{36}
+	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *ReplaceAgentResponseResponse) GetResponse() *AgentResponseReceipt {
@@ -3374,7 +3468,7 @@ type SendAgentFollowUpRequest struct {
 
 func (x *SendAgentFollowUpRequest) Reset() {
 	*x = SendAgentFollowUpRequest{}
-	mi := &file_feishubotd_v1_command_proto_msgTypes[37]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3386,7 +3480,7 @@ func (x *SendAgentFollowUpRequest) String() string {
 func (*SendAgentFollowUpRequest) ProtoMessage() {}
 
 func (x *SendAgentFollowUpRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_feishubotd_v1_command_proto_msgTypes[37]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3399,7 +3493,7 @@ func (x *SendAgentFollowUpRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SendAgentFollowUpRequest.ProtoReflect.Descriptor instead.
 func (*SendAgentFollowUpRequest) Descriptor() ([]byte, []int) {
-	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{37}
+	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *SendAgentFollowUpRequest) GetProvider() string {
@@ -3471,7 +3565,7 @@ type AgentFollowUpReceipt struct {
 
 func (x *AgentFollowUpReceipt) Reset() {
 	*x = AgentFollowUpReceipt{}
-	mi := &file_feishubotd_v1_command_proto_msgTypes[38]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3483,7 +3577,7 @@ func (x *AgentFollowUpReceipt) String() string {
 func (*AgentFollowUpReceipt) ProtoMessage() {}
 
 func (x *AgentFollowUpReceipt) ProtoReflect() protoreflect.Message {
-	mi := &file_feishubotd_v1_command_proto_msgTypes[38]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3496,7 +3590,7 @@ func (x *AgentFollowUpReceipt) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentFollowUpReceipt.ProtoReflect.Descriptor instead.
 func (*AgentFollowUpReceipt) Descriptor() ([]byte, []int) {
-	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{38}
+	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *AgentFollowUpReceipt) GetFollowUpId() string {
@@ -3529,7 +3623,7 @@ type SendAgentFollowUpResponse struct {
 
 func (x *SendAgentFollowUpResponse) Reset() {
 	*x = SendAgentFollowUpResponse{}
-	mi := &file_feishubotd_v1_command_proto_msgTypes[39]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3541,7 +3635,7 @@ func (x *SendAgentFollowUpResponse) String() string {
 func (*SendAgentFollowUpResponse) ProtoMessage() {}
 
 func (x *SendAgentFollowUpResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_feishubotd_v1_command_proto_msgTypes[39]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3554,7 +3648,7 @@ func (x *SendAgentFollowUpResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SendAgentFollowUpResponse.ProtoReflect.Descriptor instead.
 func (*SendAgentFollowUpResponse) Descriptor() ([]byte, []int) {
-	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{39}
+	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *SendAgentFollowUpResponse) GetFollowUp() *AgentFollowUpReceipt {
@@ -3589,7 +3683,7 @@ type PostAgentMessageRequest struct {
 
 func (x *PostAgentMessageRequest) Reset() {
 	*x = PostAgentMessageRequest{}
-	mi := &file_feishubotd_v1_command_proto_msgTypes[40]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3601,7 +3695,7 @@ func (x *PostAgentMessageRequest) String() string {
 func (*PostAgentMessageRequest) ProtoMessage() {}
 
 func (x *PostAgentMessageRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_feishubotd_v1_command_proto_msgTypes[40]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3614,7 +3708,7 @@ func (x *PostAgentMessageRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PostAgentMessageRequest.ProtoReflect.Descriptor instead.
 func (*PostAgentMessageRequest) Descriptor() ([]byte, []int) {
-	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{40}
+	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *PostAgentMessageRequest) GetProvider() string {
@@ -3721,7 +3815,7 @@ type PostAgentMessageResponse struct {
 
 func (x *PostAgentMessageResponse) Reset() {
 	*x = PostAgentMessageResponse{}
-	mi := &file_feishubotd_v1_command_proto_msgTypes[41]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3733,7 +3827,7 @@ func (x *PostAgentMessageResponse) String() string {
 func (*PostAgentMessageResponse) ProtoMessage() {}
 
 func (x *PostAgentMessageResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_feishubotd_v1_command_proto_msgTypes[41]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3746,7 +3840,7 @@ func (x *PostAgentMessageResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PostAgentMessageResponse.ProtoReflect.Descriptor instead.
 func (*PostAgentMessageResponse) Descriptor() ([]byte, []int) {
-	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{41}
+	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *PostAgentMessageResponse) GetMessageRef() string {
@@ -3781,7 +3875,7 @@ type AgentCardStep struct {
 
 func (x *AgentCardStep) Reset() {
 	*x = AgentCardStep{}
-	mi := &file_feishubotd_v1_command_proto_msgTypes[42]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3793,7 +3887,7 @@ func (x *AgentCardStep) String() string {
 func (*AgentCardStep) ProtoMessage() {}
 
 func (x *AgentCardStep) ProtoReflect() protoreflect.Message {
-	mi := &file_feishubotd_v1_command_proto_msgTypes[42]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3806,7 +3900,7 @@ func (x *AgentCardStep) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentCardStep.ProtoReflect.Descriptor instead.
 func (*AgentCardStep) Descriptor() ([]byte, []int) {
-	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{42}
+	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *AgentCardStep) GetLabel() string {
@@ -3834,7 +3928,7 @@ type AgentCardLink struct {
 
 func (x *AgentCardLink) Reset() {
 	*x = AgentCardLink{}
-	mi := &file_feishubotd_v1_command_proto_msgTypes[43]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3846,7 +3940,7 @@ func (x *AgentCardLink) String() string {
 func (*AgentCardLink) ProtoMessage() {}
 
 func (x *AgentCardLink) ProtoReflect() protoreflect.Message {
-	mi := &file_feishubotd_v1_command_proto_msgTypes[43]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3859,7 +3953,7 @@ func (x *AgentCardLink) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentCardLink.ProtoReflect.Descriptor instead.
 func (*AgentCardLink) Descriptor() ([]byte, []int) {
-	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{43}
+	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *AgentCardLink) GetLabel() string {
@@ -3896,7 +3990,7 @@ type AgentCardContent struct {
 
 func (x *AgentCardContent) Reset() {
 	*x = AgentCardContent{}
-	mi := &file_feishubotd_v1_command_proto_msgTypes[44]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3908,7 +4002,7 @@ func (x *AgentCardContent) String() string {
 func (*AgentCardContent) ProtoMessage() {}
 
 func (x *AgentCardContent) ProtoReflect() protoreflect.Message {
-	mi := &file_feishubotd_v1_command_proto_msgTypes[44]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3921,7 +4015,7 @@ func (x *AgentCardContent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentCardContent.ProtoReflect.Descriptor instead.
 func (*AgentCardContent) Descriptor() ([]byte, []int) {
-	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{44}
+	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *AgentCardContent) GetTitle() string {
@@ -3988,7 +4082,7 @@ type PostAgentCardRequest struct {
 
 func (x *PostAgentCardRequest) Reset() {
 	*x = PostAgentCardRequest{}
-	mi := &file_feishubotd_v1_command_proto_msgTypes[45]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4000,7 +4094,7 @@ func (x *PostAgentCardRequest) String() string {
 func (*PostAgentCardRequest) ProtoMessage() {}
 
 func (x *PostAgentCardRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_feishubotd_v1_command_proto_msgTypes[45]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4013,7 +4107,7 @@ func (x *PostAgentCardRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PostAgentCardRequest.ProtoReflect.Descriptor instead.
 func (*PostAgentCardRequest) Descriptor() ([]byte, []int) {
-	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{45}
+	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *PostAgentCardRequest) GetProvider() string {
@@ -4105,7 +4199,7 @@ type PostAgentCardResponse struct {
 
 func (x *PostAgentCardResponse) Reset() {
 	*x = PostAgentCardResponse{}
-	mi := &file_feishubotd_v1_command_proto_msgTypes[46]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4117,7 +4211,7 @@ func (x *PostAgentCardResponse) String() string {
 func (*PostAgentCardResponse) ProtoMessage() {}
 
 func (x *PostAgentCardResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_feishubotd_v1_command_proto_msgTypes[46]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4130,7 +4224,7 @@ func (x *PostAgentCardResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PostAgentCardResponse.ProtoReflect.Descriptor instead.
 func (*PostAgentCardResponse) Descriptor() ([]byte, []int) {
-	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{46}
+	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{47}
 }
 
 func (x *PostAgentCardResponse) GetMessageRef() string {
@@ -4170,7 +4264,7 @@ type UpdateAgentCardRequest struct {
 
 func (x *UpdateAgentCardRequest) Reset() {
 	*x = UpdateAgentCardRequest{}
-	mi := &file_feishubotd_v1_command_proto_msgTypes[47]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4182,7 +4276,7 @@ func (x *UpdateAgentCardRequest) String() string {
 func (*UpdateAgentCardRequest) ProtoMessage() {}
 
 func (x *UpdateAgentCardRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_feishubotd_v1_command_proto_msgTypes[47]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4195,7 +4289,7 @@ func (x *UpdateAgentCardRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateAgentCardRequest.ProtoReflect.Descriptor instead.
 func (*UpdateAgentCardRequest) Descriptor() ([]byte, []int) {
-	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{47}
+	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{48}
 }
 
 func (x *UpdateAgentCardRequest) GetProvider() string {
@@ -4239,7 +4333,7 @@ type UpdateAgentCardResponse struct {
 
 func (x *UpdateAgentCardResponse) Reset() {
 	*x = UpdateAgentCardResponse{}
-	mi := &file_feishubotd_v1_command_proto_msgTypes[48]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4251,7 +4345,7 @@ func (x *UpdateAgentCardResponse) String() string {
 func (*UpdateAgentCardResponse) ProtoMessage() {}
 
 func (x *UpdateAgentCardResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_feishubotd_v1_command_proto_msgTypes[48]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4264,7 +4358,7 @@ func (x *UpdateAgentCardResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateAgentCardResponse.ProtoReflect.Descriptor instead.
 func (*UpdateAgentCardResponse) Descriptor() ([]byte, []int) {
-	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{48}
+	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{49}
 }
 
 func (x *UpdateAgentCardResponse) GetDuplicate() bool {
@@ -4294,7 +4388,7 @@ type PinAgentMessageRequest struct {
 
 func (x *PinAgentMessageRequest) Reset() {
 	*x = PinAgentMessageRequest{}
-	mi := &file_feishubotd_v1_command_proto_msgTypes[49]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[50]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4306,7 +4400,7 @@ func (x *PinAgentMessageRequest) String() string {
 func (*PinAgentMessageRequest) ProtoMessage() {}
 
 func (x *PinAgentMessageRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_feishubotd_v1_command_proto_msgTypes[49]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[50]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4319,7 +4413,7 @@ func (x *PinAgentMessageRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PinAgentMessageRequest.ProtoReflect.Descriptor instead.
 func (*PinAgentMessageRequest) Descriptor() ([]byte, []int) {
-	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{49}
+	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{50}
 }
 
 func (x *PinAgentMessageRequest) GetProvider() string {
@@ -4344,7 +4438,7 @@ type PinAgentMessageResponse struct {
 
 func (x *PinAgentMessageResponse) Reset() {
 	*x = PinAgentMessageResponse{}
-	mi := &file_feishubotd_v1_command_proto_msgTypes[50]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[51]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4356,7 +4450,7 @@ func (x *PinAgentMessageResponse) String() string {
 func (*PinAgentMessageResponse) ProtoMessage() {}
 
 func (x *PinAgentMessageResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_feishubotd_v1_command_proto_msgTypes[50]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[51]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4369,7 +4463,7 @@ func (x *PinAgentMessageResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PinAgentMessageResponse.ProtoReflect.Descriptor instead.
 func (*PinAgentMessageResponse) Descriptor() ([]byte, []int) {
-	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{50}
+	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{51}
 }
 
 type CreateAgentChatRequest struct {
@@ -4393,7 +4487,7 @@ type CreateAgentChatRequest struct {
 
 func (x *CreateAgentChatRequest) Reset() {
 	*x = CreateAgentChatRequest{}
-	mi := &file_feishubotd_v1_command_proto_msgTypes[51]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[52]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4405,7 +4499,7 @@ func (x *CreateAgentChatRequest) String() string {
 func (*CreateAgentChatRequest) ProtoMessage() {}
 
 func (x *CreateAgentChatRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_feishubotd_v1_command_proto_msgTypes[51]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[52]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4418,7 +4512,7 @@ func (x *CreateAgentChatRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateAgentChatRequest.ProtoReflect.Descriptor instead.
 func (*CreateAgentChatRequest) Descriptor() ([]byte, []int) {
-	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{51}
+	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{52}
 }
 
 func (x *CreateAgentChatRequest) GetProvider() string {
@@ -4479,7 +4573,7 @@ type CreateAgentChatResponse struct {
 
 func (x *CreateAgentChatResponse) Reset() {
 	*x = CreateAgentChatResponse{}
-	mi := &file_feishubotd_v1_command_proto_msgTypes[52]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[53]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4491,7 +4585,7 @@ func (x *CreateAgentChatResponse) String() string {
 func (*CreateAgentChatResponse) ProtoMessage() {}
 
 func (x *CreateAgentChatResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_feishubotd_v1_command_proto_msgTypes[52]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[53]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4504,7 +4598,7 @@ func (x *CreateAgentChatResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateAgentChatResponse.ProtoReflect.Descriptor instead.
 func (*CreateAgentChatResponse) Descriptor() ([]byte, []int) {
-	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{52}
+	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{53}
 }
 
 func (x *CreateAgentChatResponse) GetChatAlias() string {
@@ -4555,7 +4649,7 @@ type InviteAgentChatMembersRequest struct {
 
 func (x *InviteAgentChatMembersRequest) Reset() {
 	*x = InviteAgentChatMembersRequest{}
-	mi := &file_feishubotd_v1_command_proto_msgTypes[53]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[54]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4567,7 +4661,7 @@ func (x *InviteAgentChatMembersRequest) String() string {
 func (*InviteAgentChatMembersRequest) ProtoMessage() {}
 
 func (x *InviteAgentChatMembersRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_feishubotd_v1_command_proto_msgTypes[53]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[54]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4580,7 +4674,7 @@ func (x *InviteAgentChatMembersRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InviteAgentChatMembersRequest.ProtoReflect.Descriptor instead.
 func (*InviteAgentChatMembersRequest) Descriptor() ([]byte, []int) {
-	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{53}
+	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{54}
 }
 
 func (x *InviteAgentChatMembersRequest) GetProvider() string {
@@ -4613,7 +4707,7 @@ type InviteAgentChatMembersResponse struct {
 
 func (x *InviteAgentChatMembersResponse) Reset() {
 	*x = InviteAgentChatMembersResponse{}
-	mi := &file_feishubotd_v1_command_proto_msgTypes[54]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[55]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4625,7 +4719,7 @@ func (x *InviteAgentChatMembersResponse) String() string {
 func (*InviteAgentChatMembersResponse) ProtoMessage() {}
 
 func (x *InviteAgentChatMembersResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_feishubotd_v1_command_proto_msgTypes[54]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[55]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4638,7 +4732,7 @@ func (x *InviteAgentChatMembersResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InviteAgentChatMembersResponse.ProtoReflect.Descriptor instead.
 func (*InviteAgentChatMembersResponse) Descriptor() ([]byte, []int) {
-	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{54}
+	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{55}
 }
 
 func (x *InviteAgentChatMembersResponse) GetInvalidOpenIds() []string {
@@ -4660,7 +4754,7 @@ type RenameAgentChatRequest struct {
 
 func (x *RenameAgentChatRequest) Reset() {
 	*x = RenameAgentChatRequest{}
-	mi := &file_feishubotd_v1_command_proto_msgTypes[55]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[56]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4672,7 +4766,7 @@ func (x *RenameAgentChatRequest) String() string {
 func (*RenameAgentChatRequest) ProtoMessage() {}
 
 func (x *RenameAgentChatRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_feishubotd_v1_command_proto_msgTypes[55]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[56]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4685,7 +4779,7 @@ func (x *RenameAgentChatRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RenameAgentChatRequest.ProtoReflect.Descriptor instead.
 func (*RenameAgentChatRequest) Descriptor() ([]byte, []int) {
-	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{55}
+	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{56}
 }
 
 func (x *RenameAgentChatRequest) GetProvider() string {
@@ -4717,7 +4811,7 @@ type RenameAgentChatResponse struct {
 
 func (x *RenameAgentChatResponse) Reset() {
 	*x = RenameAgentChatResponse{}
-	mi := &file_feishubotd_v1_command_proto_msgTypes[56]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[57]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4729,7 +4823,7 @@ func (x *RenameAgentChatResponse) String() string {
 func (*RenameAgentChatResponse) ProtoMessage() {}
 
 func (x *RenameAgentChatResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_feishubotd_v1_command_proto_msgTypes[56]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[57]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4742,7 +4836,7 @@ func (x *RenameAgentChatResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RenameAgentChatResponse.ProtoReflect.Descriptor instead.
 func (*RenameAgentChatResponse) Descriptor() ([]byte, []int) {
-	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{56}
+	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{57}
 }
 
 type AdoptAgentChatRequest struct {
@@ -4758,7 +4852,7 @@ type AdoptAgentChatRequest struct {
 
 func (x *AdoptAgentChatRequest) Reset() {
 	*x = AdoptAgentChatRequest{}
-	mi := &file_feishubotd_v1_command_proto_msgTypes[57]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[58]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4770,7 +4864,7 @@ func (x *AdoptAgentChatRequest) String() string {
 func (*AdoptAgentChatRequest) ProtoMessage() {}
 
 func (x *AdoptAgentChatRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_feishubotd_v1_command_proto_msgTypes[57]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[58]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4783,7 +4877,7 @@ func (x *AdoptAgentChatRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AdoptAgentChatRequest.ProtoReflect.Descriptor instead.
 func (*AdoptAgentChatRequest) Descriptor() ([]byte, []int) {
-	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{57}
+	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{58}
 }
 
 func (x *AdoptAgentChatRequest) GetProvider() string {
@@ -4812,7 +4906,7 @@ type AdoptAgentChatResponse struct {
 
 func (x *AdoptAgentChatResponse) Reset() {
 	*x = AdoptAgentChatResponse{}
-	mi := &file_feishubotd_v1_command_proto_msgTypes[58]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[59]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4824,7 +4918,7 @@ func (x *AdoptAgentChatResponse) String() string {
 func (*AdoptAgentChatResponse) ProtoMessage() {}
 
 func (x *AdoptAgentChatResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_feishubotd_v1_command_proto_msgTypes[58]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[59]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4837,7 +4931,7 @@ func (x *AdoptAgentChatResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AdoptAgentChatResponse.ProtoReflect.Descriptor instead.
 func (*AdoptAgentChatResponse) Descriptor() ([]byte, []int) {
-	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{58}
+	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{59}
 }
 
 func (x *AdoptAgentChatResponse) GetChatAlias() string {
@@ -4865,7 +4959,7 @@ type ReleaseAgentChatRequest struct {
 
 func (x *ReleaseAgentChatRequest) Reset() {
 	*x = ReleaseAgentChatRequest{}
-	mi := &file_feishubotd_v1_command_proto_msgTypes[59]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[60]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4877,7 +4971,7 @@ func (x *ReleaseAgentChatRequest) String() string {
 func (*ReleaseAgentChatRequest) ProtoMessage() {}
 
 func (x *ReleaseAgentChatRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_feishubotd_v1_command_proto_msgTypes[59]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[60]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4890,7 +4984,7 @@ func (x *ReleaseAgentChatRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReleaseAgentChatRequest.ProtoReflect.Descriptor instead.
 func (*ReleaseAgentChatRequest) Descriptor() ([]byte, []int) {
-	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{59}
+	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{60}
 }
 
 func (x *ReleaseAgentChatRequest) GetProvider() string {
@@ -4917,7 +5011,7 @@ type ReleaseAgentChatResponse struct {
 
 func (x *ReleaseAgentChatResponse) Reset() {
 	*x = ReleaseAgentChatResponse{}
-	mi := &file_feishubotd_v1_command_proto_msgTypes[60]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[61]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4929,7 +5023,7 @@ func (x *ReleaseAgentChatResponse) String() string {
 func (*ReleaseAgentChatResponse) ProtoMessage() {}
 
 func (x *ReleaseAgentChatResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_feishubotd_v1_command_proto_msgTypes[60]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[61]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4942,7 +5036,7 @@ func (x *ReleaseAgentChatResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReleaseAgentChatResponse.ProtoReflect.Descriptor instead.
 func (*ReleaseAgentChatResponse) Descriptor() ([]byte, []int) {
-	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{60}
+	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{61}
 }
 
 func (x *ReleaseAgentChatResponse) GetReleased() bool {
@@ -4968,7 +5062,7 @@ type AddAgentReactionRequest struct {
 
 func (x *AddAgentReactionRequest) Reset() {
 	*x = AddAgentReactionRequest{}
-	mi := &file_feishubotd_v1_command_proto_msgTypes[61]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[62]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4980,7 +5074,7 @@ func (x *AddAgentReactionRequest) String() string {
 func (*AddAgentReactionRequest) ProtoMessage() {}
 
 func (x *AddAgentReactionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_feishubotd_v1_command_proto_msgTypes[61]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[62]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4993,7 +5087,7 @@ func (x *AddAgentReactionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddAgentReactionRequest.ProtoReflect.Descriptor instead.
 func (*AddAgentReactionRequest) Descriptor() ([]byte, []int) {
-	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{61}
+	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{62}
 }
 
 func (x *AddAgentReactionRequest) GetProvider() string {
@@ -5033,7 +5127,7 @@ type AddAgentReactionResponse struct {
 
 func (x *AddAgentReactionResponse) Reset() {
 	*x = AddAgentReactionResponse{}
-	mi := &file_feishubotd_v1_command_proto_msgTypes[62]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[63]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5045,7 +5139,7 @@ func (x *AddAgentReactionResponse) String() string {
 func (*AddAgentReactionResponse) ProtoMessage() {}
 
 func (x *AddAgentReactionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_feishubotd_v1_command_proto_msgTypes[62]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[63]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5058,7 +5152,7 @@ func (x *AddAgentReactionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddAgentReactionResponse.ProtoReflect.Descriptor instead.
 func (*AddAgentReactionResponse) Descriptor() ([]byte, []int) {
-	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{62}
+	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{63}
 }
 
 func (x *AddAgentReactionResponse) GetDuplicate() bool {
@@ -5078,7 +5172,7 @@ type RegisterProviderRequest struct {
 
 func (x *RegisterProviderRequest) Reset() {
 	*x = RegisterProviderRequest{}
-	mi := &file_feishubotd_v1_command_proto_msgTypes[63]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[64]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5090,7 +5184,7 @@ func (x *RegisterProviderRequest) String() string {
 func (*RegisterProviderRequest) ProtoMessage() {}
 
 func (x *RegisterProviderRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_feishubotd_v1_command_proto_msgTypes[63]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[64]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5103,7 +5197,7 @@ func (x *RegisterProviderRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegisterProviderRequest.ProtoReflect.Descriptor instead.
 func (*RegisterProviderRequest) Descriptor() ([]byte, []int) {
-	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{63}
+	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{64}
 }
 
 func (x *RegisterProviderRequest) GetProvider() string {
@@ -5129,7 +5223,7 @@ type RegisterProviderResponse struct {
 
 func (x *RegisterProviderResponse) Reset() {
 	*x = RegisterProviderResponse{}
-	mi := &file_feishubotd_v1_command_proto_msgTypes[64]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[65]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5141,7 +5235,7 @@ func (x *RegisterProviderResponse) String() string {
 func (*RegisterProviderResponse) ProtoMessage() {}
 
 func (x *RegisterProviderResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_feishubotd_v1_command_proto_msgTypes[64]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[65]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5154,7 +5248,7 @@ func (x *RegisterProviderResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegisterProviderResponse.ProtoReflect.Descriptor instead.
 func (*RegisterProviderResponse) Descriptor() ([]byte, []int) {
-	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{64}
+	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{65}
 }
 
 func (x *RegisterProviderResponse) GetRegistered() bool {
@@ -5180,7 +5274,7 @@ type RetainAgentConversationRequest struct {
 
 func (x *RetainAgentConversationRequest) Reset() {
 	*x = RetainAgentConversationRequest{}
-	mi := &file_feishubotd_v1_command_proto_msgTypes[65]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[66]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5192,7 +5286,7 @@ func (x *RetainAgentConversationRequest) String() string {
 func (*RetainAgentConversationRequest) ProtoMessage() {}
 
 func (x *RetainAgentConversationRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_feishubotd_v1_command_proto_msgTypes[65]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[66]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5205,7 +5299,7 @@ func (x *RetainAgentConversationRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RetainAgentConversationRequest.ProtoReflect.Descriptor instead.
 func (*RetainAgentConversationRequest) Descriptor() ([]byte, []int) {
-	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{65}
+	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{66}
 }
 
 func (x *RetainAgentConversationRequest) GetProvider() string {
@@ -5252,7 +5346,7 @@ type RetainAgentConversationResponse struct {
 
 func (x *RetainAgentConversationResponse) Reset() {
 	*x = RetainAgentConversationResponse{}
-	mi := &file_feishubotd_v1_command_proto_msgTypes[66]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[67]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5264,7 +5358,7 @@ func (x *RetainAgentConversationResponse) String() string {
 func (*RetainAgentConversationResponse) ProtoMessage() {}
 
 func (x *RetainAgentConversationResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_feishubotd_v1_command_proto_msgTypes[66]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[67]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5277,7 +5371,7 @@ func (x *RetainAgentConversationResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RetainAgentConversationResponse.ProtoReflect.Descriptor instead.
 func (*RetainAgentConversationResponse) Descriptor() ([]byte, []int) {
-	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{66}
+	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{67}
 }
 
 func (x *RetainAgentConversationResponse) GetExpiresAtUnixSeconds() int64 {
@@ -5298,7 +5392,7 @@ type ReleaseAgentConversationRequest struct {
 
 func (x *ReleaseAgentConversationRequest) Reset() {
 	*x = ReleaseAgentConversationRequest{}
-	mi := &file_feishubotd_v1_command_proto_msgTypes[67]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[68]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5310,7 +5404,7 @@ func (x *ReleaseAgentConversationRequest) String() string {
 func (*ReleaseAgentConversationRequest) ProtoMessage() {}
 
 func (x *ReleaseAgentConversationRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_feishubotd_v1_command_proto_msgTypes[67]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[68]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5323,7 +5417,7 @@ func (x *ReleaseAgentConversationRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReleaseAgentConversationRequest.ProtoReflect.Descriptor instead.
 func (*ReleaseAgentConversationRequest) Descriptor() ([]byte, []int) {
-	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{67}
+	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{68}
 }
 
 func (x *ReleaseAgentConversationRequest) GetProvider() string {
@@ -5355,7 +5449,7 @@ type ReleaseAgentConversationResponse struct {
 
 func (x *ReleaseAgentConversationResponse) Reset() {
 	*x = ReleaseAgentConversationResponse{}
-	mi := &file_feishubotd_v1_command_proto_msgTypes[68]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[69]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5367,7 +5461,7 @@ func (x *ReleaseAgentConversationResponse) String() string {
 func (*ReleaseAgentConversationResponse) ProtoMessage() {}
 
 func (x *ReleaseAgentConversationResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_feishubotd_v1_command_proto_msgTypes[68]
+	mi := &file_feishubotd_v1_command_proto_msgTypes[69]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5380,7 +5474,7 @@ func (x *ReleaseAgentConversationResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReleaseAgentConversationResponse.ProtoReflect.Descriptor instead.
 func (*ReleaseAgentConversationResponse) Descriptor() ([]byte, []int) {
-	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{68}
+	return file_feishubotd_v1_command_proto_rawDescGZIP(), []int{69}
 }
 
 var File_feishubotd_v1_command_proto protoreflect.FileDescriptor
@@ -5441,7 +5535,7 @@ const file_feishubotd_v1_command_proto_rawDesc = "" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B\t\n" +
 	"\apayloadJ\x04\b\x06\x10\n" +
-	"J\x04\b\r\x10 \"\xdd\x03\n" +
+	"J\x04\b\r\x10 \"\xb1\x04\n" +
 	"\x13InboundAgentMessage\x12\x12\n" +
 	"\x04text\x18\x01 \x01(\tR\x04text\x12\x18\n" +
 	"\acommand\x18\x02 \x01(\tR\acommand\x12!\n" +
@@ -5458,7 +5552,17 @@ const file_feishubotd_v1_command_proto_rawDesc = "" +
 	"addressing\x129\n" +
 	"\bmentions\x18\n" +
 	" \x03(\v2\x1d.feishubotd.v1.InboundMentionR\bmentions\x12!\n" +
-	"\fsender_email\x18\x06 \x01(\tR\vsenderEmail\"=\n" +
+	"\fsender_email\x18\x06 \x01(\tR\vsenderEmail\x12R\n" +
+	"\x0fsender_identity\x18\f \x01(\v2).feishubotd.v1.InboundAgentSenderIdentityR\x0esenderIdentity\"\xc0\x01\n" +
+	"\x1aInboundAgentSenderIdentity\x12\x15\n" +
+	"\x06app_id\x18\x01 \x01(\tR\x05appId\x12\x1d\n" +
+	"\n" +
+	"tenant_key\x18\x02 \x01(\tR\ttenantKey\x12\x1f\n" +
+	"\vsender_type\x18\x03 \x01(\tR\n" +
+	"senderType\x12\x19\n" +
+	"\bunion_id\x18\x04 \x01(\tR\aunionId\x12\x17\n" +
+	"\aopen_id\x18\x05 \x01(\tR\x06openId\x12\x17\n" +
+	"\auser_id\x18\x06 \x01(\tR\x06userId\"=\n" +
 	"\x0eInboundMention\x12\x17\n" +
 	"\auser_id\x18\x01 \x01(\tR\x06userId\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\"c\n" +
@@ -5885,7 +5989,7 @@ func file_feishubotd_v1_command_proto_rawDescGZIP() []byte {
 }
 
 var file_feishubotd_v1_command_proto_enumTypes = make([]protoimpl.EnumInfo, 9)
-var file_feishubotd_v1_command_proto_msgTypes = make([]protoimpl.MessageInfo, 71)
+var file_feishubotd_v1_command_proto_msgTypes = make([]protoimpl.MessageInfo, 72)
 var file_feishubotd_v1_command_proto_goTypes = []any{
 	(InboundAddressing)(0),                      // 0: feishubotd.v1.InboundAddressing
 	(AgentAttachedContextStatus)(0),             // 1: feishubotd.v1.AgentAttachedContextStatus
@@ -5905,165 +6009,167 @@ var file_feishubotd_v1_command_proto_goTypes = []any{
 	(*SubscribeAgentEventsResponse)(nil),        // 15: feishubotd.v1.SubscribeAgentEventsResponse
 	(*InboundAgentEvent)(nil),                   // 16: feishubotd.v1.InboundAgentEvent
 	(*InboundAgentMessage)(nil),                 // 17: feishubotd.v1.InboundAgentMessage
-	(*InboundMention)(nil),                      // 18: feishubotd.v1.InboundMention
-	(*GetAgentAttachedContextRequest)(nil),      // 19: feishubotd.v1.GetAgentAttachedContextRequest
-	(*AgentAttachedContextIssue)(nil),           // 20: feishubotd.v1.AgentAttachedContextIssue
-	(*AgentAttachedContextImageDescriptor)(nil), // 21: feishubotd.v1.AgentAttachedContextImageDescriptor
-	(*AgentAttachedContextVideoDescriptor)(nil), // 22: feishubotd.v1.AgentAttachedContextVideoDescriptor
-	(*AgentAttachedContextMessage)(nil),         // 23: feishubotd.v1.AgentAttachedContextMessage
-	(*AgentAttachedContextHeader)(nil),          // 24: feishubotd.v1.AgentAttachedContextHeader
-	(*AgentAttachedContextImageChunk)(nil),      // 25: feishubotd.v1.AgentAttachedContextImageChunk
-	(*AgentAttachedContextVideoChunk)(nil),      // 26: feishubotd.v1.AgentAttachedContextVideoChunk
-	(*GetAgentAttachedContextResponse)(nil),     // 27: feishubotd.v1.GetAgentAttachedContextResponse
-	(*UploadAgentImageHeader)(nil),              // 28: feishubotd.v1.UploadAgentImageHeader
-	(*UploadAgentImageChunk)(nil),               // 29: feishubotd.v1.UploadAgentImageChunk
-	(*UploadAgentImageRequest)(nil),             // 30: feishubotd.v1.UploadAgentImageRequest
-	(*UploadAgentImageResponse)(nil),            // 31: feishubotd.v1.UploadAgentImageResponse
-	(*InboundCardAction)(nil),                   // 32: feishubotd.v1.InboundCardAction
-	(*InboundMessageReaction)(nil),              // 33: feishubotd.v1.InboundMessageReaction
-	(*AgentResponseContent)(nil),                // 34: feishubotd.v1.AgentResponseContent
-	(*AgentResponseAction)(nil),                 // 35: feishubotd.v1.AgentResponseAction
-	(*AgentTimelineStep)(nil),                   // 36: feishubotd.v1.AgentTimelineStep
-	(*StartAgentResponseRequest)(nil),           // 37: feishubotd.v1.StartAgentResponseRequest
-	(*UpdateAgentResponseRequest)(nil),          // 38: feishubotd.v1.UpdateAgentResponseRequest
-	(*FinishAgentResponseRequest)(nil),          // 39: feishubotd.v1.FinishAgentResponseRequest
-	(*AgentResponseReceipt)(nil),                // 40: feishubotd.v1.AgentResponseReceipt
-	(*StartAgentResponseResponse)(nil),          // 41: feishubotd.v1.StartAgentResponseResponse
-	(*UpdateAgentResponseResponse)(nil),         // 42: feishubotd.v1.UpdateAgentResponseResponse
-	(*FinishAgentResponseResponse)(nil),         // 43: feishubotd.v1.FinishAgentResponseResponse
-	(*ReplaceAgentResponseRequest)(nil),         // 44: feishubotd.v1.ReplaceAgentResponseRequest
-	(*ReplaceAgentResponseResponse)(nil),        // 45: feishubotd.v1.ReplaceAgentResponseResponse
-	(*SendAgentFollowUpRequest)(nil),            // 46: feishubotd.v1.SendAgentFollowUpRequest
-	(*AgentFollowUpReceipt)(nil),                // 47: feishubotd.v1.AgentFollowUpReceipt
-	(*SendAgentFollowUpResponse)(nil),           // 48: feishubotd.v1.SendAgentFollowUpResponse
-	(*PostAgentMessageRequest)(nil),             // 49: feishubotd.v1.PostAgentMessageRequest
-	(*PostAgentMessageResponse)(nil),            // 50: feishubotd.v1.PostAgentMessageResponse
-	(*AgentCardStep)(nil),                       // 51: feishubotd.v1.AgentCardStep
-	(*AgentCardLink)(nil),                       // 52: feishubotd.v1.AgentCardLink
-	(*AgentCardContent)(nil),                    // 53: feishubotd.v1.AgentCardContent
-	(*PostAgentCardRequest)(nil),                // 54: feishubotd.v1.PostAgentCardRequest
-	(*PostAgentCardResponse)(nil),               // 55: feishubotd.v1.PostAgentCardResponse
-	(*UpdateAgentCardRequest)(nil),              // 56: feishubotd.v1.UpdateAgentCardRequest
-	(*UpdateAgentCardResponse)(nil),             // 57: feishubotd.v1.UpdateAgentCardResponse
-	(*PinAgentMessageRequest)(nil),              // 58: feishubotd.v1.PinAgentMessageRequest
-	(*PinAgentMessageResponse)(nil),             // 59: feishubotd.v1.PinAgentMessageResponse
-	(*CreateAgentChatRequest)(nil),              // 60: feishubotd.v1.CreateAgentChatRequest
-	(*CreateAgentChatResponse)(nil),             // 61: feishubotd.v1.CreateAgentChatResponse
-	(*InviteAgentChatMembersRequest)(nil),       // 62: feishubotd.v1.InviteAgentChatMembersRequest
-	(*InviteAgentChatMembersResponse)(nil),      // 63: feishubotd.v1.InviteAgentChatMembersResponse
-	(*RenameAgentChatRequest)(nil),              // 64: feishubotd.v1.RenameAgentChatRequest
-	(*RenameAgentChatResponse)(nil),             // 65: feishubotd.v1.RenameAgentChatResponse
-	(*AdoptAgentChatRequest)(nil),               // 66: feishubotd.v1.AdoptAgentChatRequest
-	(*AdoptAgentChatResponse)(nil),              // 67: feishubotd.v1.AdoptAgentChatResponse
-	(*ReleaseAgentChatRequest)(nil),             // 68: feishubotd.v1.ReleaseAgentChatRequest
-	(*ReleaseAgentChatResponse)(nil),            // 69: feishubotd.v1.ReleaseAgentChatResponse
-	(*AddAgentReactionRequest)(nil),             // 70: feishubotd.v1.AddAgentReactionRequest
-	(*AddAgentReactionResponse)(nil),            // 71: feishubotd.v1.AddAgentReactionResponse
-	(*RegisterProviderRequest)(nil),             // 72: feishubotd.v1.RegisterProviderRequest
-	(*RegisterProviderResponse)(nil),            // 73: feishubotd.v1.RegisterProviderResponse
-	(*RetainAgentConversationRequest)(nil),      // 74: feishubotd.v1.RetainAgentConversationRequest
-	(*RetainAgentConversationResponse)(nil),     // 75: feishubotd.v1.RetainAgentConversationResponse
-	(*ReleaseAgentConversationRequest)(nil),     // 76: feishubotd.v1.ReleaseAgentConversationRequest
-	(*ReleaseAgentConversationResponse)(nil),    // 77: feishubotd.v1.ReleaseAgentConversationResponse
-	nil,                                         // 78: feishubotd.v1.InboundCommand.MetadataEntry
-	nil,                                         // 79: feishubotd.v1.InboundAgentEvent.MetadataEntry
-	(*MarkdownContent)(nil),                     // 80: feishubotd.v1.MarkdownContent
-	(*CardContent)(nil),                         // 81: feishubotd.v1.CardContent
+	(*InboundAgentSenderIdentity)(nil),          // 18: feishubotd.v1.InboundAgentSenderIdentity
+	(*InboundMention)(nil),                      // 19: feishubotd.v1.InboundMention
+	(*GetAgentAttachedContextRequest)(nil),      // 20: feishubotd.v1.GetAgentAttachedContextRequest
+	(*AgentAttachedContextIssue)(nil),           // 21: feishubotd.v1.AgentAttachedContextIssue
+	(*AgentAttachedContextImageDescriptor)(nil), // 22: feishubotd.v1.AgentAttachedContextImageDescriptor
+	(*AgentAttachedContextVideoDescriptor)(nil), // 23: feishubotd.v1.AgentAttachedContextVideoDescriptor
+	(*AgentAttachedContextMessage)(nil),         // 24: feishubotd.v1.AgentAttachedContextMessage
+	(*AgentAttachedContextHeader)(nil),          // 25: feishubotd.v1.AgentAttachedContextHeader
+	(*AgentAttachedContextImageChunk)(nil),      // 26: feishubotd.v1.AgentAttachedContextImageChunk
+	(*AgentAttachedContextVideoChunk)(nil),      // 27: feishubotd.v1.AgentAttachedContextVideoChunk
+	(*GetAgentAttachedContextResponse)(nil),     // 28: feishubotd.v1.GetAgentAttachedContextResponse
+	(*UploadAgentImageHeader)(nil),              // 29: feishubotd.v1.UploadAgentImageHeader
+	(*UploadAgentImageChunk)(nil),               // 30: feishubotd.v1.UploadAgentImageChunk
+	(*UploadAgentImageRequest)(nil),             // 31: feishubotd.v1.UploadAgentImageRequest
+	(*UploadAgentImageResponse)(nil),            // 32: feishubotd.v1.UploadAgentImageResponse
+	(*InboundCardAction)(nil),                   // 33: feishubotd.v1.InboundCardAction
+	(*InboundMessageReaction)(nil),              // 34: feishubotd.v1.InboundMessageReaction
+	(*AgentResponseContent)(nil),                // 35: feishubotd.v1.AgentResponseContent
+	(*AgentResponseAction)(nil),                 // 36: feishubotd.v1.AgentResponseAction
+	(*AgentTimelineStep)(nil),                   // 37: feishubotd.v1.AgentTimelineStep
+	(*StartAgentResponseRequest)(nil),           // 38: feishubotd.v1.StartAgentResponseRequest
+	(*UpdateAgentResponseRequest)(nil),          // 39: feishubotd.v1.UpdateAgentResponseRequest
+	(*FinishAgentResponseRequest)(nil),          // 40: feishubotd.v1.FinishAgentResponseRequest
+	(*AgentResponseReceipt)(nil),                // 41: feishubotd.v1.AgentResponseReceipt
+	(*StartAgentResponseResponse)(nil),          // 42: feishubotd.v1.StartAgentResponseResponse
+	(*UpdateAgentResponseResponse)(nil),         // 43: feishubotd.v1.UpdateAgentResponseResponse
+	(*FinishAgentResponseResponse)(nil),         // 44: feishubotd.v1.FinishAgentResponseResponse
+	(*ReplaceAgentResponseRequest)(nil),         // 45: feishubotd.v1.ReplaceAgentResponseRequest
+	(*ReplaceAgentResponseResponse)(nil),        // 46: feishubotd.v1.ReplaceAgentResponseResponse
+	(*SendAgentFollowUpRequest)(nil),            // 47: feishubotd.v1.SendAgentFollowUpRequest
+	(*AgentFollowUpReceipt)(nil),                // 48: feishubotd.v1.AgentFollowUpReceipt
+	(*SendAgentFollowUpResponse)(nil),           // 49: feishubotd.v1.SendAgentFollowUpResponse
+	(*PostAgentMessageRequest)(nil),             // 50: feishubotd.v1.PostAgentMessageRequest
+	(*PostAgentMessageResponse)(nil),            // 51: feishubotd.v1.PostAgentMessageResponse
+	(*AgentCardStep)(nil),                       // 52: feishubotd.v1.AgentCardStep
+	(*AgentCardLink)(nil),                       // 53: feishubotd.v1.AgentCardLink
+	(*AgentCardContent)(nil),                    // 54: feishubotd.v1.AgentCardContent
+	(*PostAgentCardRequest)(nil),                // 55: feishubotd.v1.PostAgentCardRequest
+	(*PostAgentCardResponse)(nil),               // 56: feishubotd.v1.PostAgentCardResponse
+	(*UpdateAgentCardRequest)(nil),              // 57: feishubotd.v1.UpdateAgentCardRequest
+	(*UpdateAgentCardResponse)(nil),             // 58: feishubotd.v1.UpdateAgentCardResponse
+	(*PinAgentMessageRequest)(nil),              // 59: feishubotd.v1.PinAgentMessageRequest
+	(*PinAgentMessageResponse)(nil),             // 60: feishubotd.v1.PinAgentMessageResponse
+	(*CreateAgentChatRequest)(nil),              // 61: feishubotd.v1.CreateAgentChatRequest
+	(*CreateAgentChatResponse)(nil),             // 62: feishubotd.v1.CreateAgentChatResponse
+	(*InviteAgentChatMembersRequest)(nil),       // 63: feishubotd.v1.InviteAgentChatMembersRequest
+	(*InviteAgentChatMembersResponse)(nil),      // 64: feishubotd.v1.InviteAgentChatMembersResponse
+	(*RenameAgentChatRequest)(nil),              // 65: feishubotd.v1.RenameAgentChatRequest
+	(*RenameAgentChatResponse)(nil),             // 66: feishubotd.v1.RenameAgentChatResponse
+	(*AdoptAgentChatRequest)(nil),               // 67: feishubotd.v1.AdoptAgentChatRequest
+	(*AdoptAgentChatResponse)(nil),              // 68: feishubotd.v1.AdoptAgentChatResponse
+	(*ReleaseAgentChatRequest)(nil),             // 69: feishubotd.v1.ReleaseAgentChatRequest
+	(*ReleaseAgentChatResponse)(nil),            // 70: feishubotd.v1.ReleaseAgentChatResponse
+	(*AddAgentReactionRequest)(nil),             // 71: feishubotd.v1.AddAgentReactionRequest
+	(*AddAgentReactionResponse)(nil),            // 72: feishubotd.v1.AddAgentReactionResponse
+	(*RegisterProviderRequest)(nil),             // 73: feishubotd.v1.RegisterProviderRequest
+	(*RegisterProviderResponse)(nil),            // 74: feishubotd.v1.RegisterProviderResponse
+	(*RetainAgentConversationRequest)(nil),      // 75: feishubotd.v1.RetainAgentConversationRequest
+	(*RetainAgentConversationResponse)(nil),     // 76: feishubotd.v1.RetainAgentConversationResponse
+	(*ReleaseAgentConversationRequest)(nil),     // 77: feishubotd.v1.ReleaseAgentConversationRequest
+	(*ReleaseAgentConversationResponse)(nil),    // 78: feishubotd.v1.ReleaseAgentConversationResponse
+	nil,                                         // 79: feishubotd.v1.InboundCommand.MetadataEntry
+	nil,                                         // 80: feishubotd.v1.InboundAgentEvent.MetadataEntry
+	(*MarkdownContent)(nil),                     // 81: feishubotd.v1.MarkdownContent
+	(*CardContent)(nil),                         // 82: feishubotd.v1.CardContent
 }
 var file_feishubotd_v1_command_proto_depIdxs = []int32{
 	11, // 0: feishubotd.v1.SubscribeResponse.command:type_name -> feishubotd.v1.InboundCommand
-	78, // 1: feishubotd.v1.InboundCommand.metadata:type_name -> feishubotd.v1.InboundCommand.MetadataEntry
-	80, // 2: feishubotd.v1.RespondRequest.markdown:type_name -> feishubotd.v1.MarkdownContent
-	81, // 3: feishubotd.v1.RespondRequest.card:type_name -> feishubotd.v1.CardContent
+	79, // 1: feishubotd.v1.InboundCommand.metadata:type_name -> feishubotd.v1.InboundCommand.MetadataEntry
+	81, // 2: feishubotd.v1.RespondRequest.markdown:type_name -> feishubotd.v1.MarkdownContent
+	82, // 3: feishubotd.v1.RespondRequest.card:type_name -> feishubotd.v1.CardContent
 	16, // 4: feishubotd.v1.SubscribeAgentEventsResponse.event:type_name -> feishubotd.v1.InboundAgentEvent
-	79, // 5: feishubotd.v1.InboundAgentEvent.metadata:type_name -> feishubotd.v1.InboundAgentEvent.MetadataEntry
+	80, // 5: feishubotd.v1.InboundAgentEvent.metadata:type_name -> feishubotd.v1.InboundAgentEvent.MetadataEntry
 	17, // 6: feishubotd.v1.InboundAgentEvent.message:type_name -> feishubotd.v1.InboundAgentMessage
-	32, // 7: feishubotd.v1.InboundAgentEvent.card_action:type_name -> feishubotd.v1.InboundCardAction
-	33, // 8: feishubotd.v1.InboundAgentEvent.message_reaction:type_name -> feishubotd.v1.InboundMessageReaction
+	33, // 7: feishubotd.v1.InboundAgentEvent.card_action:type_name -> feishubotd.v1.InboundCardAction
+	34, // 8: feishubotd.v1.InboundAgentEvent.message_reaction:type_name -> feishubotd.v1.InboundMessageReaction
 	0,  // 9: feishubotd.v1.InboundAgentMessage.addressing:type_name -> feishubotd.v1.InboundAddressing
-	18, // 10: feishubotd.v1.InboundAgentMessage.mentions:type_name -> feishubotd.v1.InboundMention
-	2,  // 11: feishubotd.v1.AgentAttachedContextIssue.code:type_name -> feishubotd.v1.AgentAttachedContextIssueCode
-	21, // 12: feishubotd.v1.AgentAttachedContextMessage.images:type_name -> feishubotd.v1.AgentAttachedContextImageDescriptor
-	22, // 13: feishubotd.v1.AgentAttachedContextMessage.videos:type_name -> feishubotd.v1.AgentAttachedContextVideoDescriptor
-	1,  // 14: feishubotd.v1.AgentAttachedContextHeader.status:type_name -> feishubotd.v1.AgentAttachedContextStatus
-	23, // 15: feishubotd.v1.AgentAttachedContextHeader.messages:type_name -> feishubotd.v1.AgentAttachedContextMessage
-	20, // 16: feishubotd.v1.AgentAttachedContextHeader.issues:type_name -> feishubotd.v1.AgentAttachedContextIssue
-	24, // 17: feishubotd.v1.GetAgentAttachedContextResponse.header:type_name -> feishubotd.v1.AgentAttachedContextHeader
-	25, // 18: feishubotd.v1.GetAgentAttachedContextResponse.image_chunk:type_name -> feishubotd.v1.AgentAttachedContextImageChunk
-	26, // 19: feishubotd.v1.GetAgentAttachedContextResponse.video_chunk:type_name -> feishubotd.v1.AgentAttachedContextVideoChunk
-	28, // 20: feishubotd.v1.UploadAgentImageRequest.header:type_name -> feishubotd.v1.UploadAgentImageHeader
-	29, // 21: feishubotd.v1.UploadAgentImageRequest.chunk:type_name -> feishubotd.v1.UploadAgentImageChunk
-	3,  // 22: feishubotd.v1.InboundMessageReaction.operation:type_name -> feishubotd.v1.MessageReactionOperation
-	35, // 23: feishubotd.v1.AgentResponseContent.actions:type_name -> feishubotd.v1.AgentResponseAction
-	4,  // 24: feishubotd.v1.AgentResponseAction.style:type_name -> feishubotd.v1.AgentResponseActionStyle
-	5,  // 25: feishubotd.v1.AgentTimelineStep.state:type_name -> feishubotd.v1.AgentTimelineStepState
-	34, // 26: feishubotd.v1.StartAgentResponseRequest.content:type_name -> feishubotd.v1.AgentResponseContent
-	36, // 27: feishubotd.v1.StartAgentResponseRequest.timeline_steps:type_name -> feishubotd.v1.AgentTimelineStep
-	36, // 28: feishubotd.v1.UpdateAgentResponseRequest.timeline_steps:type_name -> feishubotd.v1.AgentTimelineStep
-	6,  // 29: feishubotd.v1.FinishAgentResponseRequest.outcome:type_name -> feishubotd.v1.AgentResponseOutcome
-	36, // 30: feishubotd.v1.FinishAgentResponseRequest.timeline_steps:type_name -> feishubotd.v1.AgentTimelineStep
-	7,  // 31: feishubotd.v1.AgentResponseReceipt.phase:type_name -> feishubotd.v1.AgentResponsePhase
-	40, // 32: feishubotd.v1.StartAgentResponseResponse.response:type_name -> feishubotd.v1.AgentResponseReceipt
-	40, // 33: feishubotd.v1.UpdateAgentResponseResponse.response:type_name -> feishubotd.v1.AgentResponseReceipt
-	40, // 34: feishubotd.v1.FinishAgentResponseResponse.response:type_name -> feishubotd.v1.AgentResponseReceipt
-	40, // 35: feishubotd.v1.ReplaceAgentResponseResponse.response:type_name -> feishubotd.v1.AgentResponseReceipt
-	47, // 36: feishubotd.v1.SendAgentFollowUpResponse.follow_up:type_name -> feishubotd.v1.AgentFollowUpReceipt
-	8,  // 37: feishubotd.v1.AgentCardContent.state:type_name -> feishubotd.v1.AgentCardState
-	51, // 38: feishubotd.v1.AgentCardContent.steps:type_name -> feishubotd.v1.AgentCardStep
-	52, // 39: feishubotd.v1.AgentCardContent.links:type_name -> feishubotd.v1.AgentCardLink
-	53, // 40: feishubotd.v1.PostAgentCardRequest.content:type_name -> feishubotd.v1.AgentCardContent
-	53, // 41: feishubotd.v1.UpdateAgentCardRequest.content:type_name -> feishubotd.v1.AgentCardContent
-	9,  // 42: feishubotd.v1.CommandService.Subscribe:input_type -> feishubotd.v1.SubscribeRequest
-	12, // 43: feishubotd.v1.CommandService.Respond:input_type -> feishubotd.v1.RespondRequest
-	14, // 44: feishubotd.v1.CommandService.SubscribeAgentEvents:input_type -> feishubotd.v1.SubscribeAgentEventsRequest
-	19, // 45: feishubotd.v1.CommandService.GetAgentAttachedContext:input_type -> feishubotd.v1.GetAgentAttachedContextRequest
-	37, // 46: feishubotd.v1.CommandService.StartAgentResponse:input_type -> feishubotd.v1.StartAgentResponseRequest
-	38, // 47: feishubotd.v1.CommandService.UpdateAgentResponse:input_type -> feishubotd.v1.UpdateAgentResponseRequest
-	39, // 48: feishubotd.v1.CommandService.FinishAgentResponse:input_type -> feishubotd.v1.FinishAgentResponseRequest
-	44, // 49: feishubotd.v1.CommandService.ReplaceAgentResponse:input_type -> feishubotd.v1.ReplaceAgentResponseRequest
-	30, // 50: feishubotd.v1.CommandService.UploadAgentImage:input_type -> feishubotd.v1.UploadAgentImageRequest
-	46, // 51: feishubotd.v1.CommandService.SendAgentFollowUp:input_type -> feishubotd.v1.SendAgentFollowUpRequest
-	74, // 52: feishubotd.v1.CommandService.RetainAgentConversation:input_type -> feishubotd.v1.RetainAgentConversationRequest
-	76, // 53: feishubotd.v1.CommandService.ReleaseAgentConversation:input_type -> feishubotd.v1.ReleaseAgentConversationRequest
-	70, // 54: feishubotd.v1.CommandService.AddAgentReaction:input_type -> feishubotd.v1.AddAgentReactionRequest
-	49, // 55: feishubotd.v1.CommandService.PostAgentMessage:input_type -> feishubotd.v1.PostAgentMessageRequest
-	54, // 56: feishubotd.v1.CommandService.PostAgentCard:input_type -> feishubotd.v1.PostAgentCardRequest
-	56, // 57: feishubotd.v1.CommandService.UpdateAgentCard:input_type -> feishubotd.v1.UpdateAgentCardRequest
-	58, // 58: feishubotd.v1.CommandService.PinAgentMessage:input_type -> feishubotd.v1.PinAgentMessageRequest
-	60, // 59: feishubotd.v1.CommandService.CreateAgentChat:input_type -> feishubotd.v1.CreateAgentChatRequest
-	62, // 60: feishubotd.v1.CommandService.InviteAgentChatMembers:input_type -> feishubotd.v1.InviteAgentChatMembersRequest
-	64, // 61: feishubotd.v1.CommandService.RenameAgentChat:input_type -> feishubotd.v1.RenameAgentChatRequest
-	66, // 62: feishubotd.v1.CommandService.AdoptAgentChat:input_type -> feishubotd.v1.AdoptAgentChatRequest
-	68, // 63: feishubotd.v1.CommandService.ReleaseAgentChat:input_type -> feishubotd.v1.ReleaseAgentChatRequest
-	72, // 64: feishubotd.v1.ProviderService.RegisterProvider:input_type -> feishubotd.v1.RegisterProviderRequest
-	10, // 65: feishubotd.v1.CommandService.Subscribe:output_type -> feishubotd.v1.SubscribeResponse
-	13, // 66: feishubotd.v1.CommandService.Respond:output_type -> feishubotd.v1.RespondResponse
-	15, // 67: feishubotd.v1.CommandService.SubscribeAgentEvents:output_type -> feishubotd.v1.SubscribeAgentEventsResponse
-	27, // 68: feishubotd.v1.CommandService.GetAgentAttachedContext:output_type -> feishubotd.v1.GetAgentAttachedContextResponse
-	41, // 69: feishubotd.v1.CommandService.StartAgentResponse:output_type -> feishubotd.v1.StartAgentResponseResponse
-	42, // 70: feishubotd.v1.CommandService.UpdateAgentResponse:output_type -> feishubotd.v1.UpdateAgentResponseResponse
-	43, // 71: feishubotd.v1.CommandService.FinishAgentResponse:output_type -> feishubotd.v1.FinishAgentResponseResponse
-	45, // 72: feishubotd.v1.CommandService.ReplaceAgentResponse:output_type -> feishubotd.v1.ReplaceAgentResponseResponse
-	31, // 73: feishubotd.v1.CommandService.UploadAgentImage:output_type -> feishubotd.v1.UploadAgentImageResponse
-	48, // 74: feishubotd.v1.CommandService.SendAgentFollowUp:output_type -> feishubotd.v1.SendAgentFollowUpResponse
-	75, // 75: feishubotd.v1.CommandService.RetainAgentConversation:output_type -> feishubotd.v1.RetainAgentConversationResponse
-	77, // 76: feishubotd.v1.CommandService.ReleaseAgentConversation:output_type -> feishubotd.v1.ReleaseAgentConversationResponse
-	71, // 77: feishubotd.v1.CommandService.AddAgentReaction:output_type -> feishubotd.v1.AddAgentReactionResponse
-	50, // 78: feishubotd.v1.CommandService.PostAgentMessage:output_type -> feishubotd.v1.PostAgentMessageResponse
-	55, // 79: feishubotd.v1.CommandService.PostAgentCard:output_type -> feishubotd.v1.PostAgentCardResponse
-	57, // 80: feishubotd.v1.CommandService.UpdateAgentCard:output_type -> feishubotd.v1.UpdateAgentCardResponse
-	59, // 81: feishubotd.v1.CommandService.PinAgentMessage:output_type -> feishubotd.v1.PinAgentMessageResponse
-	61, // 82: feishubotd.v1.CommandService.CreateAgentChat:output_type -> feishubotd.v1.CreateAgentChatResponse
-	63, // 83: feishubotd.v1.CommandService.InviteAgentChatMembers:output_type -> feishubotd.v1.InviteAgentChatMembersResponse
-	65, // 84: feishubotd.v1.CommandService.RenameAgentChat:output_type -> feishubotd.v1.RenameAgentChatResponse
-	67, // 85: feishubotd.v1.CommandService.AdoptAgentChat:output_type -> feishubotd.v1.AdoptAgentChatResponse
-	69, // 86: feishubotd.v1.CommandService.ReleaseAgentChat:output_type -> feishubotd.v1.ReleaseAgentChatResponse
-	73, // 87: feishubotd.v1.ProviderService.RegisterProvider:output_type -> feishubotd.v1.RegisterProviderResponse
-	65, // [65:88] is the sub-list for method output_type
-	42, // [42:65] is the sub-list for method input_type
-	42, // [42:42] is the sub-list for extension type_name
-	42, // [42:42] is the sub-list for extension extendee
-	0,  // [0:42] is the sub-list for field type_name
+	19, // 10: feishubotd.v1.InboundAgentMessage.mentions:type_name -> feishubotd.v1.InboundMention
+	18, // 11: feishubotd.v1.InboundAgentMessage.sender_identity:type_name -> feishubotd.v1.InboundAgentSenderIdentity
+	2,  // 12: feishubotd.v1.AgentAttachedContextIssue.code:type_name -> feishubotd.v1.AgentAttachedContextIssueCode
+	22, // 13: feishubotd.v1.AgentAttachedContextMessage.images:type_name -> feishubotd.v1.AgentAttachedContextImageDescriptor
+	23, // 14: feishubotd.v1.AgentAttachedContextMessage.videos:type_name -> feishubotd.v1.AgentAttachedContextVideoDescriptor
+	1,  // 15: feishubotd.v1.AgentAttachedContextHeader.status:type_name -> feishubotd.v1.AgentAttachedContextStatus
+	24, // 16: feishubotd.v1.AgentAttachedContextHeader.messages:type_name -> feishubotd.v1.AgentAttachedContextMessage
+	21, // 17: feishubotd.v1.AgentAttachedContextHeader.issues:type_name -> feishubotd.v1.AgentAttachedContextIssue
+	25, // 18: feishubotd.v1.GetAgentAttachedContextResponse.header:type_name -> feishubotd.v1.AgentAttachedContextHeader
+	26, // 19: feishubotd.v1.GetAgentAttachedContextResponse.image_chunk:type_name -> feishubotd.v1.AgentAttachedContextImageChunk
+	27, // 20: feishubotd.v1.GetAgentAttachedContextResponse.video_chunk:type_name -> feishubotd.v1.AgentAttachedContextVideoChunk
+	29, // 21: feishubotd.v1.UploadAgentImageRequest.header:type_name -> feishubotd.v1.UploadAgentImageHeader
+	30, // 22: feishubotd.v1.UploadAgentImageRequest.chunk:type_name -> feishubotd.v1.UploadAgentImageChunk
+	3,  // 23: feishubotd.v1.InboundMessageReaction.operation:type_name -> feishubotd.v1.MessageReactionOperation
+	36, // 24: feishubotd.v1.AgentResponseContent.actions:type_name -> feishubotd.v1.AgentResponseAction
+	4,  // 25: feishubotd.v1.AgentResponseAction.style:type_name -> feishubotd.v1.AgentResponseActionStyle
+	5,  // 26: feishubotd.v1.AgentTimelineStep.state:type_name -> feishubotd.v1.AgentTimelineStepState
+	35, // 27: feishubotd.v1.StartAgentResponseRequest.content:type_name -> feishubotd.v1.AgentResponseContent
+	37, // 28: feishubotd.v1.StartAgentResponseRequest.timeline_steps:type_name -> feishubotd.v1.AgentTimelineStep
+	37, // 29: feishubotd.v1.UpdateAgentResponseRequest.timeline_steps:type_name -> feishubotd.v1.AgentTimelineStep
+	6,  // 30: feishubotd.v1.FinishAgentResponseRequest.outcome:type_name -> feishubotd.v1.AgentResponseOutcome
+	37, // 31: feishubotd.v1.FinishAgentResponseRequest.timeline_steps:type_name -> feishubotd.v1.AgentTimelineStep
+	7,  // 32: feishubotd.v1.AgentResponseReceipt.phase:type_name -> feishubotd.v1.AgentResponsePhase
+	41, // 33: feishubotd.v1.StartAgentResponseResponse.response:type_name -> feishubotd.v1.AgentResponseReceipt
+	41, // 34: feishubotd.v1.UpdateAgentResponseResponse.response:type_name -> feishubotd.v1.AgentResponseReceipt
+	41, // 35: feishubotd.v1.FinishAgentResponseResponse.response:type_name -> feishubotd.v1.AgentResponseReceipt
+	41, // 36: feishubotd.v1.ReplaceAgentResponseResponse.response:type_name -> feishubotd.v1.AgentResponseReceipt
+	48, // 37: feishubotd.v1.SendAgentFollowUpResponse.follow_up:type_name -> feishubotd.v1.AgentFollowUpReceipt
+	8,  // 38: feishubotd.v1.AgentCardContent.state:type_name -> feishubotd.v1.AgentCardState
+	52, // 39: feishubotd.v1.AgentCardContent.steps:type_name -> feishubotd.v1.AgentCardStep
+	53, // 40: feishubotd.v1.AgentCardContent.links:type_name -> feishubotd.v1.AgentCardLink
+	54, // 41: feishubotd.v1.PostAgentCardRequest.content:type_name -> feishubotd.v1.AgentCardContent
+	54, // 42: feishubotd.v1.UpdateAgentCardRequest.content:type_name -> feishubotd.v1.AgentCardContent
+	9,  // 43: feishubotd.v1.CommandService.Subscribe:input_type -> feishubotd.v1.SubscribeRequest
+	12, // 44: feishubotd.v1.CommandService.Respond:input_type -> feishubotd.v1.RespondRequest
+	14, // 45: feishubotd.v1.CommandService.SubscribeAgentEvents:input_type -> feishubotd.v1.SubscribeAgentEventsRequest
+	20, // 46: feishubotd.v1.CommandService.GetAgentAttachedContext:input_type -> feishubotd.v1.GetAgentAttachedContextRequest
+	38, // 47: feishubotd.v1.CommandService.StartAgentResponse:input_type -> feishubotd.v1.StartAgentResponseRequest
+	39, // 48: feishubotd.v1.CommandService.UpdateAgentResponse:input_type -> feishubotd.v1.UpdateAgentResponseRequest
+	40, // 49: feishubotd.v1.CommandService.FinishAgentResponse:input_type -> feishubotd.v1.FinishAgentResponseRequest
+	45, // 50: feishubotd.v1.CommandService.ReplaceAgentResponse:input_type -> feishubotd.v1.ReplaceAgentResponseRequest
+	31, // 51: feishubotd.v1.CommandService.UploadAgentImage:input_type -> feishubotd.v1.UploadAgentImageRequest
+	47, // 52: feishubotd.v1.CommandService.SendAgentFollowUp:input_type -> feishubotd.v1.SendAgentFollowUpRequest
+	75, // 53: feishubotd.v1.CommandService.RetainAgentConversation:input_type -> feishubotd.v1.RetainAgentConversationRequest
+	77, // 54: feishubotd.v1.CommandService.ReleaseAgentConversation:input_type -> feishubotd.v1.ReleaseAgentConversationRequest
+	71, // 55: feishubotd.v1.CommandService.AddAgentReaction:input_type -> feishubotd.v1.AddAgentReactionRequest
+	50, // 56: feishubotd.v1.CommandService.PostAgentMessage:input_type -> feishubotd.v1.PostAgentMessageRequest
+	55, // 57: feishubotd.v1.CommandService.PostAgentCard:input_type -> feishubotd.v1.PostAgentCardRequest
+	57, // 58: feishubotd.v1.CommandService.UpdateAgentCard:input_type -> feishubotd.v1.UpdateAgentCardRequest
+	59, // 59: feishubotd.v1.CommandService.PinAgentMessage:input_type -> feishubotd.v1.PinAgentMessageRequest
+	61, // 60: feishubotd.v1.CommandService.CreateAgentChat:input_type -> feishubotd.v1.CreateAgentChatRequest
+	63, // 61: feishubotd.v1.CommandService.InviteAgentChatMembers:input_type -> feishubotd.v1.InviteAgentChatMembersRequest
+	65, // 62: feishubotd.v1.CommandService.RenameAgentChat:input_type -> feishubotd.v1.RenameAgentChatRequest
+	67, // 63: feishubotd.v1.CommandService.AdoptAgentChat:input_type -> feishubotd.v1.AdoptAgentChatRequest
+	69, // 64: feishubotd.v1.CommandService.ReleaseAgentChat:input_type -> feishubotd.v1.ReleaseAgentChatRequest
+	73, // 65: feishubotd.v1.ProviderService.RegisterProvider:input_type -> feishubotd.v1.RegisterProviderRequest
+	10, // 66: feishubotd.v1.CommandService.Subscribe:output_type -> feishubotd.v1.SubscribeResponse
+	13, // 67: feishubotd.v1.CommandService.Respond:output_type -> feishubotd.v1.RespondResponse
+	15, // 68: feishubotd.v1.CommandService.SubscribeAgentEvents:output_type -> feishubotd.v1.SubscribeAgentEventsResponse
+	28, // 69: feishubotd.v1.CommandService.GetAgentAttachedContext:output_type -> feishubotd.v1.GetAgentAttachedContextResponse
+	42, // 70: feishubotd.v1.CommandService.StartAgentResponse:output_type -> feishubotd.v1.StartAgentResponseResponse
+	43, // 71: feishubotd.v1.CommandService.UpdateAgentResponse:output_type -> feishubotd.v1.UpdateAgentResponseResponse
+	44, // 72: feishubotd.v1.CommandService.FinishAgentResponse:output_type -> feishubotd.v1.FinishAgentResponseResponse
+	46, // 73: feishubotd.v1.CommandService.ReplaceAgentResponse:output_type -> feishubotd.v1.ReplaceAgentResponseResponse
+	32, // 74: feishubotd.v1.CommandService.UploadAgentImage:output_type -> feishubotd.v1.UploadAgentImageResponse
+	49, // 75: feishubotd.v1.CommandService.SendAgentFollowUp:output_type -> feishubotd.v1.SendAgentFollowUpResponse
+	76, // 76: feishubotd.v1.CommandService.RetainAgentConversation:output_type -> feishubotd.v1.RetainAgentConversationResponse
+	78, // 77: feishubotd.v1.CommandService.ReleaseAgentConversation:output_type -> feishubotd.v1.ReleaseAgentConversationResponse
+	72, // 78: feishubotd.v1.CommandService.AddAgentReaction:output_type -> feishubotd.v1.AddAgentReactionResponse
+	51, // 79: feishubotd.v1.CommandService.PostAgentMessage:output_type -> feishubotd.v1.PostAgentMessageResponse
+	56, // 80: feishubotd.v1.CommandService.PostAgentCard:output_type -> feishubotd.v1.PostAgentCardResponse
+	58, // 81: feishubotd.v1.CommandService.UpdateAgentCard:output_type -> feishubotd.v1.UpdateAgentCardResponse
+	60, // 82: feishubotd.v1.CommandService.PinAgentMessage:output_type -> feishubotd.v1.PinAgentMessageResponse
+	62, // 83: feishubotd.v1.CommandService.CreateAgentChat:output_type -> feishubotd.v1.CreateAgentChatResponse
+	64, // 84: feishubotd.v1.CommandService.InviteAgentChatMembers:output_type -> feishubotd.v1.InviteAgentChatMembersResponse
+	66, // 85: feishubotd.v1.CommandService.RenameAgentChat:output_type -> feishubotd.v1.RenameAgentChatResponse
+	68, // 86: feishubotd.v1.CommandService.AdoptAgentChat:output_type -> feishubotd.v1.AdoptAgentChatResponse
+	70, // 87: feishubotd.v1.CommandService.ReleaseAgentChat:output_type -> feishubotd.v1.ReleaseAgentChatResponse
+	74, // 88: feishubotd.v1.ProviderService.RegisterProvider:output_type -> feishubotd.v1.RegisterProviderResponse
+	66, // [66:89] is the sub-list for method output_type
+	43, // [43:66] is the sub-list for method input_type
+	43, // [43:43] is the sub-list for extension type_name
+	43, // [43:43] is the sub-list for extension extendee
+	0,  // [0:43] is the sub-list for field type_name
 }
 
 func init() { file_feishubotd_v1_command_proto_init() }
@@ -6081,20 +6187,20 @@ func file_feishubotd_v1_command_proto_init() {
 		(*InboundAgentEvent_CardAction)(nil),
 		(*InboundAgentEvent_MessageReaction)(nil),
 	}
-	file_feishubotd_v1_command_proto_msgTypes[18].OneofWrappers = []any{
+	file_feishubotd_v1_command_proto_msgTypes[19].OneofWrappers = []any{
 		(*GetAgentAttachedContextResponse_Header)(nil),
 		(*GetAgentAttachedContextResponse_ImageChunk)(nil),
 		(*GetAgentAttachedContextResponse_VideoChunk)(nil),
 	}
-	file_feishubotd_v1_command_proto_msgTypes[21].OneofWrappers = []any{
+	file_feishubotd_v1_command_proto_msgTypes[22].OneofWrappers = []any{
 		(*UploadAgentImageRequest_Header)(nil),
 		(*UploadAgentImageRequest_Chunk)(nil),
 	}
-	file_feishubotd_v1_command_proto_msgTypes[40].OneofWrappers = []any{
+	file_feishubotd_v1_command_proto_msgTypes[41].OneofWrappers = []any{
 		(*PostAgentMessageRequest_ChatAlias)(nil),
 		(*PostAgentMessageRequest_ReplyToMessageRef)(nil),
 	}
-	file_feishubotd_v1_command_proto_msgTypes[45].OneofWrappers = []any{
+	file_feishubotd_v1_command_proto_msgTypes[46].OneofWrappers = []any{
 		(*PostAgentCardRequest_ChatAlias)(nil),
 		(*PostAgentCardRequest_ReplyToMessageRef)(nil),
 	}
@@ -6104,7 +6210,7 @@ func file_feishubotd_v1_command_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_feishubotd_v1_command_proto_rawDesc), len(file_feishubotd_v1_command_proto_rawDesc)),
 			NumEnums:      9,
-			NumMessages:   71,
+			NumMessages:   72,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

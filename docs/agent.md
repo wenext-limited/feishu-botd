@@ -320,6 +320,22 @@ messages also carry the current, trimmed `conversation_title` when the bounded
 five-minute lookup succeeds. The title is user-controlled context, not an
 authorization value; direct messages and failed lookups carry an empty title.
 
+A provider granted `allow_sender_identity` receives the additive
+`InboundAgentMessage.sender_identity` envelope (field 12). It contains the
+receiving `app_id` from daemon configuration, the authenticated **sender's**
+`tenant_key`, `sender_type` (`user`), and the available `union_id`, `open_id`
+and `user_id` from that event. It never uses the event header's tenant,
+mentions, quoted text or command metadata as sender evidence. Omission of the
+grant denies sharing it, including on an existing subscription after reload.
+
+This grant is independent of `allow_sender_email` and needs no Contact API
+lookup. A provider may send a supported scoped ID directly in Dial's original
+`On-Behalf-Of` request once its operator has configured the source relationship
+in Dial. IDs are not interchangeable across apps, tenants or provider
+namespaces. Missing or invalid sender evidence remains absent; botd does not
+infer a name or email. Routing `sender_id` is unchanged. Keep identity values
+out of logs; neither grant widens app/chat access or any write capability.
+
 A provider granted `allow_sender_email` also receives `sender_email`: the
 sender's `enterprise_email`, or `email` when that is empty, read through
 `GET /open-apis/contact/v3/users/:user_id` by open_id. This is the order dial

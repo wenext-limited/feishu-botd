@@ -131,6 +131,7 @@ func (m *appManager) installHandlers(alias string, receiver liveReceiver, app co
 				UnmentionedReply:  cmd.UnmentionedReply,
 				AmbientOnly:       cmd.AmbientOnly,
 				HumanSender:       cmd.HumanSender,
+				SenderIdentity:    cmd.SenderIdentity,
 				NamedPrompt:       cmd.NamedPrompt,
 				Mentions:          agentMentions(cmd.Mentions),
 			})
