@@ -346,10 +346,11 @@ server stream. The exact delivery is the only lookup capability; it expires
 after 10 minutes, must have been delivered to that provider, and remains scoped
 by `allowed_apps`. The first frame reports `FOUND`, `MISSING`, or `UNREADABLE`,
 oldest-first text, snapshot-local participant labels, image descriptors, video
-descriptors, typed issues, and explicit truncation. Later frames carry at most
-64 KiB of one image or one video and identify its descriptor index and byte
-offset; video chunks always follow every image chunk, in descriptor order. Raw
-message/thread ids and image/video keys never cross the boundary.
+descriptors, file descriptors, typed issues, and explicit truncation. Later
+frames carry at most 64 KiB of one image, one video or one file and identify
+its descriptor index and byte offset; video chunks always follow every image
+chunk, and file chunks every video chunk, each in descriptor order. Raw
+message/thread ids and image/video/file keys never cross the boundary.
 
 botd lists the triggering Feishu thread newest-first until it finds the exact
 trigger message, then returns only older content, plus media attached to the
@@ -369,6 +370,21 @@ per snapshot, 64 MiB per video, 96 MiB total, 600,000 ms declared duration, a
 its placeholder and a typed issue (`VIDEO_LIMIT`, `VIDEO_TOO_LARGE`,
 `VIDEO_UNREADABLE`, `VIDEO_TYPE_UNSUPPORTED`, `VIDEO_TOO_LONG`) instead of
 failing the snapshot.
+
+File messages (`msg_type` `file`) are likewise omitted by default
+(`FILE_OMITTED`, kept as `[unsupported file: <name>]`) unless the provider
+also has the `allow_attached_files` grant (ADR-0127), layered on top of
+`allow_attached_context` and inert without it. A granted file is downloaded
+and bounded but never parsed: any type is carried, `media_type` is sniffed
+from the bytes, then the declared name's extension, then
+`application/octet-stream`, and the accepted message carries no text. Limits
+are separate from images and video: four files per snapshot, 5 MiB per file,
+10 MiB total, a 256-byte file name (silently truncated). Each accepted file
+gets an `AgentAttachedContextFileDescriptor` in its message's `files` and
+streams as `file_chunk` frames (a zero-byte file sends one empty final
+frame). A file that fails any bound keeps its placeholder and a typed issue
+(`FILE_LIMIT`, `FILE_TOO_LARGE`, `TOTAL_FILE_LIMIT`, `FILE_UNREADABLE`)
+instead of failing the snapshot.
 
 Native reaction events contain `message_ref`, exact `reaction_type`
 (`THUMBSUP` or `ThumbsDown`), and `ADDED` or `REMOVED`. They route only to the

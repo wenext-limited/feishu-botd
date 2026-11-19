@@ -37,6 +37,7 @@
       "allow_card_actions": true,
       "allow_attached_context": false,
       "allow_attached_video": false,
+      "allow_attached_files": false,
       "allow_follow_up_messages": false,
       "allow_conversation_leases": false,
       "allow_message_reactions": false,

@@ -105,6 +105,13 @@ type AgentProviderConfig struct {
 	// when AllowAttachedContext is also set, because video carry rides the
 	// same sensitive lazy-read RPC. See ProviderAllowsAttachedVideo.
 	AllowAttachedVideo bool
+	// AllowAttachedFiles permits the provider to receive downloaded, bounded
+	// bytes of Feishu file messages (msg_type "file": a PDF, log, archive...)
+	// in the attached-context snapshot (ADR-0127), instead of the default
+	// "[unsupported file: name]" placeholder. Like AllowAttachedVideo it only
+	// takes effect together with AllowAttachedContext. See
+	// ProviderAllowsAttachedFiles.
+	AllowAttachedFiles bool
 	// AllowAgentReactions permits the provider to place its own native Feishu
 	// reaction on the triggering message via AddAgentReaction — typically its
 	// model choosing to react mid-run. Separate from AllowMessageReactions
@@ -338,6 +345,14 @@ func (c Config) AnyProviderAllowsSenderEmail(appAlias string) bool {
 func (c Config) ProviderAllowsAttachedVideo(provider string) bool {
 	providerCfg, configured := c.AgentProviders[strings.TrimSpace(provider)]
 	return configured && providerCfg.AllowAttachedContext && providerCfg.AllowAttachedVideo
+}
+
+// ProviderAllowsAttachedFiles is a sensitive-read grant layered on top of
+// ProviderAllowsAttachedContext (ADR-0127): omission always denies, and so
+// does allow_attached_files=true without allow_attached_context=true.
+func (c Config) ProviderAllowsAttachedFiles(provider string) bool {
+	providerCfg, configured := c.AgentProviders[strings.TrimSpace(provider)]
+	return configured && providerCfg.AllowAttachedContext && providerCfg.AllowAttachedFiles
 }
 
 // ProviderAllowsImageUpload is an explicit outbound-write grant. Omission
@@ -591,6 +606,7 @@ func LoadFromEnv() (Config, error) {
 			AllowLegacyCommands:      providerCfg.AllowLegacyCommands,
 			AllowImageUpload:         providerCfg.AllowImageUpload,
 			AllowAttachedVideo:       providerCfg.AllowAttachedVideo,
+			AllowAttachedFiles:       providerCfg.AllowAttachedFiles,
 			AllowAgentReactions:      providerCfg.AllowAgentReactions,
 			AllowCoTProgress:         providerCfg.AllowCoTProgress,
 			AllowAmbientMessages:     providerCfg.AllowAmbientMessages,
@@ -742,6 +758,7 @@ type fileAgentProviderConfig struct {
 	AllowLegacyCommands     bool               `json:"allow_legacy_commands"`
 	AllowImageUpload        bool               `json:"allow_image_upload"`
 	AllowAttachedVideo      bool               `json:"allow_attached_video"`
+	AllowAttachedFiles      bool               `json:"allow_attached_files"`
 	AllowAgentReactions     bool               `json:"allow_agent_reactions"`
 	AllowCoTProgress        bool               `json:"allow_cot_progress"`
 	AllowAmbientMessages    bool               `json:"allow_ambient_messages"`
@@ -1442,6 +1459,7 @@ func normalizeAgentProviderConfigs(in map[string]fileAgentProviderConfig) (map[s
 			AllowLegacyCommands:            providerCfg.AllowLegacyCommands,
 			AllowImageUpload:               providerCfg.AllowImageUpload,
 			AllowAttachedVideo:             providerCfg.AllowAttachedVideo,
+			AllowAttachedFiles:             providerCfg.AllowAttachedFiles,
 			AllowAgentReactions:            providerCfg.AllowAgentReactions,
 			AllowCoTProgress:               providerCfg.AllowCoTProgress,
 			AllowAmbientMessages:           providerCfg.AllowAmbientMessages,

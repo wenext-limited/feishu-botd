@@ -324,6 +324,7 @@ func TestAttachedContextLookupDegradesUnsupportedMessagesToPlaceholderRows(t *te
 		}
 	}
 	if !hasAttachedContextIssue(got.Issues, AttachedContextIssueVideoOmitted) ||
+		!hasAttachedContextIssue(got.Issues, AttachedContextIssueFileOmitted) ||
 		!hasAttachedContextIssue(got.Issues, AttachedContextIssueUnsupportedMessage) {
 		t.Fatalf("issues = %#v", got.Issues)
 	}

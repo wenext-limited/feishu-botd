@@ -102,6 +102,7 @@ openssl rand -base64 32 > /run/secrets/feishu-botd-example-agent-token
       "allow_card_actions": true,
       "allow_attached_context": false,
       "allow_attached_video": false,
+      "allow_attached_files": false,
       "allow_follow_up_messages": false,
       "allow_message_reactions": true,
       "allow_image_upload": false,
@@ -250,6 +251,11 @@ it additionally permits downloaded, bounded video bytes in that same
 snapshot instead of the `[unsupported video file]` placeholder. It defaults
 to false and is inert without `allow_attached_context` also set — it is not
 an independent grant.
+`allow_attached_files` layers on top of `allow_attached_context` the same way
+(ADR-0127): it additionally permits downloaded, bounded bytes of Feishu file
+messages (a shared PDF, log, archive…) instead of the
+`[unsupported file: <name>]` placeholder. It defaults to false, is inert
+without `allow_attached_context`, and neither media grant implies the other.
 `allow_image_upload` separately permits the outbound image upload described
 below, and likewise defaults to false: it is the only grant that writes a
 durable tenant-side object from bytes the provider supplied.
@@ -697,7 +703,8 @@ snapshot rather than disappearing behind the counter alone: without
 `allow_attached_video`, a video message or a post's embedded video becomes
 `[unsupported video file]` (counted as `VIDEO_OMITTED`; see "Attached video"
 below for the granted case), a file message becomes
-`[unsupported file: <name>]`, and audio/sticker/other kinds become typed
+`[unsupported file: <name>]` (counted as `FILE_OMITTED`; see "Attached files"
+below), and audio/sticker/other kinds become typed
 `[unsupported …]` rows (counted as `UNSUPPORTED_MESSAGE`) — so a topic whose
 only content is a video still resolves `FOUND` and the provider can address
 the question around it. MIME types are detected from bytes and allowlisted
@@ -743,6 +750,43 @@ name is silently truncated to 256 bytes with no issue. A download or
 transport failure is `VIDEO_UNREADABLE`. Every one of these failures keeps the
 message's placeholder text and records its issue — a video never fails the
 snapshot itself.
+
+## Attached files
+
+With `allow_attached_files = true` (ADR-0127), the same snapshot also carries
+the bytes of Feishu file messages (`msg_type` `file`): a granted file message
+downloads with no text (the whole message was the file), exactly as an
+accepted standalone video does. Without the grant the message keeps its
+`[unsupported file: <name>]` placeholder and counts as `FILE_OMITTED`; nothing
+is downloaded. The grant is inert without `allow_attached_context` also set.
+Feishu rich-text (post) messages have no element for a non-media file, so only
+standalone file messages are carried.
+
+Each accepted file appears in its message's `files` field as a descriptor
+(`file_index`, `media_type`, `byte_size`, Feishu-declared `file_name`) and
+streams as `file_chunk` frames with the same at-most-64-KiB, monotonic-`offset`,
+`final`-terminated framing. File chunks follow every video chunk, in
+`file_index` order. A zero-byte file still gets exactly one empty `final`
+frame. Only an accepted file gets a descriptor; a declined or failed one keeps
+its message's placeholder text and a typed issue instead.
+
+Any file type is carried. The daemon never parses or opens the bytes; the
+`media_type` is a label: a specific byte sniff wins (`application/pdf`,
+`application/zip`, `image/png`…); a generic sniff (`text/plain`,
+`application/octet-stream`) defers to the declared name's extension; text
+with no known extension stays `text/plain`; anything else is
+`application/octet-stream`. Parameters such as `; charset=utf-8` are dropped.
+The file name is user content, not a path: it is trimmed, truncated to 256
+bytes on a UTF-8 boundary with no issue, may be empty, and is never logged.
+Download uses the same `GetMessageResource` call as video, with resource type
+`file`.
+
+Server-owned file limits, separate from the image and video budgets, are four
+files per snapshot (`FILE_LIMIT`, checked before download), 5 MiB per file
+(`FILE_TOO_LARGE`; reading stops at the bound), and 10 MiB total file payload
+bytes (`TOTAL_FILE_LIMIT`). A download or transport failure is
+`FILE_UNREADABLE`. Every one of these keeps the message's placeholder text and
+records its issue — a file never fails the snapshot.
 
 ## Outbound images
 

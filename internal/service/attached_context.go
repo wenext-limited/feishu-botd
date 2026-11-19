@@ -56,6 +56,9 @@ func (s *Service) GetAgentAttachedContext(ctx context.Context, in AgentAttachedC
 	// that only has allow_attached_video (misconfigured, since it is inert
 	// alone) still gets the pre-video-carry placeholder behavior.
 	request.AllowVideo = s.cfg().ProviderAllowsAttachedVideo(provider)
+	// File carry (ADR-0127) follows the same rule: resolved once, already
+	// conjoined with allow_attached_context.
+	request.AllowFiles = s.cfg().ProviderAllowsAttachedFiles(provider)
 
 	result, err := backend.attachedContext.LookupAttachedContext(ctx, request)
 	if err != nil {

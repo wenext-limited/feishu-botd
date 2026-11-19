@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"mime"
 	"net/http"
 	"strconv"
 	"strings"
@@ -30,6 +31,15 @@ const (
 	attachedContextMaxTotalVideoBytes = 96 * 1024 * 1024
 	attachedContextMaxVideoDurationMs = 600_000
 	attachedContextMaxVideoNameBytes  = 256
+	// File carry (ADR-0127). Any file type is carried as opaque bytes: the
+	// daemon bounds and labels them but never parses them; a provider without
+	// allow_attached_files sees the "[unsupported file: name]" placeholder and
+	// a file_omitted issue instead. These bounds are separate from the image
+	// and video budgets.
+	attachedContextMaxFiles          = 4
+	attachedContextMaxFileBytes      = 5 * 1024 * 1024
+	attachedContextMaxTotalFileBytes = 10 * 1024 * 1024
+	attachedContextMaxFileNameBytes  = 256
 )
 
 // Inline placeholders for content botd cannot carry. They ride in message
@@ -89,6 +99,15 @@ const (
 	AttachedContextIssueVideoUnreadable AttachedContextIssueCode = "video_unreadable"
 	AttachedContextIssueVideoType       AttachedContextIssueCode = "video_type_unsupported"
 	AttachedContextIssueVideoTooLong    AttachedContextIssueCode = "video_too_long"
+	// File carry (ADR-0127). FileOmitted means "no allow_attached_files
+	// grant"; the others describe a granted file that could not be delivered.
+	// Every one of them keeps the message's "[unsupported file: name]"
+	// placeholder text — a file never fails the snapshot.
+	AttachedContextIssueFileOmitted    AttachedContextIssueCode = "file_omitted"
+	AttachedContextIssueFileLimit      AttachedContextIssueCode = "file_limit"
+	AttachedContextIssueFileTooLarge   AttachedContextIssueCode = "file_too_large"
+	AttachedContextIssueTotalFileLimit AttachedContextIssueCode = "total_file_limit"
+	AttachedContextIssueFileUnreadable AttachedContextIssueCode = "file_unreadable"
 )
 
 type AttachedContextIssue struct {
@@ -112,6 +131,16 @@ type AttachedContextVideo struct {
 	FileName   string // Feishu-declared, bounded to attachedContextMaxVideoNameBytes
 }
 
+// AttachedContextFile is a Feishu file message the daemon downloaded and
+// bounded but never parsed (ADR-0127). Only accepted files are constructed; a
+// declined or failed one stays a placeholder and an issue. FileName is user
+// content, never a path: nothing in the daemon opens or resolves it.
+type AttachedContextFile struct {
+	MediaType string
+	Data      []byte
+	FileName  string // Feishu-declared, bounded to attachedContextMaxFileNameBytes
+}
+
 type AttachedContextMessage struct {
 	// AuthorLabel is meaningful only within this snapshot. It is assigned by
 	// first appearance after ordering and is not derived from a stable digest.
@@ -120,6 +149,7 @@ type AttachedContextMessage struct {
 	Text        string
 	Images      []AttachedContextImage
 	Videos      []AttachedContextVideo
+	Files       []AttachedContextFile
 }
 
 type AttachedContext struct {
@@ -142,6 +172,17 @@ type AttachedContextRequest struct {
 	// means every video in this snapshot stays a placeholder + video_omitted,
 	// byte-for-byte the pre-video-carry behavior.
 	AllowVideo bool
+	// AllowFiles is the resolved allow_attached_files grant (ADR-0127), also
+	// already conjoined with allow_attached_context. False means every file
+	// message stays "[unsupported file: name]" + file_omitted.
+	AllowFiles bool
+}
+
+// attachedCarryGrants is the per-snapshot media carry decision, resolved by
+// the service before a single message is parsed.
+type attachedCarryGrants struct {
+	video bool
+	files bool
 }
 
 // AttachedContextLookup is implemented by an app-bound Feishu backend. The
@@ -180,8 +221,9 @@ func (s *sdkAttachedContextLookup) LookupAttachedContext(ctx context.Context, in
 	if in.TriggerMessageID == "" || s == nil || s.history == nil {
 		return attachedContextWithIssue(AttachedContextUnreadable, AttachedContextIssueBoundaryNotFound), nil
 	}
+	grants := attachedCarryGrants{video: in.AllowVideo, files: in.AllowFiles}
 	if in.ThreadID == "" {
-		return s.lookupTriggerOnly(ctx, in.TriggerMessageID, in.AllowVideo)
+		return s.lookupTriggerOnly(ctx, in.TriggerMessageID, grants)
 	}
 
 	candidates, issues, truncated, historyUnreadable := s.snapshotCandidates(ctx, in)
@@ -189,14 +231,14 @@ func (s *sdkAttachedContextLookup) LookupAttachedContext(ctx context.Context, in
 		issues = appendOrIncrementAttachedContextIssue(issues, AttachedContextIssueBoundaryNotFound)
 		return AttachedContext{Status: AttachedContextUnreadable, Issues: issues, Truncated: truncated}, nil
 	}
-	return s.assemble(ctx, candidates, issues, truncated, historyUnreadable, in.AllowVideo)
+	return s.assemble(ctx, candidates, issues, truncated, historyUnreadable, grants)
 }
 
 // lookupTriggerOnly downloads images on the triggering message when there is
 // no topic thread to list. A plain group or DM still flattens those pictures
 // to "[image]" in the prompt; this is the only path that can replace that
 // placeholder with bytes. It does not walk the room.
-func (s *sdkAttachedContextLookup) lookupTriggerOnly(ctx context.Context, triggerMessageID string, allowVideo bool) (AttachedContext, error) {
+func (s *sdkAttachedContextLookup) lookupTriggerOnly(ctx context.Context, triggerMessageID string, grants attachedCarryGrants) (AttachedContext, error) {
 	req := larkim.NewGetMessageReqBuilder().MessageId(triggerMessageID).Build()
 	resp, err := s.history.Get(ctx, req)
 	if err != nil || resp == nil || !resp.Success() || resp.Data == nil {
@@ -218,7 +260,7 @@ func (s *sdkAttachedContextLookup) lookupTriggerOnly(ctx context.Context, trigge
 	if trigger == nil {
 		return attachedContextWithIssue(AttachedContextUnreadable, AttachedContextIssueBoundaryNotFound), nil
 	}
-	return s.assemble(ctx, []attachedContextCandidate{{message: trigger, isTrigger: true}}, nil, false, false, allowVideo)
+	return s.assemble(ctx, []attachedContextCandidate{{message: trigger, isTrigger: true}}, nil, false, false, grants)
 }
 
 func (s *sdkAttachedContextLookup) assemble(
@@ -227,7 +269,7 @@ func (s *sdkAttachedContextLookup) assemble(
 	issues []AttachedContextIssue,
 	truncated bool,
 	historyUnreadable bool,
-	allowVideo bool,
+	grants attachedCarryGrants,
 ) (AttachedContext, error) {
 	result := AttachedContext{Issues: issues, Truncated: truncated}
 	unreadableContent := historyUnreadable
@@ -236,6 +278,8 @@ func (s *sdkAttachedContextLookup) assemble(
 	totalImageCandidates := 0
 	totalVideoBytes := 0
 	totalVideoCandidates := 0
+	totalFileBytes := 0
+	totalFileCandidates := 0
 	participants := make(map[string]string)
 	for index := len(candidates) - 1; index >= 0; index-- {
 		candidate := candidates[index]
@@ -244,7 +288,7 @@ func (s *sdkAttachedContextLookup) assemble(
 		if derefBool(candidate.message.Deleted) && !candidate.isTrigger {
 			continue
 		}
-		parsed, parseIssues, malformed := parseAttachedMessage(candidate.message, candidate.isTrigger, allowVideo)
+		parsed, parseIssues, malformed := parseAttachedMessage(candidate.message, candidate.isTrigger, grants)
 		for _, issue := range parseIssues {
 			result.Issues = appendOrIncrementAttachedContextIssue(result.Issues, issue)
 		}
@@ -330,7 +374,42 @@ func (s *sdkAttachedContextLookup) assemble(
 			text = placeholderVideo
 		}
 
-		if text == "" && len(images) == 0 && len(videos) == 0 {
+		files := make([]AttachedContextFile, 0, len(parsed.fileKeys))
+		fileFailed := false
+		for _, key := range parsed.fileKeys {
+			if totalFileCandidates >= attachedContextMaxFiles {
+				result.Truncated = true
+				result.Issues = appendOrIncrementAttachedContextIssue(result.Issues, AttachedContextIssueFileLimit)
+				fileFailed = true
+				continue
+			}
+			totalFileCandidates++
+			file, issue := s.downloadFile(ctx, deref(candidate.message.MessageId), key)
+			if issue != "" {
+				result.Issues = appendOrIncrementAttachedContextIssue(result.Issues, issue)
+				if issue == AttachedContextIssueFileTooLarge {
+					result.Truncated = true
+				}
+				fileFailed = true
+				continue
+			}
+			if totalFileBytes+len(file.Data) > attachedContextMaxTotalFileBytes {
+				result.Truncated = true
+				result.Issues = appendOrIncrementAttachedContextIssue(result.Issues, AttachedContextIssueTotalFileLimit)
+				fileFailed = true
+				continue
+			}
+			totalFileBytes += len(file.Data)
+			files = append(files, file)
+		}
+		// Mirrors the video rule: a granted file that was not delivered keeps
+		// its "[unsupported file: name]" row, so the provider still sees where
+		// it sat. An accepted file's message carries no text, like a video's.
+		if fileFailed && text == "" {
+			text = parsed.filePlaceholder
+		}
+
+		if text == "" && len(images) == 0 && len(videos) == 0 && len(files) == 0 {
 			continue
 		}
 		authorKey, authorType := attachedContextAuthor(candidate.message)
@@ -349,6 +428,7 @@ func (s *sdkAttachedContextLookup) assemble(
 			Text:        text,
 			Images:      images,
 			Videos:      videos,
+			Files:       files,
 		})
 	}
 
@@ -453,14 +533,26 @@ type attachedVideoKey struct {
 	durationMs uint64
 }
 
+// attachedFileKey is a file reference collected during parsing, before any
+// download is attempted. fileName is Feishu-declared and unvalidated until
+// downloadFile bounds it.
+type attachedFileKey struct {
+	fileKey  string
+	fileName string
+}
+
 type parsedAttachedMessage struct {
 	text      string
 	imageKeys []string
 	videoKeys []attachedVideoKey
+	fileKeys  []attachedFileKey
+	// filePlaceholder is the "[unsupported file: name]" text a granted file
+	// message falls back to when its download or a bound fails.
+	filePlaceholder string
 }
 
-func parseAttachedMessage(message *larkim.Message, trigger bool, allowVideo bool) (parsedAttachedMessage, []AttachedContextIssueCode, bool) {
-	parsed, issues, malformed := parseAttachedMessageContent(message, allowVideo)
+func parseAttachedMessage(message *larkim.Message, trigger bool, grants attachedCarryGrants) (parsedAttachedMessage, []AttachedContextIssueCode, bool) {
+	parsed, issues, malformed := parseAttachedMessageContent(message, grants)
 	if trigger {
 		// The trigger's own words already ride the prompt; only its images
 		// and videos (and the omission issues above) belong in the snapshot.
@@ -469,7 +561,7 @@ func parseAttachedMessage(message *larkim.Message, trigger bool, allowVideo bool
 	return parsed, issues, malformed
 }
 
-func parseAttachedMessageContent(message *larkim.Message, allowVideo bool) (parsedAttachedMessage, []AttachedContextIssueCode, bool) {
+func parseAttachedMessageContent(message *larkim.Message, grants attachedCarryGrants) (parsedAttachedMessage, []AttachedContextIssueCode, bool) {
 	if message == nil || message.Body == nil || message.Body.Content == nil {
 		return parsedAttachedMessage{}, []AttachedContextIssueCode{AttachedContextIssueMalformedMessage}, true
 	}
@@ -484,7 +576,7 @@ func parseAttachedMessageContent(message *larkim.Message, allowVideo bool) (pars
 		}
 		return parsedAttachedMessage{text: strings.TrimSpace(body.Text)}, nil, false
 	case "post":
-		text, images, videoKeys, omittedVideos, ok := parseAttachedPost(content, allowVideo)
+		text, images, videoKeys, omittedVideos, ok := parseAttachedPost(content, grants.video)
 		if !ok {
 			return parsedAttachedMessage{}, []AttachedContextIssueCode{AttachedContextIssueMalformedMessage}, true
 		}
@@ -502,7 +594,7 @@ func parseAttachedMessageContent(message *larkim.Message, allowVideo bool) (pars
 		}
 		return parsedAttachedMessage{imageKeys: []string{strings.TrimSpace(body.ImageKey)}}, nil, false
 	case "media":
-		if allowVideo {
+		if grants.video {
 			var body struct {
 				FileKey  string `json:"file_key"`
 				FileName string `json:"file_name"`
@@ -519,7 +611,24 @@ func parseAttachedMessageContent(message *larkim.Message, allowVideo bool) (pars
 		}
 		return parsedAttachedMessage{text: placeholderVideo}, []AttachedContextIssueCode{AttachedContextIssueVideoOmitted}, false
 	case "file":
-		return parsedAttachedMessage{text: filePlaceholder(content)}, []AttachedContextIssueCode{AttachedContextIssueUnsupportedMessage}, false
+		placeholder := filePlaceholder(content)
+		if grants.files {
+			var body struct {
+				FileKey  string `json:"file_key"`
+				FileName string `json:"file_name"`
+			}
+			if err := json.Unmarshal([]byte(content), &body); err != nil || strings.TrimSpace(body.FileKey) == "" {
+				return parsedAttachedMessage{}, []AttachedContextIssueCode{AttachedContextIssueMalformedMessage}, true
+			}
+			return parsedAttachedMessage{
+				fileKeys: []attachedFileKey{{
+					fileKey:  strings.TrimSpace(body.FileKey),
+					fileName: strings.TrimSpace(body.FileName),
+				}},
+				filePlaceholder: placeholder,
+			}, nil, false
+		}
+		return parsedAttachedMessage{text: placeholder}, []AttachedContextIssueCode{AttachedContextIssueFileOmitted}, false
 	case "audio":
 		return parsedAttachedMessage{text: placeholderAudio}, []AttachedContextIssueCode{AttachedContextIssueUnsupportedMessage}, false
 	case "sticker":
@@ -746,6 +855,81 @@ func detectedVideoMediaType(data []byte) string {
 		}
 	}
 	return ""
+}
+
+// downloadFile fetches and bounds one file the daemon was already told it may
+// deliver (the allow_attached_files grant gated the caller upstream). The
+// bytes are never parsed or executed; only the size bounds in ADR-0127 and a
+// media-type label apply. Like video, the resource type is "file".
+func (s *sdkAttachedContextLookup) downloadFile(ctx context.Context, messageID string, key attachedFileKey) (AttachedContextFile, AttachedContextIssueCode) {
+	if s.resources == nil || strings.TrimSpace(messageID) == "" || strings.TrimSpace(key.fileKey) == "" {
+		return AttachedContextFile{}, AttachedContextIssueFileUnreadable
+	}
+	req := larkim.NewGetMessageResourceReqBuilder().
+		MessageId(messageID).
+		FileKey(key.fileKey).
+		Type("file").
+		Build()
+	resp, err := s.resources.Get(ctx, req)
+	if err != nil || resp == nil || !resp.Success() || resp.File == nil {
+		return AttachedContextFile{}, AttachedContextIssueFileUnreadable
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.File, attachedContextMaxFileBytes+1))
+	if err != nil {
+		return AttachedContextFile{}, AttachedContextIssueFileUnreadable
+	}
+	if len(data) > attachedContextMaxFileBytes {
+		return AttachedContextFile{}, AttachedContextIssueFileTooLarge
+	}
+	fileName := utf8Prefix(key.fileName, attachedContextMaxFileNameBytes)
+	return AttachedContextFile{
+		MediaType: detectedFileMediaType(data, fileName),
+		Data:      data,
+		FileName:  fileName,
+	}, ""
+}
+
+// detectedFileMediaType labels a carried file. Byte sniffing wins when it is
+// specific; its two generic answers (text/plain, application/octet-stream)
+// defer to the declared name's extension. A text/plain sniff with no known
+// extension stays text/plain; everything else falls back to
+// application/octet-stream. Parameters such as "; charset=utf-8" are dropped.
+// The label is advisory for the receiver and never selects a parser here.
+func detectedFileMediaType(data []byte, fileName string) string {
+	const octetStream = "application/octet-stream"
+	sniffed := bareMediaType(http.DetectContentType(data))
+	if sniffed != "" && sniffed != "text/plain" && sniffed != octetStream {
+		return sniffed
+	}
+	if byExtension := bareMediaType(mime.TypeByExtension(fileNameExtension(fileName))); byExtension != "" {
+		return byExtension
+	}
+	if sniffed == "text/plain" && len(data) > 0 {
+		return sniffed
+	}
+	return octetStream
+}
+
+func bareMediaType(value string) string {
+	if index := strings.IndexByte(value, ';'); index >= 0 {
+		value = value[:index]
+	}
+	return strings.ToLower(strings.TrimSpace(value))
+}
+
+// fileNameExtension returns the final ".ext" of a declared file name, or ""
+// when there is none. It is plain string work on user content: the name is
+// never treated as a path.
+func fileNameExtension(fileName string) string {
+	index := strings.LastIndexByte(fileName, '.')
+	if index < 0 || index == len(fileName)-1 {
+		return ""
+	}
+	extension := fileName[index:]
+	if strings.ContainsAny(extension, "/\\ \x00") {
+		return ""
+	}
+	return extension
 }
 
 func attachedContextAuthor(message *larkim.Message) (string, string) {

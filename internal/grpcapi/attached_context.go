@@ -21,6 +21,13 @@ type attachedContextStreamVideo struct {
 	data  []byte
 }
 
+// attachedContextStreamFile carries one accepted file's bytes (ADR-0127).
+// File chunks stream after every video chunk, in file_index order.
+type attachedContextStreamFile struct {
+	index uint32
+	data  []byte
+}
+
 func (c *commandServer) GetAgentAttachedContext(
 	in *pb.GetAgentAttachedContextRequest,
 	stream pb.CommandService_GetAgentAttachedContextServer,
@@ -34,7 +41,7 @@ func (c *commandServer) GetAgentAttachedContext(
 	if apiErr != nil {
 		return grpcError(apiErr, requestIDFromContext(stream.Context()))
 	}
-	header, images, videos := agentAttachedContextHeaderToProto(result)
+	header, images, videos, files := agentAttachedContextHeaderToProto(result)
 	if err := stream.Send(&pb.GetAgentAttachedContextResponse{
 		Frame: &pb.GetAgentAttachedContextResponse_Header{Header: header},
 	}); err != nil {
@@ -82,12 +89,40 @@ func (c *commandServer) GetAgentAttachedContext(
 			}
 		}
 	}
+	// File chunks (ADR-0127) follow every video chunk, in file_index order.
+	// Unlike images and videos a file may be empty; it still gets exactly one
+	// final frame so a receiver never waits on a file that has no bytes.
+	for _, file := range files {
+		offset := 0
+		for {
+			end := offset + attachedContextImageChunkBytes
+			if end > len(file.data) {
+				end = len(file.data)
+			}
+			if err := stream.Send(&pb.GetAgentAttachedContextResponse{
+				Frame: &pb.GetAgentAttachedContextResponse_FileChunk{
+					FileChunk: &pb.AgentAttachedContextFileChunk{
+						FileIndex: file.index,
+						Offset:    uint64(offset),
+						Data:      file.data[offset:end],
+						Final:     end == len(file.data),
+					},
+				},
+			}); err != nil {
+				return err
+			}
+			if end == len(file.data) {
+				break
+			}
+			offset = end
+		}
+	}
 	return nil
 }
 
 func agentAttachedContextHeaderToProto(
 	in feishu.AttachedContext,
-) (*pb.AgentAttachedContextHeader, []attachedContextStreamImage, []attachedContextStreamVideo) {
+) (*pb.AgentAttachedContextHeader, []attachedContextStreamImage, []attachedContextStreamVideo, []attachedContextStreamFile) {
 	header := &pb.AgentAttachedContextHeader{
 		RequesterLabel: in.RequesterLabel,
 		Status:         agentAttachedContextStatusToProto(in.Status),
@@ -100,6 +135,7 @@ func agentAttachedContextHeaderToProto(
 	}
 	images := make([]attachedContextStreamImage, 0)
 	videos := make([]attachedContextStreamVideo, 0)
+	files := make([]attachedContextStreamFile, 0)
 	for _, message := range in.Messages {
 		out := &pb.AgentAttachedContextMessage{
 			AuthorLabel: message.AuthorLabel,
@@ -121,9 +157,17 @@ func agentAttachedContextHeaderToProto(
 			})
 			videos = append(videos, attachedContextStreamVideo{index: index, data: video.Data})
 		}
+		for _, file := range message.Files {
+			index := uint32(len(files))
+			out.Files = append(out.Files, &pb.AgentAttachedContextFileDescriptor{
+				FileIndex: index, MediaType: file.MediaType, ByteSize: uint64(len(file.Data)),
+				FileName: file.FileName,
+			})
+			files = append(files, attachedContextStreamFile{index: index, data: file.Data})
+		}
 		header.Messages = append(header.Messages, out)
 	}
-	return header, images, videos
+	return header, images, videos, files
 }
 
 func agentAttachedContextStatusToProto(in feishu.AttachedContextStatus) pb.AgentAttachedContextStatus {
@@ -175,6 +219,16 @@ func agentAttachedContextIssueToProto(in feishu.AttachedContextIssueCode) pb.Age
 		return pb.AgentAttachedContextIssueCode_AGENT_ATTACHED_CONTEXT_ISSUE_CODE_VIDEO_TYPE_UNSUPPORTED
 	case feishu.AttachedContextIssueVideoTooLong:
 		return pb.AgentAttachedContextIssueCode_AGENT_ATTACHED_CONTEXT_ISSUE_CODE_VIDEO_TOO_LONG
+	case feishu.AttachedContextIssueFileOmitted:
+		return pb.AgentAttachedContextIssueCode_AGENT_ATTACHED_CONTEXT_ISSUE_CODE_FILE_OMITTED
+	case feishu.AttachedContextIssueFileLimit:
+		return pb.AgentAttachedContextIssueCode_AGENT_ATTACHED_CONTEXT_ISSUE_CODE_FILE_LIMIT
+	case feishu.AttachedContextIssueFileTooLarge:
+		return pb.AgentAttachedContextIssueCode_AGENT_ATTACHED_CONTEXT_ISSUE_CODE_FILE_TOO_LARGE
+	case feishu.AttachedContextIssueTotalFileLimit:
+		return pb.AgentAttachedContextIssueCode_AGENT_ATTACHED_CONTEXT_ISSUE_CODE_TOTAL_FILE_LIMIT
+	case feishu.AttachedContextIssueFileUnreadable:
+		return pb.AgentAttachedContextIssueCode_AGENT_ATTACHED_CONTEXT_ISSUE_CODE_FILE_UNREADABLE
 	case feishu.AttachedContextIssueUnsupportedMessage:
 		return pb.AgentAttachedContextIssueCode_AGENT_ATTACHED_CONTEXT_ISSUE_CODE_UNSUPPORTED_MESSAGE
 	case feishu.AttachedContextIssueMalformedMessage:
