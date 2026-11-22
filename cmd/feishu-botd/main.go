@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"feishu-botd/internal/announcement"
 	"feishu-botd/internal/chatgrant"
 	"feishu-botd/internal/config"
 	"feishu-botd/internal/dedupe"
@@ -137,6 +138,11 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger, opts runOp
 		if err := svc.OpenAgentConversationLeases(cfg.StateDir); err != nil {
 			return fmt.Errorf("open conversation leases: %w", err)
 		}
+		announcements, err := announcement.Open(cfg.StateDir)
+		if err != nil {
+			return fmt.Errorf("open agent chat announcement state: %w", err)
+		}
+		svc.SetAgentAnnouncementStore(announcements)
 	}
 	httpServer := httpapi.NewServer(cfg, svc, logger)
 	grpcServer := grpcapi.NewServer(cfg, svc, logger)
