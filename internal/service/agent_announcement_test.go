@@ -258,7 +258,7 @@ func TestAnnouncementSectionOperationIdempotency(t *testing.T) {
 		t.Fatalf("writes = %d, want one Feishu write for a repeated operation", doc.writeCount())
 	}
 	apiErr := setSection(svc, "op-1", "Status", "different")
-	if apiErr == nil || apiErr.Code != "operation_conflict" || apiErr.Status != 412 {
+	if apiErr == nil || apiErr.Code != "operation_conflict" || apiErr.Status != 409 {
 		t.Fatalf("conflicting reuse = %+v", apiErr)
 	}
 	if doc.writeCount() != 1 {

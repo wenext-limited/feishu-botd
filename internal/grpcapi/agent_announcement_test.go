@@ -147,8 +147,8 @@ func TestGRPCAnnouncementSectionWritesAndIsIdempotent(t *testing.T) {
 		Provider: "fixture-agent", ChatAlias: announcementTestAlias, OperationId: "op-1", Title: "Agent status", Markdown: "red",
 	}
 	_, err := client.SetAgentChatAnnouncementSection(ctx, conflict)
-	if status.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("conflict = %v, want FailedPrecondition", err)
+	if status.Code(err) != codes.AlreadyExists {
+		t.Fatalf("conflict = %v, want AlreadyExists", err)
 	}
 	if detail := botdDetail(t, err); detail == nil || detail.GetCode() != "operation_conflict" {
 		t.Fatalf("conflict detail = %v", err)

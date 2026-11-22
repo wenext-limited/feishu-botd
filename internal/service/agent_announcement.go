@@ -94,7 +94,7 @@ func (s *Service) SetAgentChatAnnouncementSection(ctx context.Context, in SetAge
 	if known {
 		if op, done := section.Operation(operationID); done {
 			if op.Digest != digest {
-				return notify.NewAPIError(412, "operation_conflict", "operation id reused with different content", false)
+				return notify.NewAPIError(409, "operation_conflict", "operation id reused with different content", false)
 			}
 			return nil
 		}

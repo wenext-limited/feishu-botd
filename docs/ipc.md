@@ -761,7 +761,7 @@ an old insert.
 | --- | --- | --- |
 | `announcement_unsupported` | `FAILED_PRECONDITION` | The chat's announcement is not a docx announcement (legacy). Permanent for that chat. |
 | `announcement_forbidden` | `FAILED_PRECONDITION` | Missing scope (99991672, 99991679), no edit rights (1770032, 232043), bot not in chat or other tenant (232011, 232010), bot ability off (232025), or HTTP 403. Permanent until fixed. |
-| `operation_conflict` | `FAILED_PRECONDITION` | `operation_id` reused with a different title or markdown. |
+| `operation_conflict` | `ALREADY_EXISTS` | `operation_id` reused with a different title or markdown, as for the other agent RPCs. |
 | `feishu_unavailable` | `UNAVAILABLE` | Timeout, server error, or a rate limit (HTTP 429 / 99991400) that outlasted botd's backoff (four attempts). Retry with the same `operation_id`. |
 | `announcement_store_unavailable` | `UNAVAILABLE` | The announcement was written but the state file was not; retry. |
 
@@ -817,7 +817,7 @@ stable machine `code`, a redacted `message`, a `retryable` flag, and a
 | 409 `dedupe_conflict`, `already_responded` | `ALREADY_EXISTS` |
 | 409 `operation_conflict` | `ALREADY_EXISTS` |
 | 409 `dedupe_in_flight`, `response_in_flight`, `operation_in_flight`, `revision_conflict` | `ABORTED` |
-| 412 `response_closed`, `feishu_rejected`, `send_retry_expired`, `send_state_unknown`, `operation_state_unknown`, `announcement_forbidden`, `announcement_unsupported`, and `operation_conflict` from `SetAgentChatAnnouncementSection` | `FAILED_PRECONDITION` |
+| 412 `response_closed`, `feishu_rejected`, `send_retry_expired`, `send_state_unknown`, `operation_state_unknown`, `announcement_forbidden`, and `announcement_unsupported` | `FAILED_PRECONDITION` |
 | 429 `agent_queue_full` | `RESOURCE_EXHAUSTED` |
 | 501 unimplemented content/services | `UNIMPLEMENTED` |
 | 502 `feishu_unavailable`, 503 `agent_unavailable`, `announcement_store_unavailable` | `UNAVAILABLE` |

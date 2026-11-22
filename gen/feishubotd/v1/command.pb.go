@@ -5030,7 +5030,7 @@ type SetAgentChatAnnouncementSectionRequest struct {
 	ChatAlias string `protobuf:"bytes,2,opt,name=chat_alias,json=chatAlias,proto3" json:"chat_alias,omitempty"`
 	// Idempotency key: the same operation_id with the same content succeeds
 	// once and is a no-op afterwards; with different content it is
-	// FAILED_PRECONDITION (operation_conflict).
+	// ALREADY_EXISTS (operation_conflict), as for the other agent RPCs.
 	OperationId string `protobuf:"bytes,3,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
 	// The section's heading text. It names the section: the provider owns the
 	// section whose heading botd created for it in this chat.
