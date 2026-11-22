@@ -368,6 +368,22 @@ func (c *commandServer) RenameAgentChat(ctx context.Context, in *pb.RenameAgentC
 	return &pb.RenameAgentChatResponse{}, nil
 }
 
+func (c *commandServer) SetAgentChatAnnouncementSection(ctx context.Context, in *pb.SetAgentChatAnnouncementSectionRequest) (*pb.SetAgentChatAnnouncementSectionResponse, error) {
+	if err := authorizeAgentAnnouncements(ctx, in.GetProvider()); err != nil {
+		return nil, err
+	}
+	if apiErr := c.svc.SetAgentChatAnnouncementSection(ctx, service.SetAgentChatAnnouncementSectionInput{
+		Provider:    in.GetProvider(),
+		ChatAlias:   in.GetChatAlias(),
+		OperationID: in.GetOperationId(),
+		Title:       in.GetTitle(),
+		Markdown:    in.GetMarkdown(),
+	}); apiErr != nil {
+		return nil, grpcError(apiErr, requestIDFromContext(ctx))
+	}
+	return &pb.SetAgentChatAnnouncementSectionResponse{}, nil
+}
+
 // agentCardContentFromProto maps the wire enum onto the service's. An unknown
 // value stays out of range so the service rejects it rather than dropping it.
 func agentCardContentFromProto(in *pb.AgentCardContent) service.AgentCardContent {
