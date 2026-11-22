@@ -94,6 +94,18 @@ service CommandService {
   // RenameAgentChat renames a chat this provider created with
   // CreateAgentChat. Gated by allow_create_chats.
   rpc RenameAgentChat(RenameAgentChatRequest) returns (RenameAgentChatResponse);
+  // SetAgentChatAnnouncementSection keeps one section of a granted group
+  // chat's announcement (群公告) as the provider last wrote it: a heading with
+  // `title`, followed by the blocks rendered from `markdown`. Only that
+  // section is touched; anything people wrote around it stays. The first
+  // call appends the section at the end; later calls replace its content in
+  // place. A repeated operation_id is a no-op that succeeds. Needs the
+  // provider's allow_announcements and the app scopes
+  // im:chat.announcement:read and im:chat.announcement:write_only.
+  // FAILED_PRECONDITION with class announcement_forbidden (no edit rights,
+  // missing scope) or announcement_unsupported (a legacy, non-docx
+  // announcement) is permanent for that chat; UNAVAILABLE is transient.
+  rpc SetAgentChatAnnouncementSection(SetAgentChatAnnouncementSectionRequest) returns (SetAgentChatAnnouncementSectionResponse);
   // AdoptAgentChat grants this provider, at runtime, an existing group chat
   // the bot is already a member of, as CreateAgentChat grants a chat it
   // creates: the chat is then in the provider's ambient and proactive
@@ -931,6 +943,27 @@ message RenameAgentChatRequest {
 }
 
 message RenameAgentChatResponse {
+  reserved 1 to 15;
+}
+
+message SetAgentChatAnnouncementSectionRequest {
+  string provider = 1; // must match the bearer-authenticated principal
+  // A chat_alias granted to this provider (created or adopted).
+  string chat_alias = 2;
+  // Idempotency key: the same operation_id with the same content succeeds
+  // once and is a no-op afterwards; with different content it is
+  // FAILED_PRECONDITION (operation_conflict).
+  string operation_id = 3;
+  // The section's heading text. It names the section: the provider owns the
+  // section whose heading botd created for it in this chat.
+  string title = 4;
+  // The section body as Markdown: paragraphs, "- " bullets, **bold**,
+  // `code` and [links](url). Other syntax is kept as plain text.
+  string markdown = 5;
+  reserved 6 to 15;
+}
+
+message SetAgentChatAnnouncementSectionResponse {
   reserved 1 to 15;
 }
 

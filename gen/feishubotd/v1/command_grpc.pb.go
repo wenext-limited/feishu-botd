@@ -19,28 +19,29 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	CommandService_Subscribe_FullMethodName                = "/feishubotd.v1.CommandService/Subscribe"
-	CommandService_Respond_FullMethodName                  = "/feishubotd.v1.CommandService/Respond"
-	CommandService_SubscribeAgentEvents_FullMethodName     = "/feishubotd.v1.CommandService/SubscribeAgentEvents"
-	CommandService_GetAgentAttachedContext_FullMethodName  = "/feishubotd.v1.CommandService/GetAgentAttachedContext"
-	CommandService_StartAgentResponse_FullMethodName       = "/feishubotd.v1.CommandService/StartAgentResponse"
-	CommandService_UpdateAgentResponse_FullMethodName      = "/feishubotd.v1.CommandService/UpdateAgentResponse"
-	CommandService_FinishAgentResponse_FullMethodName      = "/feishubotd.v1.CommandService/FinishAgentResponse"
-	CommandService_ReplaceAgentResponse_FullMethodName     = "/feishubotd.v1.CommandService/ReplaceAgentResponse"
-	CommandService_UploadAgentImage_FullMethodName         = "/feishubotd.v1.CommandService/UploadAgentImage"
-	CommandService_SendAgentFollowUp_FullMethodName        = "/feishubotd.v1.CommandService/SendAgentFollowUp"
-	CommandService_RetainAgentConversation_FullMethodName  = "/feishubotd.v1.CommandService/RetainAgentConversation"
-	CommandService_ReleaseAgentConversation_FullMethodName = "/feishubotd.v1.CommandService/ReleaseAgentConversation"
-	CommandService_AddAgentReaction_FullMethodName         = "/feishubotd.v1.CommandService/AddAgentReaction"
-	CommandService_PostAgentMessage_FullMethodName         = "/feishubotd.v1.CommandService/PostAgentMessage"
-	CommandService_PostAgentCard_FullMethodName            = "/feishubotd.v1.CommandService/PostAgentCard"
-	CommandService_UpdateAgentCard_FullMethodName          = "/feishubotd.v1.CommandService/UpdateAgentCard"
-	CommandService_PinAgentMessage_FullMethodName          = "/feishubotd.v1.CommandService/PinAgentMessage"
-	CommandService_CreateAgentChat_FullMethodName          = "/feishubotd.v1.CommandService/CreateAgentChat"
-	CommandService_InviteAgentChatMembers_FullMethodName   = "/feishubotd.v1.CommandService/InviteAgentChatMembers"
-	CommandService_RenameAgentChat_FullMethodName          = "/feishubotd.v1.CommandService/RenameAgentChat"
-	CommandService_AdoptAgentChat_FullMethodName           = "/feishubotd.v1.CommandService/AdoptAgentChat"
-	CommandService_ReleaseAgentChat_FullMethodName         = "/feishubotd.v1.CommandService/ReleaseAgentChat"
+	CommandService_Subscribe_FullMethodName                       = "/feishubotd.v1.CommandService/Subscribe"
+	CommandService_Respond_FullMethodName                         = "/feishubotd.v1.CommandService/Respond"
+	CommandService_SubscribeAgentEvents_FullMethodName            = "/feishubotd.v1.CommandService/SubscribeAgentEvents"
+	CommandService_GetAgentAttachedContext_FullMethodName         = "/feishubotd.v1.CommandService/GetAgentAttachedContext"
+	CommandService_StartAgentResponse_FullMethodName              = "/feishubotd.v1.CommandService/StartAgentResponse"
+	CommandService_UpdateAgentResponse_FullMethodName             = "/feishubotd.v1.CommandService/UpdateAgentResponse"
+	CommandService_FinishAgentResponse_FullMethodName             = "/feishubotd.v1.CommandService/FinishAgentResponse"
+	CommandService_ReplaceAgentResponse_FullMethodName            = "/feishubotd.v1.CommandService/ReplaceAgentResponse"
+	CommandService_UploadAgentImage_FullMethodName                = "/feishubotd.v1.CommandService/UploadAgentImage"
+	CommandService_SendAgentFollowUp_FullMethodName               = "/feishubotd.v1.CommandService/SendAgentFollowUp"
+	CommandService_RetainAgentConversation_FullMethodName         = "/feishubotd.v1.CommandService/RetainAgentConversation"
+	CommandService_ReleaseAgentConversation_FullMethodName        = "/feishubotd.v1.CommandService/ReleaseAgentConversation"
+	CommandService_AddAgentReaction_FullMethodName                = "/feishubotd.v1.CommandService/AddAgentReaction"
+	CommandService_PostAgentMessage_FullMethodName                = "/feishubotd.v1.CommandService/PostAgentMessage"
+	CommandService_PostAgentCard_FullMethodName                   = "/feishubotd.v1.CommandService/PostAgentCard"
+	CommandService_UpdateAgentCard_FullMethodName                 = "/feishubotd.v1.CommandService/UpdateAgentCard"
+	CommandService_PinAgentMessage_FullMethodName                 = "/feishubotd.v1.CommandService/PinAgentMessage"
+	CommandService_CreateAgentChat_FullMethodName                 = "/feishubotd.v1.CommandService/CreateAgentChat"
+	CommandService_InviteAgentChatMembers_FullMethodName          = "/feishubotd.v1.CommandService/InviteAgentChatMembers"
+	CommandService_RenameAgentChat_FullMethodName                 = "/feishubotd.v1.CommandService/RenameAgentChat"
+	CommandService_SetAgentChatAnnouncementSection_FullMethodName = "/feishubotd.v1.CommandService/SetAgentChatAnnouncementSection"
+	CommandService_AdoptAgentChat_FullMethodName                  = "/feishubotd.v1.CommandService/AdoptAgentChat"
+	CommandService_ReleaseAgentChat_FullMethodName                = "/feishubotd.v1.CommandService/ReleaseAgentChat"
 )
 
 // CommandServiceClient is the client API for CommandService service.
@@ -128,6 +129,18 @@ type CommandServiceClient interface {
 	// RenameAgentChat renames a chat this provider created with
 	// CreateAgentChat. Gated by allow_create_chats.
 	RenameAgentChat(ctx context.Context, in *RenameAgentChatRequest, opts ...grpc.CallOption) (*RenameAgentChatResponse, error)
+	// SetAgentChatAnnouncementSection keeps one section of a granted group
+	// chat's announcement (群公告) as the provider last wrote it: a heading with
+	// `title`, followed by the blocks rendered from `markdown`. Only that
+	// section is touched; anything people wrote around it stays. The first
+	// call appends the section at the end; later calls replace its content in
+	// place. A repeated operation_id is a no-op that succeeds. Needs the
+	// provider's allow_announcements and the app scopes
+	// im:chat.announcement:read and im:chat.announcement:write_only.
+	// FAILED_PRECONDITION with class announcement_forbidden (no edit rights,
+	// missing scope) or announcement_unsupported (a legacy, non-docx
+	// announcement) is permanent for that chat; UNAVAILABLE is transient.
+	SetAgentChatAnnouncementSection(ctx context.Context, in *SetAgentChatAnnouncementSectionRequest, opts ...grpc.CallOption) (*SetAgentChatAnnouncementSectionResponse, error)
 	// AdoptAgentChat grants this provider, at runtime, an existing group chat
 	// the bot is already a member of, as CreateAgentChat grants a chat it
 	// creates: the chat is then in the provider's ambient and proactive
@@ -387,6 +400,16 @@ func (c *commandServiceClient) RenameAgentChat(ctx context.Context, in *RenameAg
 	return out, nil
 }
 
+func (c *commandServiceClient) SetAgentChatAnnouncementSection(ctx context.Context, in *SetAgentChatAnnouncementSectionRequest, opts ...grpc.CallOption) (*SetAgentChatAnnouncementSectionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SetAgentChatAnnouncementSectionResponse)
+	err := c.cc.Invoke(ctx, CommandService_SetAgentChatAnnouncementSection_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *commandServiceClient) AdoptAgentChat(ctx context.Context, in *AdoptAgentChatRequest, opts ...grpc.CallOption) (*AdoptAgentChatResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(AdoptAgentChatResponse)
@@ -492,6 +515,18 @@ type CommandServiceServer interface {
 	// RenameAgentChat renames a chat this provider created with
 	// CreateAgentChat. Gated by allow_create_chats.
 	RenameAgentChat(context.Context, *RenameAgentChatRequest) (*RenameAgentChatResponse, error)
+	// SetAgentChatAnnouncementSection keeps one section of a granted group
+	// chat's announcement (群公告) as the provider last wrote it: a heading with
+	// `title`, followed by the blocks rendered from `markdown`. Only that
+	// section is touched; anything people wrote around it stays. The first
+	// call appends the section at the end; later calls replace its content in
+	// place. A repeated operation_id is a no-op that succeeds. Needs the
+	// provider's allow_announcements and the app scopes
+	// im:chat.announcement:read and im:chat.announcement:write_only.
+	// FAILED_PRECONDITION with class announcement_forbidden (no edit rights,
+	// missing scope) or announcement_unsupported (a legacy, non-docx
+	// announcement) is permanent for that chat; UNAVAILABLE is transient.
+	SetAgentChatAnnouncementSection(context.Context, *SetAgentChatAnnouncementSectionRequest) (*SetAgentChatAnnouncementSectionResponse, error)
 	// AdoptAgentChat grants this provider, at runtime, an existing group chat
 	// the bot is already a member of, as CreateAgentChat grants a chat it
 	// creates: the chat is then in the provider's ambient and proactive
@@ -580,6 +615,9 @@ func (UnimplementedCommandServiceServer) InviteAgentChatMembers(context.Context,
 }
 func (UnimplementedCommandServiceServer) RenameAgentChat(context.Context, *RenameAgentChatRequest) (*RenameAgentChatResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RenameAgentChat not implemented")
+}
+func (UnimplementedCommandServiceServer) SetAgentChatAnnouncementSection(context.Context, *SetAgentChatAnnouncementSectionRequest) (*SetAgentChatAnnouncementSectionResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SetAgentChatAnnouncementSection not implemented")
 }
 func (UnimplementedCommandServiceServer) AdoptAgentChat(context.Context, *AdoptAgentChatRequest) (*AdoptAgentChatResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method AdoptAgentChat not implemented")
@@ -936,6 +974,24 @@ func _CommandService_RenameAgentChat_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _CommandService_SetAgentChatAnnouncementSection_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetAgentChatAnnouncementSectionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CommandServiceServer).SetAgentChatAnnouncementSection(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CommandService_SetAgentChatAnnouncementSection_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CommandServiceServer).SetAgentChatAnnouncementSection(ctx, req.(*SetAgentChatAnnouncementSectionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _CommandService_AdoptAgentChat_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(AdoptAgentChatRequest)
 	if err := dec(in); err != nil {
@@ -1042,6 +1098,10 @@ var CommandService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RenameAgentChat",
 			Handler:    _CommandService_RenameAgentChat_Handler,
+		},
+		{
+			MethodName: "SetAgentChatAnnouncementSection",
+			Handler:    _CommandService_SetAgentChatAnnouncementSection_Handler,
 		},
 		{
 			MethodName: "AdoptAgentChat",
