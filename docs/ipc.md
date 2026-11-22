@@ -148,6 +148,7 @@ is supplied.
 | `CreateAgentChat` | Creates a group chat with the bot as owner and grants it to the provider at runtime (`allow_create_chats`). |
 | `InviteAgentChatMembers` | Adds members to a chat the provider created. |
 | `RenameAgentChat` | Renames a chat the provider created. |
+| `SetAgentChatAnnouncementSection` | Keeps one provider-owned section (heading + Markdown body) of a runtime-granted chat's announcement (`allow_announcements`). |
 | `AdoptAgentChat` | Grants an existing group named by a delivered message, or returns its current static alias (`allow_adopt_chats`). |
 | `ReleaseAgentChat` | Removes this provider's created or adopted runtime grant (`allow_adopt_chats`). |
 
@@ -710,6 +711,65 @@ from config leaves its saved grants until an operator removes them by hand.
 Ingress route `Put` writes now occur under the ingress lock after dispatch
 determines recipients; lookups share the lock and wait for publication.
 
+#### Agent chat announcements
+
+`SetAgentChatAnnouncementSection` accepts `provider`, `chat_alias`,
+`operation_id` (128 bytes), `title` (200 bytes, one line; runs of whitespace
+collapse to one space) and `markdown` (16 KiB, at most 49 rendered blocks) and
+returns an empty response. The chat must be granted to the provider at
+runtime, created (`allow_create_chats`) or adopted (`allow_adopt_chats`); any
+other alias, including a static chat or another provider's, is `unknown_chat`
+(`NOT_FOUND`). The RPC needs the bearer-authenticated provider identity and the
+provider's `allow_announcements` (default false; off is `PERMISSION_DENIED`),
+and the app needs the scopes `im:chat.announcement:read` and
+`im:chat.announcement:write_only`.
+
+The section is a heading3 block whose text is `title`, followed by the blocks
+up to (not including) the next heading of any level, or the page end. botd
+records the heading's block id in `state_dir/agent-chat-announcements.json`:
+
+```json
+{"version": 1, "sections": [{"provider": "commons", "chat_alias": "agent-chat-…",
+  "app_alias": "default", "chat_id": "oc_…", "heading_block_id": "doxcn…",
+  "title": "Agent status", "updated_at": "…",
+  "operations": [{"operation_id": "…", "digest": "…", "completed_at": "…"}]}]}
+```
+
+Each call reads the announcement, finds the section by that block id, else by
+the first heading3 whose text is `title` (someone deleted botd's heading),
+else appends heading and content at the end. An existing section's content
+blocks are deleted and the new ones inserted after the heading; when the
+title changed, the heading is replaced in place too. No other block is
+touched. Calls for one chat run one at a time.
+
+Markdown: blank-line-separated paragraphs become text blocks (lines inside a
+paragraph join with a space), lines starting with `- ` or `* ` become bullets,
+and `**bold**`, `` `code` `` and `[label](https://…)` are styled. Everything
+else, including headings, numbered lists and non-http(s) links, is literal
+text.
+
+The last 128 completed `operation_id`s per provider and chat are kept with a
+digest of (`title`, `markdown`): a repeat with the same content succeeds with
+no Feishu call, and with other content is `operation_conflict`
+(`FAILED_PRECONDITION`). Every insert and delete carries a `client_token`
+derived from the provider, operation id, the announcement revision read at
+the start of the call, and the edit; a retry inside the call reuses it, and a
+later retry of a failed operation, which reads a new revision, never replays
+an old insert.
+
+| Error code | gRPC code | Meaning |
+| --- | --- | --- |
+| `announcement_unsupported` | `FAILED_PRECONDITION` | The chat's announcement is not a docx announcement (legacy). Permanent for that chat. |
+| `announcement_forbidden` | `FAILED_PRECONDITION` | Missing scope (99991672, 99991679), no edit rights (1770032, 232043), bot not in chat or other tenant (232011, 232010), bot ability off (232025), or HTTP 403. Permanent until fixed. |
+| `operation_conflict` | `FAILED_PRECONDITION` | `operation_id` reused with a different title or markdown. |
+| `feishu_unavailable` | `UNAVAILABLE` | Timeout, server error, or a rate limit (HTTP 429 / 99991400) that outlasted botd's backoff (four attempts). Retry with the same `operation_id`. |
+| `announcement_store_unavailable` | `UNAVAILABLE` | The announcement was written but the state file was not; retry. |
+
+A failure partway (after a delete, before the insert) leaves the section
+short; retrying the same operation rewrites it. Editing through the API posts
+no message in the chat. See
+[Chat announcements](agent.md#chat-announcements).
+
 #### Agent card actions
 Each `AgentResponseAction` carries a provider-defined `action_id`, label,
 optional JSON-object `payload_json`, and default/primary/danger style. A
@@ -757,10 +817,10 @@ stable machine `code`, a redacted `message`, a `retryable` flag, and a
 | 409 `dedupe_conflict`, `already_responded` | `ALREADY_EXISTS` |
 | 409 `operation_conflict` | `ALREADY_EXISTS` |
 | 409 `dedupe_in_flight`, `response_in_flight`, `operation_in_flight`, `revision_conflict` | `ABORTED` |
-| 412 `response_closed`, `feishu_rejected`, `send_retry_expired`, `send_state_unknown`, `operation_state_unknown` | `FAILED_PRECONDITION` |
+| 412 `response_closed`, `feishu_rejected`, `send_retry_expired`, `send_state_unknown`, `operation_state_unknown`, `announcement_forbidden`, `announcement_unsupported`, and `operation_conflict` from `SetAgentChatAnnouncementSection` | `FAILED_PRECONDITION` |
 | 429 `agent_queue_full` | `RESOURCE_EXHAUSTED` |
 | 501 unimplemented content/services | `UNIMPLEMENTED` |
-| 502 `feishu_unavailable`, 503 `agent_unavailable` | `UNAVAILABLE` |
+| 502 `feishu_unavailable`, 503 `agent_unavailable`, `announcement_store_unavailable` | `UNAVAILABLE` |
 | other / internal | `INTERNAL` |
 
 ## Regenerating bindings

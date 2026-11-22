@@ -52,6 +52,9 @@ delivery does not support store apps):
    `contact:user.email:readonly` (it covers `email`), and make sure the app's
    contact visibility range (通讯录权限范围) includes the people who message the
    bot. The lookup is fail-soft too: without them the address is empty.
+   For a provider granted `allow_announcements`, grant
+   `im:chat.announcement:read` and `im:chat.announcement:write_only`
+   (see [Chat announcements](#chat-announcements)).
 7. Publish a new app version, make the bot available to the intended users, and
    add it to every group in which it should answer.
 
@@ -112,7 +115,8 @@ openssl rand -base64 32 > /run/secrets/feishu-botd-example-agent-token
       "allow_proactive_messages": false,
       "allow_pins": false,
       "allow_create_chats": false,
-      "allow_adopt_chats": false
+      "allow_adopt_chats": false,
+      "allow_announcements": false
     }
   },
   "commands": {
@@ -674,6 +678,55 @@ rights. Both adoption and release return `PERMISSION_DENIED` when
 `allow_adopt_chats` is off. Failure to persist either mutation returns
 `grant_store_unavailable` (`INTERNAL`) and leaves the previous grants intact.
 
+## Chat announcements
+
+A provider can keep one section of a granted chat's announcement (群公告) up
+to date — the Commons Steward keeps a feature's status and links there —
+without touching anything people wrote around it. Enable the default-off
+`allow_announcements` flag. It applies only to chats granted at runtime, so
+it requires `allow_create_chats` or `allow_adopt_chats` (and with them
+`state_dir`):
+
+```json
+"state_dir": "/var/lib/feishu-botd",
+"agent_providers": {
+  "commons": {
+    "allow_ambient_messages": true,
+    "allow_proactive_messages": true,
+    "allow_adopt_chats": true,
+    "allow_announcements": true
+  }
+}
+```
+
+Grant the app `im:chat.announcement:read` and
+`im:chat.announcement:write_only`. The bot must be in the chat and allowed to
+edit its announcement; in a group set so that only owners and admins edit
+the announcement, make the bot an admin.
+
+`SetAgentChatAnnouncementSection(provider, chat_alias, operation_id, title,
+markdown)` writes a heading (heading3) with `title`, followed by the blocks
+rendered from `markdown`: paragraphs, `- ` / `* ` bullets, `**bold**`,
+`` `code` `` and `[label](https://…)` links; anything else stays plain text.
+The section runs to the next heading of any level, so people can add their
+own headed sections before or after it. The first call appends the section
+at the end of the announcement; later calls replace its content in place.
+botd remembers which heading it created in
+`state_dir/agent-chat-announcements.json`. If someone deletes that heading,
+botd takes the first heading3 with the same title, or appends a new section.
+Changing `title` renames the section in place. Editing through the API posts
+no message in the chat.
+
+A repeated `operation_id` with the same content succeeds without calling
+Feishu, even after a restart; with different content it is
+`operation_conflict`. A legacy (non-docx) announcement is
+`announcement_unsupported`, and a missing scope or edit right is
+`announcement_forbidden`; both are `FAILED_PRECONDITION` and will not
+succeed on retry. Feishu allows 3 edits per second per announcement; botd
+retries its rate limit with backoff and then returns `UNAVAILABLE`, as for
+timeouts and server errors. Retry those with the same `operation_id`. See
+[the IPC contract](ipc.md#agent-chat-announcements).
+
 ## Lazy attached topic context
 
 An agent that receives a guide-only prompt can call the server-streaming
@@ -1093,6 +1146,8 @@ degrade to finishing inside the original card.
   for publication. Disk writes therefore also hold up concurrent ingress.
   `agent-chat-grants.json` keeps created and adopted chat grants, including
   grant kinds and created chats' operation ids.
+  `agent-chat-announcements.json` keeps each provider's announcement section
+  heading block id and its last 128 completed operation ids.
   `PostAgentMessage`, `PostAgentCard`, and `UpdateAgentCard` operation
   receipts and ambient deduplication stay in memory like every other operation
   record.
