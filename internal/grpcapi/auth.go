@@ -34,6 +34,7 @@ type providerPrincipal struct {
 	allowAmbientMessages    bool
 	allowProactiveMessages  bool
 	allowPins               bool
+	allowAnnouncements      bool
 	allowCreateChats        bool
 	allowAdoptChats         bool
 }
@@ -85,6 +86,7 @@ func newProviderAuthenticator(providers map[string]config.AgentProviderConfig) p
 				allowAmbientMessages:    providerCfg.AllowAmbientMessages,
 				allowProactiveMessages:  providerCfg.AllowProactiveMessages,
 				allowPins:               providerCfg.AllowPins,
+				allowAnnouncements:      providerCfg.AllowAnnouncements,
 				allowCreateChats:        providerCfg.AllowCreateChats,
 				allowAdoptChats:         providerCfg.AllowAdoptChats,
 			},
@@ -124,6 +126,7 @@ func isAgentMethod(fullMethod string) bool {
 		pb.CommandService_CreateAgentChat_FullMethodName,
 		pb.CommandService_InviteAgentChatMembers_FullMethodName,
 		pb.CommandService_RenameAgentChat_FullMethodName,
+		pb.CommandService_SetAgentChatAnnouncementSection_FullMethodName,
 		pb.CommandService_AdoptAgentChat_FullMethodName,
 		pb.CommandService_ReleaseAgentChat_FullMethodName:
 		return true
@@ -493,6 +496,20 @@ func authorizeAgentChatAdoption(ctx context.Context, requested string) error {
 	}
 	principal, _ := authenticatedProvider(ctx)
 	if !principal.allowAdoptChats {
+		return providerScopeDenied(ctx)
+	}
+	return nil
+}
+
+// authorizeAgentAnnouncements gates SetAgentChatAnnouncementSection. Which
+// chats it may edit is the service's narrower check against the chats
+// granted to the provider at runtime.
+func authorizeAgentAnnouncements(ctx context.Context, requested string) error {
+	if err := requireProviderIdentity(ctx, requested); err != nil {
+		return err
+	}
+	principal, _ := authenticatedProvider(ctx)
+	if !principal.allowAnnouncements {
 		return providerScopeDenied(ctx)
 	}
 	return nil

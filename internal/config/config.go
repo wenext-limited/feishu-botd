@@ -142,6 +142,12 @@ type AgentProviderConfig struct {
 	// the chat. It addresses messages through the same retained routes as
 	// PostAgentMessage, so it requires AllowProactiveMessages.
 	AllowPins bool
+	// AllowAnnouncements permits SetAgentChatAnnouncementSection: keeping one
+	// section of a granted chat's announcement (群公告), which every member
+	// sees. It applies only to chats the provider created or adopted at
+	// runtime, so it requires AllowCreateChats or AllowAdoptChats, and the
+	// section's state lives under state_dir.
+	AllowAnnouncements bool
 	// AllowCreateChats permits CreateAgentChat, InviteAgentChatMembers, and
 	// RenameAgentChat: creating group chats with the bot as owner. A chat the
 	// provider creates is granted to it at runtime (RuntimeChats), as if it
@@ -399,6 +405,20 @@ func (c Config) ProviderAllowsPins(provider string) bool {
 	return configured && providerCfg.AllowPins
 }
 
+// ProviderAllowsAnnouncements reports whether the provider may call
+// SetAgentChatAnnouncementSection.
+func (c Config) ProviderAllowsAnnouncements(provider string) bool {
+	providerCfg, configured := c.AgentProviders[strings.TrimSpace(provider)]
+	return configured && providerCfg.AllowAnnouncements
+}
+
+// ProviderAllowsRuntimeChat reports whether provider holds a live runtime
+// grant (created or adopted) for chatAlias, with the flag that grant kind
+// needs still on.
+func (c Config) ProviderAllowsRuntimeChat(provider, chatAlias string) bool {
+	return c.providerAllowsRuntimeChat(provider, chatAlias)
+}
+
 // ProviderAllowsProactiveChat is the per-chat proactive check, applied to a
 // new root message's alias and to the chat a reply target lives in.
 func (c Config) ProviderAllowsProactiveChat(provider, chatAlias string) bool {
@@ -614,6 +634,7 @@ func LoadFromEnv() (Config, error) {
 			AllowProactiveMessages:   providerCfg.AllowProactiveMessages,
 			ProactiveChatAliases:     cloneStrings(providerCfg.ProactiveChatAliases),
 			AllowPins:                providerCfg.AllowPins,
+			AllowAnnouncements:       providerCfg.AllowAnnouncements,
 			AllowCreateChats:         providerCfg.AllowCreateChats,
 			AllowAdoptChats:          providerCfg.AllowAdoptChats,
 			AllowSenderEmail:         providerCfg.AllowSenderEmail,
@@ -647,6 +668,12 @@ func LoadFromEnv() (Config, error) {
 		// a proactive provider's messages are retained in.
 		if providerCfg.AllowPins && !providerCfg.AllowProactiveMessages {
 			return Config{}, fmt.Errorf("provider %q allow_pins requires allow_proactive_messages", provider)
+		}
+		// An announcement section is kept only in chats granted at runtime,
+		// and which block is the provider's is remembered under state_dir.
+		if providerCfg.AllowAnnouncements &&
+			(!providerCfg.AllowCreateChats && !providerCfg.AllowAdoptChats || cfg.StateDir == "") {
+			return Config{}, fmt.Errorf("provider %q allow_announcements requires allow_create_chats or allow_adopt_chats, and state_dir", provider)
 		}
 		// A created chat is granted for ambient and proactive messages, and
 		// the grant is kept under state_dir.
@@ -766,6 +793,7 @@ type fileAgentProviderConfig struct {
 	AllowProactiveMessages  bool               `json:"allow_proactive_messages"`
 	ProactiveChatAliases    []string           `json:"proactive_chat_aliases"`
 	AllowPins               bool               `json:"allow_pins"`
+	AllowAnnouncements      bool               `json:"allow_announcements"`
 	AllowCreateChats        bool               `json:"allow_create_chats"`
 	AllowAdoptChats         bool               `json:"allow_adopt_chats"`
 	AllowSenderEmail        bool               `json:"allow_sender_email"`
@@ -1467,6 +1495,7 @@ func normalizeAgentProviderConfigs(in map[string]fileAgentProviderConfig) (map[s
 			AllowProactiveMessages:         providerCfg.AllowProactiveMessages,
 			ProactiveChatAliases:           proactiveChats,
 			AllowPins:                      providerCfg.AllowPins,
+			AllowAnnouncements:             providerCfg.AllowAnnouncements,
 			AllowCreateChats:               providerCfg.AllowCreateChats,
 			AllowAdoptChats:                providerCfg.AllowAdoptChats,
 			AllowSenderEmail:               providerCfg.AllowSenderEmail,

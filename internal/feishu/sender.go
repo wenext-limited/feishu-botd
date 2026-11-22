@@ -87,15 +87,23 @@ type ordinaryPostElement struct {
 }
 
 type ChannelSender struct {
-	appID           string
-	appSecret       string
-	client          *lark.Client
-	cardAPI         cardKitCardAPI
-	cardReplaceAPI  cardKitCardReplaceAPI
-	pinAPI          pinAPI
-	chatAPI         chatAPI
-	chatMembersAPI  chatMembersAPI
-	elementAPI      cardKitElementAPI
+	appID          string
+	appSecret      string
+	client         *lark.Client
+	cardAPI        cardKitCardAPI
+	cardReplaceAPI cardKitCardReplaceAPI
+	pinAPI         pinAPI
+	chatAPI        chatAPI
+	chatMembersAPI chatMembersAPI
+	elementAPI     cardKitElementAPI
+
+	announcementAPI         chatAnnouncementAPI
+	announcementBlockAPI    chatAnnouncementBlockAPI
+	announcementChildrenAPI chatAnnouncementChildrenAPI
+	// Announcement edits retry Feishu's rate limit on their own schedule.
+	announcementMaxAttempts int
+	announcementRetryBase   time.Duration
+
 	messageAPI      cardKitMessageAPI
 	reactionAPI     reactionAPI
 	contactUserAPI  contactUserAPI
@@ -125,20 +133,24 @@ func NewChannelSender(appID, appSecret string, logger *slog.Logger) *ChannelSend
 		lark.WithLogger(safeSDKLogger{logger: logger}),
 	)
 	return &ChannelSender{
-		appID:           appID,
-		appSecret:       appSecret,
-		client:          client,
-		cardAPI:         client.Cardkit.V1.Card,
-		cardReplaceAPI:  client.Cardkit.V1.Card,
-		pinAPI:          client.Im.V1.Pin,
-		chatAPI:         client.Im.V1.Chat,
-		chatMembersAPI:  client.Im.V1.ChatMembers,
-		elementAPI:      client.Cardkit.V1.CardElement,
-		messageAPI:      client.Im.V1.Message,
-		reactionAPI:     client.Im.V1.MessageReaction,
-		contactUserAPI:  client.Contact.V3.User,
-		imageAPI:        client.Im.V1.Image,
-		attachedContext: newSDKAttachedContextLookup(client.Im.V1.Message, client.Im.V1.MessageResource),
+		appID:          appID,
+		appSecret:      appSecret,
+		client:         client,
+		cardAPI:        client.Cardkit.V1.Card,
+		cardReplaceAPI: client.Cardkit.V1.Card,
+		pinAPI:         client.Im.V1.Pin,
+		chatAPI:        client.Im.V1.Chat,
+		chatMembersAPI: client.Im.V1.ChatMembers,
+
+		announcementAPI:         client.Docx.V1.ChatAnnouncement,
+		announcementBlockAPI:    client.Docx.V1.ChatAnnouncementBlock,
+		announcementChildrenAPI: client.Docx.V1.ChatAnnouncementBlockChildren,
+		elementAPI:              client.Cardkit.V1.CardElement,
+		messageAPI:              client.Im.V1.Message,
+		reactionAPI:             client.Im.V1.MessageReaction,
+		contactUserAPI:          client.Contact.V3.User,
+		imageAPI:                client.Im.V1.Image,
+		attachedContext:         newSDKAttachedContextLookup(client.Im.V1.Message, client.Im.V1.MessageResource),
 	}
 }
 

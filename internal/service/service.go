@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"feishu-botd/internal/announcement"
 	"feishu-botd/internal/chatgrant"
 	"feishu-botd/internal/config"
 	"feishu-botd/internal/dedupe"
@@ -47,6 +48,7 @@ type appBackend struct {
 	agentCards      feishu.AgentCards
 	pinner          feishu.MessagePinner
 	chats           feishu.AgentChats
+	announcements   feishu.ChatAnnouncements
 	// senderEmails resolves and caches senders' company addresses for
 	// providers granted allow_sender_email; senderEmailWarned keeps a failing
 	// lookup to one log line until the next success.
@@ -91,6 +93,10 @@ type Service struct {
 	// cannot create duplicate grants or race a release with an adoption.
 	agentChatMu        sync.Mutex
 	conversationLeases *conversationLeases
+	// agentAnnouncements remembers each provider's announcement section;
+	// agentAnnouncementLocks runs one announcement edit per chat at a time.
+	agentAnnouncements     *announcement.Store
+	agentAnnouncementLocks *chatLocks
 }
 
 type agentOwnershipStore interface {
@@ -163,6 +169,9 @@ func newService(
 		agentCardPosts:   newAgentPostLedger(cfg.DedupeTTL),
 		agentCardUpdates: newAgentCardUpdateLedger(cfg.DedupeTTL),
 		agentCardLanes:   newAgentCardLanes(),
+
+		agentAnnouncements:     announcement.NewMemory(),
+		agentAnnouncementLocks: newChatLocks(),
 	}
 	svc.cfgRef.Store(&cfg)
 	svc.redactorRef.Store(newRedactor(cfg))
@@ -234,6 +243,9 @@ func newAppBackend(sender feishu.Sender) appBackend {
 	}
 	if chats, ok := sender.(feishu.AgentChats); ok {
 		backend.chats = chats
+	}
+	if announcements, ok := sender.(feishu.ChatAnnouncements); ok {
+		backend.announcements = announcements
 	}
 	return backend
 }
