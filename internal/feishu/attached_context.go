@@ -469,7 +469,8 @@ func (s *sdkAttachedContextLookup) snapshotCandidates(
 			ContainerIdType("thread").
 			ContainerId(in.ThreadID).
 			SortType("ByCreateTimeDesc").
-			PageSize(attachedContextPageSize)
+			PageSize(attachedContextPageSize).
+			CardMsgContentType(attachedCardContentType)
 		if seconds := feishuMillisecondsToSeconds(in.TriggerCreateTime); seconds != "" {
 			builder.EndTime(seconds)
 		}
@@ -633,6 +634,13 @@ func parseAttachedMessageContent(message *larkim.Message, grants attachedCarryGr
 		return parsedAttachedMessage{text: placeholderAudio}, []AttachedContextIssueCode{AttachedContextIssueUnsupportedMessage}, false
 	case "sticker":
 		return parsedAttachedMessage{text: placeholderSticker}, []AttachedContextIssueCode{AttachedContextIssueUnsupportedMessage}, false
+	case "interactive":
+		// Cards are how agents (iBot included) answer; their text is the
+		// conversation as much as any post. Card images are not carried.
+		if text := parseAttachedCard(content); text != "" {
+			return parsedAttachedMessage{text: text}, nil, false
+		}
+		return parsedAttachedMessage{text: placeholderUnsupported}, []AttachedContextIssueCode{AttachedContextIssueUnsupportedMessage}, false
 	case "system":
 		// Conversational chrome ("… joined the topic"), not content: a
 		// placeholder row would only add noise between real messages.

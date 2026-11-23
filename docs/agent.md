@@ -760,7 +760,13 @@ below for the granted case), a file message becomes
 below), and audio/sticker/other kinds become typed
 `[unsupported …]` rows (counted as `UNSUPPORTED_MESSAGE`) — so a topic whose
 only content is a video still resolves `FOUND` and the provider can address
-the question around it. MIME types are detected from bytes and allowlisted
+the question around it. Interactive cards — including agents' own CardKit
+answers — are read as text: botd lists topic history with
+`card_msg_content_type=raw_card_content` and flattens the rendered card
+(prose, inline code, links, code blocks and tables; card images are not
+carried, mentions become `@participant`). Without the raw form, Feishu returns
+schema-2.0 cards as a fixed "upgrade your client" stub, which botd discards; a
+card with no readable text still becomes `[unsupported message]`. MIME types are detected from bytes and allowlisted
 rather than trusted from message metadata. Provider-visible output contains no
 Feishu message id, thread id, image key, or stable participant id.
 
