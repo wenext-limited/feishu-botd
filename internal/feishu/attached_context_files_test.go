@@ -109,8 +109,10 @@ func TestAttachedContextLookupCollectsGrantedFile(t *testing.T) {
 
 func TestAttachedContextLookupDownloadsTriggerFileWithoutAThread(t *testing.T) {
 	data := []byte("2026-11-19 ERROR something broke\n")
+	// Use .txt rather than .log: Linux's system MIME database maps .log to
+	// text/x-log whereas macOS leaves it unmapped (falling back to text/plain).
 	history := &fakeThreadMessageAPI{responses: []*larkim.ListMessageResp{listMessageResponse(false, "",
-		threadMessage("om_guide", "file", fileMessageContent("file_log", "app.log"), "2000", "ou_guide", "user"),
+		threadMessage("om_guide", "file", fileMessageContent("file_log", "app.txt"), "2000", "ou_guide", "user"),
 	)}}
 	resources := &orderedFakeMessageResourceAPI{data: [][]byte{data}}
 	lookup := newSDKAttachedContextLookup(history, resources)
@@ -123,8 +125,9 @@ func TestAttachedContextLookupDownloadsTriggerFileWithoutAThread(t *testing.T) {
 	if got.Status != AttachedContextFound || len(got.Messages) != 1 || len(got.Messages[0].Files) != 1 {
 		t.Fatalf("context = %#v", got)
 	}
-	if got.Messages[0].Files[0].MediaType != "text/plain" {
-		t.Fatalf("media type = %q, want text/plain", got.Messages[0].Files[0].MediaType)
+	file := got.Messages[0].Files[0]
+	if file.MediaType != "text/plain" || !bytes.Equal(file.Data, data) || file.FileName != "app.txt" {
+		t.Fatalf("file = {%q %d bytes %q}, want text/plain %d bytes %q", file.MediaType, len(file.Data), file.FileName, len(data), "app.txt")
 	}
 }
 
