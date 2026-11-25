@@ -83,6 +83,11 @@
       "default_channel": "ops"
     }
   },
+  "direct_messages": {
+    "app": "default",
+    "allowed_email_domains": ["example.com"],
+    "allowed_sources": ["github-bridge"]
+  },
   "dedupe_ttl_seconds": 21600,
   "send_timeout_seconds": 15
 }

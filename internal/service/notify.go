@@ -5,10 +5,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"strings"
 
 	"feishu-botd/internal/config"
 	"feishu-botd/internal/dedupe"
+	"feishu-botd/internal/feishu"
 	"feishu-botd/internal/notify"
 )
 
@@ -17,6 +19,11 @@ import (
 // NotificationService.SendNotification. Deduplication is always enabled, so the
 // caller-supplied source + dedupe_key make the call idempotent.
 func (s *Service) SendNotification(ctx context.Context, req notify.Request) (notify.Response, *notify.APIError) {
+	if strings.TrimSpace(req.Target.UserEmail) != "" {
+		// Never fall back to the default channel for a request addressed to a
+		// person: that would post their message somewhere public.
+		return notify.Response{}, notify.BadRequest("unsupported_target", "target.user_email is only supported by SendMessage")
+	}
 	req.Target.Channel = s.resolveChannel(req.Target.Channel, req.Source)
 	if apiErr := req.Validate(s.cfg().Channels); apiErr != nil {
 		return notify.Response{}, apiErr
@@ -46,7 +53,10 @@ func (s *Service) SendNotification(ctx context.Context, req notify.Request) (not
 // v1 supports markdown and raw Feishu interactive-card JSON. Other content
 // kinds are rejected by the transport adapter before reaching the service.
 type MessageInput struct {
-	Channel          string
+	Channel string
+	// UserEmail targets one person by Feishu email instead of a channel. It is
+	// gated by config.DirectMessages (recipient domain and source).
+	UserEmail        string
 	Source           string
 	DedupeKey        string
 	Title            string
@@ -58,12 +68,28 @@ type MessageInput struct {
 // SendMessage is the lower-level send path. Deduplication applies only when a
 // dedupe key is supplied; otherwise every call sends.
 func (s *Service) SendMessage(ctx context.Context, in MessageInput) (SendResult, *notify.APIError) {
-	channel := s.resolveChannel(in.Channel, in.Source)
-	if channel == "" {
-		return SendResult{}, notify.BadRequest("missing_channel", "target.channel is required")
-	}
-	if _, _, ok := s.cfg().ResolveChannel(channel); !ok {
-		return SendResult{}, notify.NewAPIError(404, "unknown_channel", "unknown channel", false)
+	var target notify.Target
+	if strings.TrimSpace(in.UserEmail) != "" {
+		if strings.TrimSpace(in.Channel) != "" {
+			return SendResult{}, notify.BadRequest("invalid_target", "exactly one of target.channel and target.user_email is allowed")
+		}
+		if strings.TrimSpace(in.ReplyToMessageID) != "" {
+			return SendResult{}, notify.BadRequest("invalid_target", "a reply cannot target target.user_email")
+		}
+		email, apiErr := s.directMessageEmail(in.Source, in.UserEmail)
+		if apiErr != nil {
+			return SendResult{}, apiErr
+		}
+		target.UserEmail = email
+	} else {
+		channel := s.resolveChannel(in.Channel, in.Source)
+		if channel == "" {
+			return SendResult{}, notify.BadRequest("missing_channel", "target.channel is required")
+		}
+		if _, _, ok := s.cfg().ResolveChannel(channel); !ok {
+			return SendResult{}, notify.NewAPIError(404, "unknown_channel", "unknown channel", false)
+		}
+		target.Channel = channel
 	}
 	markdown := strings.TrimSpace(in.Markdown)
 	cardJSON := strings.TrimSpace(in.CardJSON)
@@ -91,10 +117,28 @@ func (s *Service) SendMessage(ctx context.Context, in MessageInput) (SendResult,
 		Title:            in.Title,
 		Markdown:         in.Markdown,
 		CardJSON:         in.CardJSON,
-		Target:           notify.Target{Channel: channel},
+		Target:           target,
 		ReplyToMessageID: in.ReplyToMessageID,
 	}
 	return s.deliver(ctx, req, strings.TrimSpace(in.DedupeKey) != "")
+}
+
+// directMessageEmail validates a user_email target and checks it against the
+// direct_messages gate. The domain is lowercased (domains are
+// case-insensitive); the local part is kept as given.
+func (s *Service) directMessageEmail(source, raw string) (string, *notify.APIError) {
+	email := strings.TrimSpace(raw)
+	at := strings.IndexByte(email, '@')
+	if len(email) > 254 || at <= 0 || at == len(email)-1 || strings.Count(email, "@") != 1 ||
+		strings.IndexFunc(email, func(r rune) bool { return r <= ' ' || r == 0x7f }) >= 0 {
+		return "", notify.BadRequest("invalid_user_email", "target.user_email is not a valid email address")
+	}
+	email = email[:at+1] + strings.ToLower(email[at+1:])
+	gate := s.cfg().DirectMessages
+	if !gate.Enabled() || !gate.AllowsSource(source) || !gate.AllowsEmail(email) {
+		return "", notify.NewAPIError(403, "direct_message_denied", "direct messages to this address are not allowed for this source", false)
+	}
+	return email, nil
 }
 
 func (s *Service) resolveChannel(channel, source string) string {
@@ -121,9 +165,16 @@ func validateCardJSON(cardJSON string) *notify.APIError {
 // touched. The channel alias in req.Target is assumed to already be validated
 // against config by the caller.
 func (s *Service) deliver(ctx context.Context, req notify.Request, dedupeEnabled bool) (SendResult, *notify.APIError) {
-	appAlias, chatID, ok := s.cfg().ResolveChannel(req.Target.Channel)
-	if !ok {
-		return SendResult{}, notify.NewAPIError(404, "unknown_channel", "unknown channel", false)
+	var appAlias, chatID string
+	if email := req.Target.UserEmail; email != "" {
+		// SendMessage already checked the gate; the email is the receive id.
+		appAlias, chatID = s.cfg().DirectMessages.AppAlias(), email
+	} else {
+		var ok bool
+		appAlias, chatID, ok = s.cfg().ResolveChannel(req.Target.Channel)
+		if !ok {
+			return SendResult{}, notify.NewAPIError(404, "unknown_channel", "unknown channel", false)
+		}
 	}
 	backend, ok := s.backendForApp(appAlias)
 	if !ok {
@@ -152,6 +203,12 @@ func (s *Service) deliver(ctx context.Context, req notify.Request, dedupeEnabled
 			s.store.Abort(dedupeSource, req.DedupeKey)
 		}
 		s.logFeishuFailure("notify", "notification", notificationLogIdentity(req), err)
+		var sendErr *feishu.MessageSendError
+		if req.Target.UserEmail != "" && errors.As(err, &sendErr) && sendErr.Class == "api_rejected" && !sendErr.Retryable {
+			// Feishu refused this recipient (unknown email, outside the app's
+			// availability, …): retrying the same request cannot succeed.
+			return SendResult{}, notify.NewAPIError(422, "direct_message_rejected", "Feishu rejected the direct message recipient", false)
+		}
 		return SendResult{}, notify.NewAPIError(502, "feishu_unavailable", "Feishu send failed", true)
 	}
 

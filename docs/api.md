@@ -115,6 +115,11 @@ may be omitted when `source` has a configured service default. Dedupe state is
 scoped to the resolved app, so reusing the same source/key against aliases owned
 by two different apps does not create a cross-app duplicate or conflict.
 
+`target.user_email` sends a direct message to one person instead of a channel,
+when the daemon's `direct_messages` config allows both the address's domain and
+`source` (see `SendMessage` in [ipc.md](ipc.md)). It is refused with 403
+`direct_message_denied` otherwise, and is not accepted by `POST /v1/notify`.
+
 Markdown:
 
 ```json

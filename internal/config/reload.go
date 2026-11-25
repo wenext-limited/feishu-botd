@@ -112,6 +112,7 @@ func PlanReload(running, next Config) ReloadPlan {
 	}
 	live("default_channel", running.DefaultChannel != next.DefaultChannel)
 	live("services", !reflect.DeepEqual(nilIfEmpty(running.Services), nilIfEmpty(next.Services)))
+	live("direct_messages", !reflect.DeepEqual(running.DirectMessages, next.DirectMessages))
 	live("send_timeout_seconds", running.SendTimeout != next.SendTimeout)
 	live("listeners.auth_token_file", running.AuthToken != next.AuthToken)
 

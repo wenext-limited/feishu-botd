@@ -109,6 +109,23 @@ Put Feishu app credentials, channel aliases, and service defaults in
 `"source": "build-monitor"` without repeating
 `"target": { "channel": "ci" }` in every request.
 
+Direct messages by email (`SendMessage` with `target.user_email`) stay off
+until `direct_messages` allows them:
+
+```json
+"direct_messages": {
+  "app": "default",
+  "allowed_email_domains": ["example.com"],
+  "allowed_sources": ["github-bridge"]
+}
+```
+
+`app` picks which app's bot sends the DM (default: the default app). Domains
+match exactly — subdomains are not included — and both lists are required.
+The notification bearer is shared by all callers, so `source` is the only
+caller identity; keep the source list to the services that need DMs. The bot
+can only reach users inside its app's availability range.
+
 Set `FEISHU_BOTD_HOST_IP` to the Docker host's LAN IP when possible, such as
 `192.0.2.10` (a documentation address; replace it with the real host address).
 Leaving it as `0.0.0.0` exposes the service on every host
@@ -223,7 +240,7 @@ running on the previous config. Otherwise it applies only what changed:
 
 | Change | Effect |
 | --- | --- |
-| Channels, `default_channel`, `services`, commands, bot identity, scripts, `send_timeout_seconds` | Applied in place. No Feishu connection is touched. |
+| Channels, `default_channel`, `services`, `direct_messages`, commands, bot identity, scripts, `send_timeout_seconds` | Applied in place. No Feishu connection is touched. |
 | An app added or removed | Only that app's connection starts or stops. |
 | An app's `app_id` or `app_secret` | Only that app reconnects; its old connection closes once the new one is up. |
 | A provider added | Its token works at once. |

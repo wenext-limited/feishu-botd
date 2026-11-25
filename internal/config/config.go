@@ -68,6 +68,7 @@ type Config struct {
 	ChannelRoutes  map[string]ChannelRoute
 	DefaultChannel string
 	Services       map[string]ServiceConfig
+	DirectMessages DirectMessagesConfig
 	DedupeTTL      time.Duration
 	SendTimeout    time.Duration
 	// RuntimeChats holds the chats providers created or adopted at runtime.
@@ -207,6 +208,102 @@ type ScriptExecConfig struct {
 
 type ServiceConfig struct {
 	DefaultChannel string `json:"default_channel"`
+}
+
+// DirectMessagesConfig gates NotificationService.SendMessage's user_email
+// target: a direct message to a person resolved by Feishu from their email.
+// The notification bearer is shared by every caller and identifies none, so
+// the gate is the recipient's domain plus the caller-declared source. An
+// absent block (no domains) refuses every user_email target.
+type DirectMessagesConfig struct {
+	// App is the alias of the app whose bot sends the DM; "" means default.
+	App string `json:"app"`
+	// AllowedEmailDomains are exact recipient domains, e.g. "example.com".
+	AllowedEmailDomains []string `json:"allowed_email_domains"`
+	// AllowedSources are the SendMessage source values allowed to DM.
+	AllowedSources []string `json:"allowed_sources"`
+}
+
+// Enabled reports whether any user_email target can be accepted.
+func (d DirectMessagesConfig) Enabled() bool {
+	return len(d.AllowedEmailDomains) > 0 && len(d.AllowedSources) > 0
+}
+
+// AppAlias is the sending app, defaulting to the default app.
+func (d DirectMessagesConfig) AppAlias() string {
+	if alias := strings.TrimSpace(d.App); alias != "" {
+		return alias
+	}
+	return DefaultAppAlias
+}
+
+// AllowsSource reports whether source may send user_email targets.
+func (d DirectMessagesConfig) AllowsSource(source string) bool {
+	source = strings.TrimSpace(source)
+	for _, allowed := range d.AllowedSources {
+		if source != "" && allowed == source {
+			return true
+		}
+	}
+	return false
+}
+
+// AllowsEmail reports whether a normalized (lowercase) email's domain is
+// allowed. Only an exact domain matches: a subdomain is a different domain.
+func (d DirectMessagesConfig) AllowsEmail(email string) bool {
+	at := strings.LastIndexByte(email, '@')
+	if at <= 0 || at == len(email)-1 {
+		return false
+	}
+	domain := email[at+1:]
+	for _, allowed := range d.AllowedEmailDomains {
+		if allowed == domain {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeDirectMessages(in DirectMessagesConfig) (DirectMessagesConfig, error) {
+	out := DirectMessagesConfig{App: strings.TrimSpace(in.App)}
+	seen := map[string]bool{}
+	for _, raw := range in.AllowedEmailDomains {
+		domain := strings.ToLower(strings.TrimSpace(raw))
+		if domain == "" || strings.ContainsAny(domain, "@ \t*") || !strings.Contains(domain, ".") {
+			return DirectMessagesConfig{}, fmt.Errorf("direct_messages.allowed_email_domains: %q is not a bare domain like example.com", raw)
+		}
+		if !seen[domain] {
+			seen[domain] = true
+			out.AllowedEmailDomains = append(out.AllowedEmailDomains, domain)
+		}
+	}
+	seenSources := map[string]bool{}
+	for _, raw := range in.AllowedSources {
+		source := strings.TrimSpace(raw)
+		if source == "" || len(source) > 64 {
+			return DirectMessagesConfig{}, fmt.Errorf("direct_messages.allowed_sources: %q is not a valid source", raw)
+		}
+		if !seenSources[source] {
+			seenSources[source] = true
+			out.AllowedSources = append(out.AllowedSources, source)
+		}
+	}
+	hasDomains, hasSources := len(out.AllowedEmailDomains) > 0, len(out.AllowedSources) > 0
+	if hasDomains != hasSources || (out.App != "" && !hasDomains) {
+		return DirectMessagesConfig{}, errors.New("direct_messages needs both allowed_email_domains and allowed_sources")
+	}
+	return out, nil
+}
+
+func validateDirectMessages(cfg Config) error {
+	if !cfg.DirectMessages.Enabled() {
+		return nil
+	}
+	alias := cfg.DirectMessages.AppAlias()
+	if _, ok := cfg.EffectiveApps()[alias]; !ok {
+		return fmt.Errorf("direct_messages.app %q is not a configured app", alias)
+	}
+	return nil
 }
 
 // EffectiveApps returns a defensive copy of the canonical app registry. The
@@ -564,6 +661,7 @@ func LoadFromEnv() (Config, error) {
 		Apps:           cloneApps(fileCfg.Apps),
 		DefaultChannel: firstNonEmpty(os.Getenv("FEISHU_BOTD_DEFAULT_CHANNEL"), fileCfg.DefaultChannel),
 		Services:       fileCfg.Services,
+		DirectMessages: fileCfg.DirectMessages,
 		DedupeTTL:      durationFromEnv("FEISHU_BOTD_DEDUPE_TTL_SECONDS", fileCfg.DedupeTTL),
 		SendTimeout:    durationFromEnv("FEISHU_BOTD_SEND_TIMEOUT_SECONDS", fileCfg.SendTimeout),
 	}
@@ -601,6 +699,9 @@ func LoadFromEnv() (Config, error) {
 		return Config{}, errors.New("at least one listener is required: set FEISHU_BOTD_SOCKET, FEISHU_BOTD_BIND, FEISHU_BOTD_GRPC_SOCKET, FEISHU_BOTD_GRPC_BIND, or config listeners")
 	}
 	if err := validateRouting(cfg); err != nil {
+		return Config{}, err
+	}
+	if err := validateDirectMessages(cfg); err != nil {
 		return Config{}, err
 	}
 	for provider, providerCfg := range fileCfg.AgentProviders {
@@ -754,6 +855,7 @@ type fileConfig struct {
 	Apps           map[string]AppConfig
 	DefaultChannel string
 	Services       map[string]ServiceConfig
+	DirectMessages DirectMessagesConfig
 	DedupeTTL      time.Duration
 	SendTimeout    time.Duration
 }
@@ -766,6 +868,7 @@ type configFile struct {
 	Channels           map[string]string                  `json:"channels"`
 	DefaultChannel     string                             `json:"default_channel"`
 	Services           map[string]ServiceConfig           `json:"services"`
+	DirectMessages     DirectMessagesConfig               `json:"direct_messages"`
 	AgentProviders     map[string]fileAgentProviderConfig `json:"agent_providers"`
 	StateDir           string                             `json:"state_dir"`
 	DedupeTTLSeconds   int                                `json:"dedupe_ttl_seconds"`
@@ -895,6 +998,11 @@ func loadFileConfig(path string) (fileConfig, error) {
 	cfg.Channels = channels
 	cfg.DefaultChannel = normalizeChannelName(raw.DefaultChannel)
 	cfg.Services = normalizeServices(raw.Services)
+	directMessages, err := normalizeDirectMessages(raw.DirectMessages)
+	if err != nil {
+		return fileConfig{}, err
+	}
+	cfg.DirectMessages = directMessages
 	if raw.DedupeTTLSeconds > 0 {
 		cfg.DedupeTTL = time.Duration(raw.DedupeTTLSeconds) * time.Second
 	}

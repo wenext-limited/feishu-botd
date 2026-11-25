@@ -85,6 +85,7 @@ type MessageTarget struct {
 	// Types that are valid to be assigned to To:
 	//
 	//	*MessageTarget_Channel
+	//	*MessageTarget_UserEmail
 	To            isMessageTarget_To `protobuf_oneof:"to"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -136,16 +137,35 @@ func (x *MessageTarget) GetChannel() string {
 	return ""
 }
 
+func (x *MessageTarget) GetUserEmail() string {
+	if x != nil {
+		if x, ok := x.To.(*MessageTarget_UserEmail); ok {
+			return x.UserEmail
+		}
+	}
+	return ""
+}
+
 type isMessageTarget_To interface {
 	isMessageTarget_To()
 }
 
 type MessageTarget_Channel struct {
-	// Channel alias, e.g. "ops". The only variant implemented in v1.
+	// Channel alias, e.g. "ops".
 	Channel string `protobuf:"bytes,1,opt,name=channel,proto3,oneof"`
 }
 
+type MessageTarget_UserEmail struct {
+	// Direct message to the person whose Feishu email this is, e.g.
+	// "dev@example.com". NotificationService.SendMessage only; refused unless
+	// the daemon's direct_messages config allows both the email's domain and
+	// the request's source. SendNotification rejects it.
+	UserEmail string `protobuf:"bytes,2,opt,name=user_email,json=userEmail,proto3,oneof"`
+}
+
 func (*MessageTarget_Channel) isMessageTarget_To() {}
+
+func (*MessageTarget_UserEmail) isMessageTarget_To() {}
 
 // Link is an optional labeled URL attached to a notification.
 type Link struct {
@@ -422,10 +442,12 @@ var File_feishubotd_v1_common_proto protoreflect.FileDescriptor
 
 const file_feishubotd_v1_common_proto_rawDesc = "" +
 	"\n" +
-	"\x1afeishubotd/v1/common.proto\x12\rfeishubotd.v1\"7\n" +
+	"\x1afeishubotd/v1/common.proto\x12\rfeishubotd.v1\"X\n" +
 	"\rMessageTarget\x12\x1a\n" +
-	"\achannel\x18\x01 \x01(\tH\x00R\achannelB\x04\n" +
-	"\x02toJ\x04\b\x02\x10\x10\".\n" +
+	"\achannel\x18\x01 \x01(\tH\x00R\achannel\x12\x1f\n" +
+	"\n" +
+	"user_email\x18\x02 \x01(\tH\x00R\tuserEmailB\x04\n" +
+	"\x02toJ\x04\b\x03\x10\x10\".\n" +
 	"\x04Link\x12\x14\n" +
 	"\x05label\x18\x01 \x01(\tR\x05label\x12\x10\n" +
 	"\x03url\x18\x02 \x01(\tR\x03url\"C\n" +
@@ -486,6 +508,7 @@ func file_feishubotd_v1_common_proto_init() {
 	}
 	file_feishubotd_v1_common_proto_msgTypes[0].OneofWrappers = []any{
 		(*MessageTarget_Channel)(nil),
+		(*MessageTarget_UserEmail)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{

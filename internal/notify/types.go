@@ -28,6 +28,10 @@ type Request struct {
 
 type Target struct {
 	Channel string `json:"channel"`
+	// UserEmail addresses one person by Feishu email (a direct message). It is
+	// mutually exclusive with Channel and accepted only by SendMessage. It is
+	// omitted when empty so channel requests keep their existing fingerprints.
+	UserEmail string `json:"user_email,omitempty"`
 }
 
 type Link struct {

@@ -266,6 +266,48 @@ func TestChannelSenderLowLevelSDKWireShape(t *testing.T) {
 	})
 }
 
+func TestChannelSenderSendsUserEmailTargetByEmail(t *testing.T) {
+	httpClient := &cardKitRecordingHTTPClient{}
+	client := lark.NewClient("cli_test", "test-placeholder", lark.WithHttpClient(httpClient))
+	sender := &ChannelSender{messageAPI: client.Im.V1.Message}
+
+	req := notify.Request{
+		Source: "wire-test", DedupeKey: "dm", Title: "Review", Markdown: "done",
+		Target: notify.Target{UserEmail: "dev@example.com"},
+	}
+	if _, err := sender.Send(context.Background(), "dev@example.com", req); err != nil {
+		t.Fatalf("send dm: %v", err)
+	}
+	requests := nonTokenRequests(httpClient.requests)
+	if len(requests) != 1 {
+		t.Fatalf("API request count = %d, want 1", len(requests))
+	}
+	parts, partErr := ordinaryMessageParts(notify.Request{Title: "Review", Markdown: "done"})
+	if partErr != nil || len(parts) != 1 {
+		t.Fatalf("build expected post: parts=%#v err=%v", parts, partErr)
+	}
+	assertWireRequest(t, requests[0], http.MethodPost, "/open-apis/im/v1/messages", "receive_id_type=email", map[string]any{
+		"receive_id": "dev@example.com",
+		"msg_type":   "post",
+		"content":    parts[0].content,
+		"uuid":       ordinaryMessageUUID([]byte("dedupe\x00wire-test\x00dm"), 0),
+	})
+
+	// The receive id must be the target's own email, and a DM is never a reply.
+	for _, bad := range []struct {
+		id  string
+		req notify.Request
+	}{
+		{"oc_chat", req},
+		{"dev@example.com", notify.Request{Markdown: "x", ReplyToMessageID: "om_x", Target: notify.Target{UserEmail: "dev@example.com"}}},
+	} {
+		var sendErr *MessageSendError
+		if _, err := sender.Send(context.Background(), bad.id, bad.req); !errors.As(err, &sendErr) || sendErr.Class != "invalid_destination" {
+			t.Fatalf("Send(%q) error = %v, want invalid_destination", bad.id, err)
+		}
+	}
+}
+
 func TestChannelSenderRetriesLostReplyWithStableUUID(t *testing.T) {
 	messageID := "om_replied"
 	api := &scriptedMessageAPI{replySteps: []messageReplyStep{

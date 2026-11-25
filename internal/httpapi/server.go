@@ -233,6 +233,7 @@ func (s *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
 
 	input := service.MessageInput{
 		Channel:   req.Target.Channel,
+		UserEmail: req.Target.UserEmail,
 		Source:    req.Source,
 		DedupeKey: req.DedupeKey,
 		CardJSON:  cardJSONFromHTTP(req.Card),

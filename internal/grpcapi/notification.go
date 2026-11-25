@@ -15,6 +15,9 @@ type notificationServer struct {
 }
 
 func (n *notificationServer) SendNotification(ctx context.Context, in *pb.SendNotificationRequest) (*pb.SendNotificationResponse, error) {
+	if _, ok := in.GetTarget().GetTo().(*pb.MessageTarget_UserEmail); ok {
+		return nil, grpcError(notify.BadRequest("unsupported_target", "target.user_email is only supported by SendMessage"), requestIDFromContext(ctx))
+	}
 	resp, apiErr := n.svc.SendNotification(ctx, notifyRequestFromProto(in))
 	if apiErr != nil {
 		return nil, grpcError(apiErr, requestIDFromContext(ctx))
@@ -25,6 +28,7 @@ func (n *notificationServer) SendNotification(ctx context.Context, in *pb.SendNo
 func (n *notificationServer) SendMessage(ctx context.Context, in *pb.SendMessageRequest) (*pb.SendMessageResponse, error) {
 	input := service.MessageInput{
 		Channel:   targetChannel(in.GetTarget()),
+		UserEmail: in.GetTarget().GetUserEmail(),
 		Source:    in.GetSource(),
 		DedupeKey: in.GetDedupeKey(),
 	}

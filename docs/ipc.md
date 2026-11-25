@@ -126,6 +126,20 @@ cause a cross-app conflict.
 such as a template card payload. Deduplication applies only when a `dedupe_key`
 is supplied.
 
+`SendMessage` can also send a direct message to one person:
+`target.user_email = "dev@example.com"` is sent with Feishu
+`receive_id_type=email`, which matches the user's contact `email` field. This
+is off by default. The daemon's `direct_messages` config must list both the
+address's exact domain and the request's `source`; anything else is refused
+with `PERMISSION_DENIED` (`direct_message_denied`) before Feishu is called. A
+malformed address is `INVALID_ARGUMENT` (`invalid_user_email`), and a
+user_email target cannot be a reply. Feishu refusing the recipient (unknown
+address, user outside the app's availability) returns the non-retryable
+`direct_message_rejected`. The `dedupe_key` fingerprint includes the
+recipient, so reusing a key for a different person is `dedupe_conflict`.
+Addresses are never logged. `SendNotification` and `POST /v1/notify` reject
+`user_email` rather than falling back to a default channel.
+
 ### `CommandService`
 
 | RPC | Purpose |

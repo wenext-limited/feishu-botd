@@ -212,9 +212,19 @@ func (s *ChannelSender) Send(ctx context.Context, chatID string, req notify.Requ
 	}
 
 	replyTo := strings.TrimSpace(req.ReplyToMessageID)
+	// A user_email target names its recipient in the request itself, and the
+	// caller passes the same email as the receive id. A reply always lands in
+	// the replied-to message's chat, so it cannot carry a user target.
+	receiveIDType := larkim.CreateMessageV1ReceiveIDTypeChatId
+	if email := strings.TrimSpace(req.Target.UserEmail); email != "" {
+		if email != chatID || replyTo != "" {
+			return "", &MessageSendError{Operation: "message_send", Class: "invalid_destination"}
+		}
+		receiveIDType = larkim.CreateMessageV1ReceiveIDTypeEmail
+	}
 	firstMessageID := ""
 	for index, part := range parts {
-		messageID, sendErr := s.sendOrdinaryPart(ctx, chatID, replyTo, ordinaryMessageUUID(uuidSeed, index), part)
+		messageID, sendErr := s.sendOrdinaryPart(ctx, receiveIDType, chatID, replyTo, ordinaryMessageUUID(uuidSeed, index), part)
 		if sendErr != nil {
 			return "", sendErr
 		}
@@ -270,19 +280,19 @@ func ordinaryMessageParts(req notify.Request) ([]ordinaryMessagePart, *MessageSe
 	return parts, nil
 }
 
-func (s *ChannelSender) sendOrdinaryPart(ctx context.Context, chatID, replyTo, uuid string, part ordinaryMessagePart) (string, *MessageSendError) {
-	messageID, sendErr := s.sendOrdinaryCall(ctx, chatID, replyTo, uuid, part.messageType, part.content)
+func (s *ChannelSender) sendOrdinaryPart(ctx context.Context, receiveIDType, chatID, replyTo, uuid string, part ordinaryMessagePart) (string, *MessageSendError) {
+	messageID, sendErr := s.sendOrdinaryCall(ctx, receiveIDType, chatID, replyTo, uuid, part.messageType, part.content)
 	if sendErr != nil && part.fallbackText != "" && isMessageFormatError(sendErr.Code) {
 		content, err := json.Marshal(map[string]string{"text": part.fallbackText})
 		if err != nil {
 			return "", &MessageSendError{Operation: "message_encode", Class: "encode_failed"}
 		}
-		return s.sendOrdinaryCall(ctx, chatID, replyTo, uuid, larkim.MsgTypeText, string(content))
+		return s.sendOrdinaryCall(ctx, receiveIDType, chatID, replyTo, uuid, larkim.MsgTypeText, string(content))
 	}
 	return messageID, sendErr
 }
 
-func (s *ChannelSender) sendOrdinaryCall(ctx context.Context, chatID, replyTo, uuid, messageType, content string) (string, *MessageSendError) {
+func (s *ChannelSender) sendOrdinaryCall(ctx context.Context, receiveIDType, chatID, replyTo, uuid, messageType, content string) (string, *MessageSendError) {
 	if replyTo != "" {
 		return s.retryOrdinaryMessage(ctx, "message_reply", func() (string, *MessageSendError) {
 			body := larkim.NewReplyMessageReqBodyBuilder().
@@ -320,7 +330,7 @@ func (s *ChannelSender) sendOrdinaryCall(ctx context.Context, chatID, replyTo, u
 			Uuid(uuid).
 			Build()
 		req := larkim.NewCreateMessageReqBuilder().
-			ReceiveIdType(larkim.CreateMessageV1ReceiveIDTypeChatId).
+			ReceiveIdType(receiveIDType).
 			Body(body).
 			Build()
 		req.Body = body
