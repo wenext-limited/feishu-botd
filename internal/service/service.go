@@ -21,7 +21,7 @@ import (
 )
 
 // Version is the reported service version, shared by both transports.
-const Version = "0.3.0"
+const Version = "0.3.1"
 
 // Provider names the upstream message provider in responses.
 const Provider = "feishu"
