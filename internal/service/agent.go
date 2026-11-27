@@ -790,13 +790,9 @@ func (b *agentBroker) dispatchMessageForProvider(in CommandInput, provider strin
 			allowedProviders:         allowed,
 			expiresAt:                now.Add(b.ttl),
 			attachedContextExpiresAt: now.Add(agentAttachedContextTTL),
-			attachedContext: feishu.AttachedContextRequest{
-				ThreadID:          strings.TrimSpace(in.Metadata["thread_id"]),
-				TriggerMessageID:  strings.TrimSpace(in.Metadata["message_id"]),
-				TriggerCreateTime: strings.TrimSpace(in.Metadata["create_time"]),
-			},
-			state:            agentDeliveryOpen,
-			messageDedupeKey: messageDedupeKey,
+			attachedContext:          attachedContextRequestFor(in),
+			state:                    agentDeliveryOpen,
+			messageDedupeKey:         messageDedupeKey,
 		}
 		b.recordConversationLocked(in, allowed, now)
 		if messageDedupeKey != "" {
@@ -805,6 +801,25 @@ func (b *agentBroker) dispatchMessageForProvider(in CommandInput, provider strin
 		b.observeLocked(in, allowed, now)
 	}
 	return delivered, delivered > 0, allowed
+}
+
+// attachedContextRequestFor captures the private lookup keys of one exact
+// delivery. A direct message that quotes an earlier message without a topic
+// thread (a reply to a bot notification, say) also keeps that one parent id;
+// groups keep their thread-or-trigger-only behavior.
+func attachedContextRequestFor(in CommandInput) feishu.AttachedContextRequest {
+	request := feishu.AttachedContextRequest{
+		ThreadID:          strings.TrimSpace(in.Metadata["thread_id"]),
+		TriggerMessageID:  strings.TrimSpace(in.Metadata["message_id"]),
+		TriggerCreateTime: strings.TrimSpace(in.Metadata["create_time"]),
+		ChatID:            strings.TrimSpace(in.ChatID),
+	}
+	parentID := strings.TrimSpace(in.Metadata["parent_id"])
+	if in.Metadata["chat_type"] == "p2p" && request.ThreadID == "" && request.ChatID != "" &&
+		parentID != "" && parentID != request.TriggerMessageID {
+		request.ReplyParentMessageID = parentID
+	}
+	return request
 }
 
 // dispatchAmbient delivers an observation copy of one human group message to

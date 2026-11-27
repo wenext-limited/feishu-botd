@@ -167,6 +167,14 @@ type AttachedContextRequest struct {
 	ThreadID          string
 	TriggerMessageID  string
 	TriggerCreateTime string
+	// ChatID is the chat the exact inbound delivery arrived in.
+	ChatID string
+	// ReplyParentMessageID is the message a direct-message trigger quotes
+	// (Feishu parent_id). The service sets it only for a p2p delivery with no
+	// topic thread; the lookup reads that one message and nothing else, and
+	// only after proving it sits in the same chat as the trigger, was not
+	// recalled, and is not the trigger itself. Any proof that fails omits it.
+	ReplyParentMessageID string
 	// AllowVideo is the resolved allow_attached_video grant (ADR-0126),
 	// already conjoined with allow_attached_context by the caller. False
 	// means every video in this snapshot stays a placeholder + video_omitted,
@@ -218,12 +226,14 @@ func (s *sdkAttachedContextLookup) LookupAttachedContext(ctx context.Context, in
 	in.ThreadID = strings.TrimSpace(in.ThreadID)
 	in.TriggerMessageID = strings.TrimSpace(in.TriggerMessageID)
 	in.TriggerCreateTime = strings.TrimSpace(in.TriggerCreateTime)
+	in.ChatID = strings.TrimSpace(in.ChatID)
+	in.ReplyParentMessageID = strings.TrimSpace(in.ReplyParentMessageID)
 	if in.TriggerMessageID == "" || s == nil || s.history == nil {
 		return attachedContextWithIssue(AttachedContextUnreadable, AttachedContextIssueBoundaryNotFound), nil
 	}
 	grants := attachedCarryGrants{video: in.AllowVideo, files: in.AllowFiles}
 	if in.ThreadID == "" {
-		return s.lookupTriggerOnly(ctx, in.TriggerMessageID, grants)
+		return s.lookupTriggerOnly(ctx, in, grants)
 	}
 
 	candidates, issues, truncated, historyUnreadable := s.snapshotCandidates(ctx, in)
@@ -237,30 +247,87 @@ func (s *sdkAttachedContextLookup) LookupAttachedContext(ctx context.Context, in
 // lookupTriggerOnly downloads images on the triggering message when there is
 // no topic thread to list. A plain group or DM still flattens those pictures
 // to "[image]" in the prompt; this is the only path that can replace that
-// placeholder with bytes. It does not walk the room.
-func (s *sdkAttachedContextLookup) lookupTriggerOnly(ctx context.Context, triggerMessageID string, grants attachedCarryGrants) (AttachedContext, error) {
-	req := larkim.NewGetMessageReqBuilder().MessageId(triggerMessageID).Build()
-	resp, err := s.history.Get(ctx, req)
-	if err != nil || resp == nil || !resp.Success() || resp.Data == nil {
+// placeholder with bytes. It does not walk the room: the only other message
+// it may read is the exact one a direct-message trigger replies to.
+func (s *sdkAttachedContextLookup) lookupTriggerOnly(ctx context.Context, in AttachedContextRequest, grants attachedCarryGrants) (AttachedContext, error) {
+	trigger, ok := s.getExactMessage(ctx, in.TriggerMessageID, true)
+	if !ok {
 		return attachedContextWithIssue(AttachedContextUnreadable, AttachedContextIssueHistoryUnreadable), nil
-	}
-	var trigger *larkim.Message
-	for _, item := range resp.Data.Items {
-		if item == nil {
-			continue
-		}
-		if strings.TrimSpace(deref(item.MessageId)) == triggerMessageID {
-			trigger = item
-			break
-		}
-		if trigger == nil {
-			trigger = item
-		}
 	}
 	if trigger == nil {
 		return attachedContextWithIssue(AttachedContextUnreadable, AttachedContextIssueBoundaryNotFound), nil
 	}
-	return s.assemble(ctx, []attachedContextCandidate{{message: trigger, isTrigger: true}}, nil, false, false, grants)
+	candidates := []attachedContextCandidate{{message: trigger, isTrigger: true}}
+	var issues []AttachedContextIssue
+	historyUnreadable := false
+	if parentID := in.ReplyParentMessageID; parentID != "" && parentID != in.TriggerMessageID {
+		parent, readable := s.getExactMessage(ctx, parentID, false)
+		switch {
+		case !readable:
+			// The bot could not read it (no permission, not in the chat,
+			// transport): say so, and carry nothing.
+			issues = appendOrIncrementAttachedContextIssue(issues, AttachedContextIssueHistoryUnreadable)
+			historyUnreadable = true
+		case replyParentAllowed(parent, trigger, in):
+			candidates = append(candidates, attachedContextCandidate{message: parent})
+		}
+	}
+	return s.assemble(ctx, candidates, issues, false, historyUnreadable, grants)
+}
+
+// replyParentAllowed proves a fetched reply parent may enter the snapshot.
+// Every check is against Feishu's own answer, not the inbound event alone:
+// both fetched messages must be the exact requested ids, the parent must not
+// be recalled, both must sit in the inbound delivery's chat, and the parent
+// must not be newer than the trigger. A missing id, chat, or create time
+// fails the proof; an absent deleted flag reads as not recalled, as it does
+// everywhere else in the snapshot.
+func replyParentAllowed(parent, trigger *larkim.Message, in AttachedContextRequest) bool {
+	if parent == nil || trigger == nil || derefBool(parent.Deleted) {
+		return false
+	}
+	if strings.TrimSpace(deref(parent.MessageId)) != in.ReplyParentMessageID ||
+		strings.TrimSpace(deref(trigger.MessageId)) != in.TriggerMessageID {
+		return false
+	}
+	parentChat := strings.TrimSpace(deref(parent.ChatId))
+	triggerChat := strings.TrimSpace(deref(trigger.ChatId))
+	if in.ChatID == "" || parentChat != in.ChatID || triggerChat != in.ChatID {
+		return false
+	}
+	parentTime, parentErr := strconv.ParseInt(strings.TrimSpace(deref(parent.CreateTime)), 10, 64)
+	triggerTime, triggerErr := strconv.ParseInt(strings.TrimSpace(deref(trigger.CreateTime)), 10, 64)
+	return parentErr == nil && triggerErr == nil && parentTime <= triggerTime
+}
+
+// getExactMessage reads one message by id. readable is false when Feishu
+// refused or failed the read. lenient keeps the trigger path's historical
+// fallback to the first returned item; a reply parent demands an exact id.
+func (s *sdkAttachedContextLookup) getExactMessage(ctx context.Context, messageID string, lenient bool) (message *larkim.Message, readable bool) {
+	req := larkim.NewGetMessageReqBuilder().
+		MessageId(messageID).
+		CardMsgContentType(attachedCardContentType).
+		Build()
+	resp, err := s.history.Get(ctx, req)
+	if err != nil || resp == nil || !resp.Success() || resp.Data == nil {
+		return nil, false
+	}
+	var fallback *larkim.Message
+	for _, item := range resp.Data.Items {
+		if item == nil {
+			continue
+		}
+		if strings.TrimSpace(deref(item.MessageId)) == messageID {
+			return item, true
+		}
+		if fallback == nil {
+			fallback = item
+		}
+	}
+	if lenient {
+		return fallback, true
+	}
+	return nil, true
 }
 
 func (s *sdkAttachedContextLookup) assemble(

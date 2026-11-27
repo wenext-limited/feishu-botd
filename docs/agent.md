@@ -747,6 +747,19 @@ thread still downloads those trigger images — a group or DM that flattened
 them to `[image]` in the prompt has nowhere else to get the bytes. If botd cannot find that exact
 boundary within its bounded scan, it returns `UNREADABLE`; it never guesses.
 
+A direct message (`p2p`, no topic thread) that quotes an earlier message —
+for example a reply to a notification the bot sent — also carries that one
+quoted message, oldest-first before the trigger, and nothing else from the
+chat. botd reads it by its exact id and includes it only when Feishu reports
+it in the same chat as both the inbound delivery and the trigger, not
+recalled, not the trigger itself, and not newer than the trigger; any failed
+proof silently omits it, and a read the bot is refused adds
+`HISTORY_UNREADABLE` (an otherwise empty snapshot is then `UNREADABLE` rather
+than `MISSING`). Group quote replies keep the thread-or-trigger-only
+behavior. The quoted message is untrusted reference data like any other
+snapshot row and never becomes `reply_to_message_ref` unless the provider owns
+it.
+
 Server-owned limits are 64 prior messages, 64 KiB normalized text, eight
 images, 5 MiB per image, and 16 MiB total image payload bytes. A separate
 256-message scan limit protects exact-boundary discovery. Every limit and every
